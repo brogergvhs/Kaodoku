@@ -454,6 +454,7 @@
             <li><button hx-post="/ui/library/{{.Title.ID}}/download" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "download_missing"}}disabled{{end}}>{{template "iconDownload"}}Download missing{{if gt .Title.FailedCount 0}} · {{.Title.FailedCount}} failed{{end}}</button></li>{{end}}
             {{if linked .Title.SourceURL}}<li><button hx-post="/ui/library/{{.Title.ID}}/refresh" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "refresh_title"}}disabled{{end}}>{{template "iconRefresh"}}Refresh chapters</button></li>{{end}}
             <li><button hx-post="/ui/library/{{.Title.ID}}/scan" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "scan_downloads"}}disabled{{end}}>{{template "iconScan"}}Scan files</button></li>
+            <li><button hx-post="/ui/library/{{.Title.ID}}/crops" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "detect_crops"}}disabled{{end}}>{{template "iconScan"}}Detect page crops</button></li>
             {{if .AniList.Connected}}<li><button hx-post="/ui/library/{{.Title.ID}}/anilist-sync" hx-swap="none">{{template "iconVerify"}}Sync AniList</button></li>{{end}}
             {{if linked .Title.SourceURL}}<li><button onclick="title_settings_modal.showModal()">{{template "iconSettings"}}Title settings</button></li>{{end}}
             <li><label>{{template "iconEdit"}}Upload cover

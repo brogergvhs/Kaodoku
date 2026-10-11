@@ -13,9 +13,9 @@ const (
 	TypeVerifySource    = "verify_source"
 	TypeMatchSources    = "match_sources"
 	TypeBackupUserData  = "backup_user_data"
+	TypeDetectCrops     = "detect_crops"
 )
 
-// Job is a persisted background job.
 type Job struct {
 	ID        int64
 	Type      string

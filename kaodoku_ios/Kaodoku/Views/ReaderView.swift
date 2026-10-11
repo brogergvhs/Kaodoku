@@ -19,6 +19,7 @@ struct ReaderView: View {
     var total: Int
     var url: String
     var localURL: URL?
+    var crop: [Double]? // normalized [x, y, w, h] content box, paged trim
     var volume = false
     var transition = false // synthetic "end of chapter" cell
   }
@@ -236,7 +237,9 @@ struct ReaderView: View {
         await LocalStore.clearPageCache()
       }
     }
-    .sheet(isPresented: $showSettings) { ReaderSettingsSheet(titleID: titleID) }
+    .sheet(isPresented: $showSettings) {
+      ReaderSettingsSheet(titleID: titleID, cropsAvailable: cropsAvailable)
+    }
     .sheet(isPresented: $showChapters) {
       ReaderChapterSheet(rows: chapterRows,
                          currentID: pages.indices.contains(index) ? pages[index].chapterID : 0,
@@ -436,9 +439,10 @@ struct ReaderView: View {
                                 volume: volumeMode, transition: true))
           }
           for page in 1 ... e.pages {
+            let crop = e.pageCrops.flatMap { $0.indices.contains(page - 1) ? $0[page - 1] : nil }
             refs.append(PageRef(chapterID: e.id, label: e.label, page: page,
                                 total: e.pages, url: "", localURL: local,
-                                volume: volumeMode))
+                                crop: crop, volume: volumeMode))
           }
         }
         if let prev = refs.last {
@@ -496,7 +500,7 @@ struct ReaderView: View {
       }
       pages.append(contentsOf: ch.pages.map {
         PageRef(chapterID: ch.id, label: ch.label, page: $0.page, total: ch.pageCount,
-                url: $0.url, localURL: local, volume: volumes)
+                url: $0.url, localURL: local, crop: $0.crop, volume: volumes)
       })
       lastChapterID = ch.id
       added = true
@@ -526,6 +530,12 @@ struct ReaderView: View {
   private func mark(_ p: PageRef) {
     app.store.recordMark(id: p.chapterID, volume: volumes, page: p.page, totalPages: p.total)
     app.scheduleFlush()
+  }
+
+  private var cropsAvailable: Bool {
+    guard pages.indices.contains(index) else { return false }
+    let cid = pages[index].chapterID
+    return pages.contains { $0.chapterID == cid && $0.crop != nil }
   }
 }
 
@@ -582,6 +592,8 @@ struct ReaderChapterSheet: View {
 struct ReaderSettingsSheet: View {
   @Environment(AppState.self) private var app
   let titleID: Int64
+  var cropsAvailable = true
+  @State private var cropsProcessing = false
 
   private var stripActive: Bool {
     (app.readerMode(forTitle: titleID) ?? app.settings.readerMode ?? "paged") == "strip"
@@ -626,6 +638,12 @@ struct ReaderSettingsSheet: View {
             get: { app.settings.readerSplitWide ?? false },
             set: { app.settings.readerSplitWide = $0; app.saveSettings() }
           ))
+          Toggle("Trim page borders", isOn: $app.readerTrimBorders)
+            .disabled(!cropsAvailable) // no crop data for this chapter yet
+          if !cropsAvailable, cropsProcessing {
+            Text("Page borders are being detected for this title — trimming will be available soon.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
         }
         .disabled(stripActive) // paged-only controls
         Picker("Quality", selection: Binding(
@@ -661,6 +679,12 @@ struct ReaderSettingsSheet: View {
       }
       .navigationTitle("Reader")
       .navigationBarTitleDisplayMode(.inline)
+      .task {
+        guard !cropsAvailable, let api = app.api,
+              let activity: TitleActivity = try? await api.get("/api/v1/library/\(titleID)/activity")
+        else { return }
+        cropsProcessing = activity.isActive("detect_crops", verb: "detecting crops")
+      }
     }
     .presentationDetents([.height(660)])
   }
@@ -687,11 +711,16 @@ struct ReaderPage: View {
     let active: Bool
     let unit: [ReaderView.DisplayPage]
     let enhanced: Bool
+    let trim: Bool
     let width: Int
   }
 
   private var enhanced: Bool {
     app.settings.readerImageQuality == "enhanced"
+  }
+
+  private var trim: Bool {
+    app.readerTrimBorders
   }
 
   var body: some View {
@@ -710,7 +739,11 @@ struct ReaderPage: View {
         images = [:]
         failed = false
       }
-      .task(id: LoadKey(active: active, unit: unit, enhanced: enhanced,
+      .onChange(of: trim) {
+        images = [:]
+        failed = false
+      }
+      .task(id: LoadKey(active: active, unit: unit, enhanced: enhanced, trim: trim,
                         width: Int(maxPixelSize.width)))
       { await loadIfNeeded() }
   }
@@ -753,16 +786,20 @@ struct ReaderPage: View {
     let reload = !images.isEmpty && loadedWidth != maxPixelSize.width
     guard reload || images.count < unit.count else { return }
     for (i, dp) in unit.enumerated() where reload || images[i] == nil {
-      guard let img = await load(dp) else {
+      guard let raw = await load(dp) else {
         if !Task.isCancelled {
           failed = true
         }
         return
       }
       guard !Task.isCancelled else { return }
+      var img = raw
+      if trim, let crop = dp.ref.crop, let cut = raw.cropped(normalized: crop) {
+        img = cut
+      }
       images[i] = img
       if i == 0 {
-        onImage?(img.size.width / max(img.size.height, 1))
+        onImage?(raw.size.width / max(raw.size.height, 1))
       }
     }
     loadedWidth = maxPixelSize.width

@@ -40,6 +40,7 @@ final class LocalStore {
     var readPages: Int
     var completed: Bool
     var pageAspects: [Double]
+    var pageCrops: [[Double]]?
     var volume: Bool
 
     var isRead: Bool {
@@ -83,6 +84,7 @@ final class LocalStore {
     let pages: Int
     let size: Int64
     let pageAspects: [Double]
+    let pageCrops: [[Double]]?
     let thumbnail: Data?
   }
 
@@ -485,7 +487,7 @@ final class LocalStore {
       id: chapterID, titleId: titleId, titleName: titleName,
       label: label, path: path, pages: prepared.pages, size: prepared.size,
       readPages: readPages, completed: completed, pageAspects: prepared.pageAspects,
-      volume: volume
+      pageCrops: prepared.pageCrops, volume: volume
     )
     pending.removeValue(forKey: key(chapterID, volume: volume))
     persistIndex()
@@ -523,7 +525,21 @@ final class LocalStore {
       .flatMap { $0.jpegData(compressionQuality: 0.7) }
       : nil
     let size = (try? FileManager.default.attributesOfItem(atPath: src.path))?[.size] as? Int64 ?? 0
-    return PreparedArchive(pages: images.count, size: size, pageAspects: aspects, thumbnail: jpeg)
+    return PreparedArchive(pages: images.count, size: size, pageAspects: aspects,
+                           pageCrops: pageCrops(in: zip), thumbnail: jpeg)
+  }
+
+  /// pageCrops reads the server-written kaodoku-crops.json from the archive.
+  private nonisolated static func pageCrops(in zip: ZipArchive) -> [[Double]]? {
+    struct CropsFile: Decodable {
+      var v: Int
+      var pages: [[Double]]
+    }
+    guard let entry = zip.entries.first(where: { $0.name == "kaodoku-crops.json" }),
+          let data = zip.data(for: entry),
+          let file = try? JSONDecoder().decode(CropsFile.self, from: data),
+          file.v == 1 else { return nil }
+    return file.pages
   }
 
   private func dirName(titleId: Int64, titleName: String) -> String {
@@ -715,6 +731,17 @@ final class LocalStore {
 }
 
 extension UIImage {
+  nonisolated func cropped(normalized c: [Double]) -> UIImage? {
+    guard c.count == 4, let cg = cgImage else { return nil }
+    let w = CGFloat(cg.width), h = CGFloat(cg.height)
+    let rect = CGRect(x: c[0] * w, y: c[1] * h, width: c[2] * w, height: c[3] * h)
+      .intersection(CGRect(x: 0, y: 0, width: w, height: h)).integral
+    guard rect.width >= 8, rect.height >= 8,
+          rect.width < w || rect.height < h,
+          let cut = cg.cropping(to: rect) else { return nil }
+    return UIImage(cgImage: cut, scale: scale, orientation: imageOrientation)
+  }
+
   /// Decode only the pixels that can be displayed, with a GPU-safe long side.
   /// enhanced doubles the decode budget and adds a GPU clarity pass.
   nonisolated static func downsampled(_ data: Data, maxPixelSize: CGSize, enhanced: Bool = false) -> UIImage? {

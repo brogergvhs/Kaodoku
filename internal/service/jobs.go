@@ -25,6 +25,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
+	"github.com/brogergvhs/kaodoku/internal/util"
 )
 
 // JobService enqueues and runs jobs.
@@ -2566,6 +2567,11 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 			return err
 		}
 		return s.expandTitleJob(ctx, jobs.TypeDownloadMissing, job.ID)
+	case jobs.TypeDetectCrops:
+		if payload.TitleID > 0 {
+			return s.detectCrops(ctx, payload.TitleID, logSvc)
+		}
+		return s.expandDetectCrops(ctx, job.ID)
 	case jobs.TypeSyncAniList:
 		if payload.UserID > 0 {
 			return s.runAniListSync(ctx, payload.UserID, progress)
@@ -2623,6 +2629,85 @@ func (s *JobService) expandTitleJob(ctx context.Context, typ string, parentID in
 	return errors.Join(errs...)
 }
 
+// detectCrops adds content-crop entries to a title's downloaded archives.
+func (s *JobService) detectCrops(ctx context.Context, titleID int64, logSvc ui.Log) error {
+	chs, err := s.TitleChapters(ctx, titleID)
+	if err != nil {
+		return err
+	}
+	added, failed := 0, 0
+	for _, ch := range chs {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !ch.Downloaded || ch.OutputFile == "" {
+			continue
+		}
+		ok, err := util.AddCropsToCBZ(ch.OutputFile)
+		if err != nil {
+			failed++
+			logSvc.Debugf("detect crops: %s: %v\n", ch.OutputFile, err)
+			continue
+		}
+		if ok {
+			added++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("crops added to %d archives, %d failed", added, failed)
+	}
+	return nil
+}
+
+// expandDetectCrops fans the global job out per title with downloads,
+// skipping titles that are most likely read in strip mode.
+func (s *JobService) expandDetectCrops(ctx context.Context, parentID int64) error {
+	titles, err := s.lib.ListTitles(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, title := range titles {
+		if title.CompletedCount == 0 || s.stripLikely(ctx, title) {
+			continue
+		}
+		_, err := s.enqueueChild(ctx, jobs.TypeDetectCrops, JobPayload{TitleID: title.ID}, time.Now(), parentID)
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (s *JobService) stripLikely(ctx context.Context, title library.Title) bool {
+	if title.CatalogMangaID == nil {
+		return false
+	}
+	manga, err := s.want.GetManga(ctx, *title.CatalogMangaID)
+	if err != nil {
+		return false
+	}
+	return mangaStripLikely(manga)
+}
+
+// mangaStripLikely: KR/CN/TW origin (webtoon/manhua, from the raw AniList
+// record) or the Full Color tag.
+func mangaStripLikely(m catalog.Manga) bool {
+	for _, t := range m.Tags {
+		if strings.EqualFold(strings.TrimSpace(t), "full color") {
+			return true
+		}
+	}
+	var raw struct {
+		CountryOfOrigin string `json:"countryOfOrigin"`
+	}
+	if json.Unmarshal([]byte(m.RawJSON), &raw) == nil {
+		switch raw.CountryOfOrigin {
+		case "KR", "CN", "TW":
+			return true
+		}
+	}
+	return false
+}
+
 func (s *JobService) enqueueDownloadAfterRefresh(ctx context.Context, titleID int64) error {
 	title, err := s.lib.GetTitle(ctx, titleID)
 	if err != nil {
@@ -2665,7 +2750,7 @@ func globalTitleJobApplies(typ string, title library.Title, now time.Time) bool 
 
 func validateJob(typ string, payload JobPayload) error {
 	switch typ {
-	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing:
+	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing, jobs.TypeDetectCrops:
 		if payload.TitleID < 0 {
 			return fmt.Errorf("invalid title id %d", payload.TitleID)
 		}
@@ -2691,7 +2776,7 @@ func validateJob(typ string, payload JobPayload) error {
 
 func titleScopedJob(typ string) bool {
 	switch typ {
-	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing:
+	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing, jobs.TypeDetectCrops:
 		return true
 	default:
 		return false

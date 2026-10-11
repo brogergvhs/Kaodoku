@@ -241,12 +241,13 @@ func (a *apiV1) titleActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	js, _ := a.svc.List(r.Context())
-	_, label, queued, failed, msg := titleActivityFrom(js, title)
+	running, label, queued, failed, msg := titleActivityFrom(js, title)
 	if queued == nil {
 		queued = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"active": label, "queued": queued, "failed": failed, "error": msg,
+		"running": running,
 	})
 }
 

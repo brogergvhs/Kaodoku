@@ -61,3 +61,23 @@ func TestDefaultMonitored(t *testing.T) {
 		}
 	}
 }
+
+func TestMangaStripLikely(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		m    catalog.Manga
+		want bool
+	}{
+		{"full color tag", catalog.Manga{Tags: []string{"Male Protagonist", "Full Color"}}, true},
+		{"korean origin", catalog.Manga{RawJSON: `{"countryOfOrigin":"KR"}`}, true},
+		{"chinese origin", catalog.Manga{RawJSON: `{"countryOfOrigin":"CN"}`}, true},
+		{"japanese manga", catalog.Manga{RawJSON: `{"countryOfOrigin":"JP"}`, Tags: []string{"Shounen"}}, false},
+		{"no data", catalog.Manga{}, false},
+	}
+	for _, tc := range cases {
+		if got := mangaStripLikely(tc.m); got != tc.want {
+			t.Errorf("%s: mangaStripLikely = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

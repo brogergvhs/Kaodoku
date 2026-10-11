@@ -11,8 +11,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
@@ -743,9 +745,42 @@ type readerManifestChapter struct {
 }
 
 type readerManifestPage struct {
-	Page int    `json:"page"`
-	URL  string `json:"url"`
-	Read bool   `json:"read"`
+	Page int       `json:"page"`
+	URL  string    `json:"url"`
+	Read bool      `json:"read"`
+	Crop []float64 `json:"crop,omitempty"`
+}
+
+// pageCropsCache caches per-archive crops keyed by path; mtime invalidates.
+var pageCropsCache sync.Map
+
+type pageCropsCacheEntry struct {
+	mtime time.Time
+	crops [][4]float64
+}
+
+// archivePageCrops reads the crops entry from a CBZ, cached by path+mtime.
+// nil for archives without one (pre-feature downloads, imports, volumes).
+func archivePageCrops(path string) [][4]float64 {
+	if path == "" {
+		return nil
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	if v, ok := pageCropsCache.Load(path); ok {
+		if e := v.(pageCropsCacheEntry); e.mtime.Equal(st.ModTime()) {
+			return e.crops
+		}
+	}
+	var crops [][4]float64
+	if zr, err := zip.OpenReader(path); err == nil {
+		crops = util.ReadPageCrops(zr.File)
+		zr.Close()
+	}
+	pageCropsCache.Store(path, pageCropsCacheEntry{mtime: st.ModTime(), crops: crops})
+	return crops
 }
 
 type readerManifestResponse struct {
@@ -845,12 +880,21 @@ func readerManifestFor(progress library.TitleReadProgress, chapters []library.Ch
 			Completed: chapter.Completed,
 			Pages:     make([]readerManifestPage, 0, pageCount),
 		}
+		var crops [][4]float64
+		if chapter.Downloaded {
+			crops = archivePageCrops(chapter.OutputFile)
+		}
 		for page := 1; page <= pageCount; page++ {
-			item.Pages = append(item.Pages, readerManifestPage{
+			p := readerManifestPage{
 				Page: page,
 				URL:  markBase + strconv.FormatInt(chapter.ID, 10) + "/pages/" + strconv.Itoa(page),
 				Read: chapter.Completed || page <= chapter.ReadPages,
-			})
+			}
+			if page <= len(crops) && crops[page-1] != util.FullPageCrop {
+				c := crops[page-1]
+				p.Crop = c[:]
+			}
+			item.Pages = append(item.Pages, p)
 		}
 		out.Chapters = append(out.Chapters, item)
 	}

@@ -483,9 +483,15 @@ func (s *DownloadService) downloadChapter(
 		return ChapterDownloadResult{}, err
 	}
 
-	// PageCount reflects the pre-skip count when SkipBroken drops files; the
-	// target readers count pages from the archive itself.
-	if err := util.CreateCBZ(files, cbzOut, s.cfg.SkipBroken, s.comicInfoEntry(ch, len(files))); err != nil {
+	extra := s.comicInfoEntry(ch, len(files))
+	for name, body := range util.PageCropsEntry(files) {
+		if extra == nil {
+			extra = map[string][]byte{}
+		}
+		extra[name] = body
+	}
+
+	if err := util.CreateCBZ(files, cbzOut, s.cfg.SkipBroken, extra); err != nil {
 		return ChapterDownloadResult{}, fmt.Errorf("create cbz: %w", err)
 	}
 

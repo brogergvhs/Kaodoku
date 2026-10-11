@@ -308,6 +308,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/library/bulk", u.libraryBulk)
 	mux.HandleFunc("POST /ui/library/{id}/refresh", u.libAction(jobs.TypeRefreshTitle, "refreshing"))
 	mux.HandleFunc("POST /ui/library/{id}/download", u.libAction(jobs.TypeDownloadMissing, "downloading"))
+	mux.HandleFunc("POST /ui/library/{id}/crops", u.libAction(jobs.TypeDetectCrops, "detecting crops"))
 	mux.HandleFunc("POST /ui/library/{id}/scan", u.libAction(jobs.TypeScanDownloads, "scanning"))
 	mux.HandleFunc("GET /ui/library/{id}/activity", u.libActivity)
 	mux.HandleFunc("POST /ui/library/{id}/monitored", u.libMonitored)
@@ -1868,6 +1869,7 @@ var globalJobTypes = []string{
 	jobs.TypeRefreshTitle,
 	jobs.TypeScanDownloads,
 	jobs.TypeDownloadMissing,
+	jobs.TypeDetectCrops,
 	jobs.TypeCatalogRefresh,
 	jobs.TypeSyncAniList,
 	jobs.TypeBackupUserData,
@@ -3848,6 +3850,8 @@ func titleVerb(typ string) string {
 		return "scanning"
 	case jobs.TypeAttachVolumes:
 		return "attaching volumes"
+	case jobs.TypeDetectCrops:
+		return "detecting crops"
 	}
 	return ""
 }
@@ -4159,6 +4163,8 @@ func jobLabel(typ string) string {
 		return "Match sources"
 	case jobs.TypeBackupUserData:
 		return "Back up user data"
+	case jobs.TypeDetectCrops:
+		return "Detect page crops"
 	}
 	return typ
 }
