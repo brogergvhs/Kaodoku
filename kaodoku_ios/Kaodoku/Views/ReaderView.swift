@@ -594,9 +594,14 @@ struct ReaderSettingsSheet: View {
   let titleID: Int64
   var cropsAvailable = true
   @State private var cropsProcessing = false
+  @State private var trimStrength = 1.0
 
   private var stripActive: Bool {
     (app.readerMode(forTitle: titleID) ?? app.settings.readerMode ?? "paged") == "strip"
+  }
+
+  private var marginLabel: String {
+    String(format: "%g%%", app.readerTrimMargin * 100)
   }
 
   var body: some View {
@@ -644,6 +649,20 @@ struct ReaderSettingsSheet: View {
             Text("Page borders are being detected for this title — trimming will be available soon.")
               .font(.caption).foregroundStyle(.secondary)
           }
+          if app.readerTrimBorders, cropsAvailable {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Trim strength").font(.caption).foregroundStyle(.secondary)
+              Slider(value: $trimStrength, in: 0 ... 1) { editing in
+                if !editing {
+                  app.readerTrimStrength = trimStrength
+                }
+              }
+            }
+            Stepper("Margin: \(marginLabel)", value: Binding(
+              get: { app.readerTrimMargin },
+              set: { app.readerTrimMargin = min(max($0, 0), 0.05) }
+            ), in: 0 ... 0.05, step: 0.005)
+          }
         }
         .disabled(stripActive) // paged-only controls
         Picker("Quality", selection: Binding(
@@ -680,6 +699,7 @@ struct ReaderSettingsSheet: View {
       .navigationTitle("Reader")
       .navigationBarTitleDisplayMode(.inline)
       .task {
+        trimStrength = app.readerTrimStrength
         guard !cropsAvailable, let api = app.api,
               let activity: TitleActivity = try? await api.get("/api/v1/library/\(titleID)/activity")
         else { return }
@@ -700,27 +720,34 @@ struct ReaderPage: View {
   var onImage: ((CGFloat) -> Void)?
   @State private var zoom: CGFloat = 1
   @State private var images: [Int: UIImage] = [:]
-  @State private var loadedWidth: CGFloat = 0
+  @State private var loadedDecode = DecodeParams(width: 0, trim: false, strength: -1, margin: -1)
   @State private var failed = false
 
   private var transition: Bool {
     unit.first?.ref.transition == true
   }
 
+  private struct DecodeParams: Hashable {
+    let width: CGFloat
+    let trim: Bool
+    let strength: Double
+    let margin: Double
+  }
+
   private struct LoadKey: Hashable {
     let active: Bool
     let unit: [ReaderView.DisplayPage]
     let enhanced: Bool
-    let trim: Bool
-    let width: Int
+    let decode: DecodeParams
   }
 
   private var enhanced: Bool {
     app.settings.readerImageQuality == "enhanced"
   }
 
-  private var trim: Bool {
-    app.readerTrimBorders
+  private var decodeParams: DecodeParams {
+    DecodeParams(width: maxPixelSize.width, trim: app.readerTrimBorders,
+                 strength: app.readerTrimStrength, margin: app.readerTrimMargin)
   }
 
   var body: some View {
@@ -739,13 +766,9 @@ struct ReaderPage: View {
         images = [:]
         failed = false
       }
-      .onChange(of: trim) {
-        images = [:]
-        failed = false
+      .task(id: LoadKey(active: active, unit: unit, enhanced: enhanced, decode: decodeParams)) {
+        await loadIfNeeded()
       }
-      .task(id: LoadKey(active: active, unit: unit, enhanced: enhanced, trim: trim,
-                        width: Int(maxPixelSize.width)))
-      { await loadIfNeeded() }
   }
 
   @ViewBuilder private var content: some View {
@@ -783,7 +806,8 @@ struct ReaderPage: View {
 
   private func loadIfNeeded() async {
     guard active, !transition else { return }
-    let reload = !images.isEmpty && loadedWidth != maxPixelSize.width
+    let params = decodeParams
+    let reload = !images.isEmpty && loadedDecode != params
     guard reload || images.count < unit.count else { return }
     for (i, dp) in unit.enumerated() where reload || images[i] == nil {
       guard let raw = await load(dp) else {
@@ -794,7 +818,9 @@ struct ReaderPage: View {
       }
       guard !Task.isCancelled else { return }
       var img = raw
-      if trim, let crop = dp.ref.crop, let cut = raw.cropped(normalized: crop) {
+      if params.trim, let crop = dp.ref.crop,
+         let cut = raw.cropped(normalized: crop, strength: params.strength, margin: params.margin)
+      {
         img = cut
       }
       images[i] = img
@@ -802,7 +828,7 @@ struct ReaderPage: View {
         onImage?(raw.size.width / max(raw.size.height, 1))
       }
     }
-    loadedWidth = maxPixelSize.width
+    loadedDecode = params
   }
 
   private func load(_ dp: ReaderView.DisplayPage) async -> UIImage? {

@@ -47,7 +47,7 @@ func PageCropsEntry(files []string) map[string][]byte {
 	if !trimmed {
 		return nil
 	}
-	body, err := json.Marshal(cropsFile{V: 1, Pages: crops})
+	body, err := json.Marshal(cropsFile{V: 2, Pages: crops})
 	if err != nil {
 		return nil
 	}
@@ -70,12 +70,29 @@ func ReadPageCrops(files []*zip.File) [][4]float64 {
 			return nil
 		}
 		var cf cropsFile
-		if json.Unmarshal(body, &cf) != nil || cf.V != 1 {
+		if json.Unmarshal(body, &cf) != nil || cf.V < 1 || cf.V > 2 {
 			return nil
 		}
 		return cf.Pages
 	}
 	return nil
+}
+
+func cropsEntryVersion(f *zip.File) int {
+	rc, err := f.Open()
+	if err != nil {
+		return 0
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(io.LimitReader(rc, 1<<20))
+	if err != nil {
+		return 0
+	}
+	var cf cropsFile
+	if json.Unmarshal(body, &cf) != nil {
+		return 0
+	}
+	return cf.V
 }
 
 func fileCrop(path string) ([4]float64, bool) {
@@ -105,7 +122,7 @@ func AddCropsToCBZ(path string) (added bool, err error) {
 	}
 	defer zr.Close()
 	for _, f := range zr.File {
-		if f.Name == CropsEntryName {
+		if f.Name == CropsEntryName && cropsEntryVersion(f) >= 2 {
 			return false, nil
 		}
 	}
@@ -130,7 +147,7 @@ func AddCropsToCBZ(path string) (added bool, err error) {
 	if !trimmed {
 		return false, nil
 	}
-	body, err := json.Marshal(cropsFile{V: 1, Pages: crops})
+	body, err := json.Marshal(cropsFile{V: 2, Pages: crops})
 	if err != nil {
 		return false, err
 	}
@@ -149,6 +166,9 @@ func AddCropsToCBZ(path string) (added bool, err error) {
 		}
 	}()
 	for _, f := range zr.File {
+		if f.Name == CropsEntryName {
+			continue
+		}
 		if err = zw.Copy(f); err != nil {
 			return false, err
 		}
@@ -180,10 +200,10 @@ func AddCropsToCBZ(path string) (added bool, err error) {
 	return true, nil
 }
 
-// ContentCrop finds the page's content bounding box as a normalized
+// ContentCrop finds the page's TIGHT content bounding box as a normalized
 // [x, y, w, h]: scanning inward from each edge, a line counts as border while
 // ~all of its samples match the background sampled from the outer pixel ring.
-// At most 25% trimmed per edge and if the content box drops under 55% of the 
+// At most 25% trimmed per edge and if the content box drops under 55% of the
 // page (spacers, credits, blank pages) the page is left untouched.
 func ContentCrop(img image.Image) [4]float64 {
 	b := img.Bounds()
@@ -246,11 +266,6 @@ func ContentCrop(img image.Image) [4]float64 {
 		right--
 	}
 
-	pad := max(w, h) / 100
-	top = max(0, top-pad)
-	left = max(0, left-pad)
-	bottom = min(h-1, bottom+pad)
-	right = min(w-1, right+pad)
 	if top > h/4 || left > w/4 || h-1-bottom > h/4 || w-1-right > w/4 {
 		return FullPageCrop
 	}

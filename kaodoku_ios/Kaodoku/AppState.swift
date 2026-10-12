@@ -163,6 +163,18 @@ final class AppState {
     didSet { UserDefaults.standard.set(readerTrimBorders, forKey: Self.readerTrimKey) }
   }
 
+  var readerTrimStrength =
+    (UserDefaults.standard.object(forKey: "reader_trim_strength") as? Double) ?? 1
+  {
+    didSet { UserDefaults.standard.set(readerTrimStrength, forKey: "reader_trim_strength") }
+  }
+
+  var readerTrimMargin =
+    (UserDefaults.standard.object(forKey: "reader_trim_margin") as? Double) ?? 0.01
+  {
+    didSet { UserDefaults.standard.set(readerTrimMargin, forKey: "reader_trim_margin") }
+  }
+
   var readerComfort: ComfortParams {
     ComfortParams(warmth: readerWarmth, dim: readerDim, whiteOnly: readerWhiteOnly)
   }

@@ -170,4 +170,34 @@ func TestAddCropsToCBZ(t *testing.T) {
 	if err != nil || added {
 		t.Fatalf("second AddCropsToCBZ() = %v, %v; want no-op", added, err)
 	}
+
+	// A stale v1 (padded) entry is replaced by a fresh tight v2 box.
+	v1 := filepath.Join(dir, "v1.cbz")
+	if err := CreateCBZ([]string{src}, v1, false, map[string][]byte{
+		CropsEntryName: []byte(`{"v":1,"pages":[[0.05,0.05,0.9,0.9]]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	added, err = AddCropsToCBZ(v1)
+	if err != nil || !added {
+		t.Fatalf("AddCropsToCBZ(v1 archive) = %v, %v; want upgraded", added, err)
+	}
+	zr, err = zip.OpenReader(v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	entries := 0
+	for _, f := range zr.File {
+		if f.Name == CropsEntryName {
+			entries++
+		}
+	}
+	crops = ReadPageCrops(zr.File)
+	if entries != 1 || len(crops) != 1 || crops[0] == FullPageCrop {
+		t.Fatalf("v1 upgrade: entries = %d, crops = %v", entries, crops)
+	}
+	if crops[0] == [4]float64{0.05, 0.05, 0.9, 0.9} {
+		t.Fatal("v1 boxes were kept instead of re-detected")
+	}
 }

@@ -538,7 +538,7 @@ final class LocalStore {
     guard let entry = zip.entries.first(where: { $0.name == "kaodoku-crops.json" }),
           let data = zip.data(for: entry),
           let file = try? JSONDecoder().decode(CropsFile.self, from: data),
-          file.v == 1 else { return nil }
+          (1 ... 2).contains(file.v) else { return nil } // v2 = tight boxes
     return file.pages
   }
 
@@ -731,11 +731,17 @@ final class LocalStore {
 }
 
 extension UIImage {
-  nonisolated func cropped(normalized c: [Double]) -> UIImage? {
+  nonisolated func cropped(normalized c: [Double], strength: Double = 1, margin: Double = 0) -> UIImage? {
     guard c.count == 4, let cg = cgImage else { return nil }
+    let s = min(max(strength, 0), 1)
+    let left = max(0, c[0] * s - margin)
+    let top = max(0, c[1] * s - margin)
+    let right = max(0, (1 - c[0] - c[2]) * s - margin)
+    let bottom = max(0, (1 - c[1] - c[3]) * s - margin)
     let w = CGFloat(cg.width), h = CGFloat(cg.height)
-    let rect = CGRect(x: c[0] * w, y: c[1] * h, width: c[2] * w, height: c[3] * h)
-      .intersection(CGRect(x: 0, y: 0, width: w, height: h)).integral
+    let rect = CGRect(x: left * w, y: top * h,
+                      width: max(0, 1 - left - right) * w,
+                      height: max(0, 1 - top - bottom) * h).integral
     guard rect.width >= 8, rect.height >= 8,
           rect.width < w || rect.height < h,
           let cut = cg.cropping(to: rect) else { return nil }
