@@ -1,0 +1,63 @@
+package worker
+
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.Response
+import org.koitharu.kotatsu.parsers.MangaLoaderContext
+import org.koitharu.kotatsu.parsers.bitmap.Bitmap
+import org.koitharu.kotatsu.parsers.config.ConfigKey
+import org.koitharu.kotatsu.parsers.config.MangaSourceConfig
+import org.koitharu.kotatsu.parsers.model.MangaSource
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+
+private const val UA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
+
+class MemoryCookieJar : CookieJar {
+    private val store = ConcurrentHashMap<String, Cookie>()
+
+    override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+        val now = System.currentTimeMillis()
+        store.values.removeIf { it.expiresAt <= now }
+        for (c in cookies) store["${c.domain}|${c.name}|${c.path}"] = c
+    }
+
+    override fun loadForRequest(url: HttpUrl): List<Cookie> {
+        val now = System.currentTimeMillis()
+        return store.values.filter { it.expiresAt > now && it.matches(url) }
+    }
+}
+
+class JvmLoaderContext : MangaLoaderContext() {
+    override val cookieJar: CookieJar = MemoryCookieJar()
+
+    override val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .cookieJar(cookieJar)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    @Deprecated("Provide a base url")
+    override suspend fun evaluateJs(script: String): String? =
+        throw UnsupportedOperationException("JS evaluation is not available")
+
+    override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String? =
+        throw UnsupportedOperationException("JS evaluation is not available")
+
+    override fun getConfig(source: MangaSource): MangaSourceConfig = DefaultConfig
+
+    override fun getDefaultUserAgent(): String = UA
+
+    override fun redrawImageResponse(response: Response, redraw: (Bitmap) -> Bitmap): Response =
+        throw UnsupportedOperationException("Image descrambling is not available")
+
+    override fun createBitmap(width: Int, height: Int): Bitmap =
+        throw UnsupportedOperationException("Bitmap is not available")
+
+    private object DefaultConfig : MangaSourceConfig {
+        override fun <T> get(key: ConfigKey<T>): T = key.defaultValue
+    }
+}

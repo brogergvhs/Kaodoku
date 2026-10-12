@@ -31,3 +31,8 @@ go.work.sum
 .cache/
 downloaded_files/
 node_modules/
+
+# kotatsu-worker (Gradle) build artifacts
+kotatsu-worker/.gradle/
+kotatsu-worker/.kotlin/
+kotatsu-worker/build/
