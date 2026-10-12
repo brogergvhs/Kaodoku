@@ -97,6 +97,7 @@
   <summary class="btn btn-ghost btn-xs btn-square [&_svg]:size-3.5" aria-label="Chapter actions">{{template "iconDots"}}</summary>
   <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-52 p-2 shadow-lg border border-base-300">
     {{if .CanManage}}<li><button hx-get="/ui/library/{{.TitleID}}/chapters/{{.ID}}/rename-dialog" hx-target="#chapter-rename-body" hx-swap="innerHTML" onclick="chapter_rename_modal.showModal()">{{template "iconEdit"}}Rename</button></li>{{end}}
+    {{if and .CanManage .TitleCustom}}<li><button hx-post="/ui/library/{{.TitleID}}/chapters/{{.ID}}/reset-name" hx-target="#chapters-table" hx-swap="outerHTML">{{template "iconRefresh"}}Reset name</button></li>{{end}}
     {{if .Downloaded}}
       {{if or .Read (gt .ReadPages 0)}}
       <li><button hx-post="/ui/library/{{.TitleID}}/chapters/{{.ID}}/unread" hx-target="#chapters-table" hx-swap="outerHTML">{{template "iconEye"}}Mark unread</button></li>
@@ -569,6 +570,14 @@
           <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
           <button class="btn btn-sm btn-error">Remove from disk</button>
           <p class="text-xs text-base-content/50">Whole chapter numbers. Files are deleted; chapters become missing.</p>
+        </form>
+      </details>
+      <details class="dropdown dropdown-end max-sm:w-full">
+        <summary class="btn btn-outline max-sm:w-full">Reset names</summary>
+        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/chapters/reset-names" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Reset manually renamed chapters back to their scraped names?">
+          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from"><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to"></div>
+          <button class="btn btn-sm">Reset to scraped</button>
+          <p class="text-xs text-base-content/50">Leave the range empty to reset every manually renamed chapter.</p>
         </form>
       </details>
       {{end}}

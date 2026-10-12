@@ -500,3 +500,92 @@ func TestMarkPageReadPreservesBulkMarked(t *testing.T) {
 		t.Errorf("re-opening a bulk-marked page flipped manual to %d, want 1", manual(ch2.ID))
 	}
 }
+
+func TestChapterRenameSurvivesRefreshAndResets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://example.test/m", DisplayTitle: "M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scraped := []chapters.Chapter{
+		{Chapter: providers.Chapter{URL: "https://example.test/c1", Title: "Scraped 1", Label: "1", NumMain: 1}},
+		{Chapter: providers.Chapter{URL: "https://example.test/c2", Title: "", Label: "2", NumMain: 2}},
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, scraped); err != nil {
+		t.Fatal(err)
+	}
+	chs, err := repo.ListChapters(ctx, title.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rename both; a later refresh must not clobber the manual names.
+	if err := repo.RenameChapter(ctx, chs[0].ID, "My Name"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RenameChapter(ctx, chs[1].ID, "Named By Hand"); err != nil {
+		t.Fatal(err)
+	}
+	scraped[0].Title = "Scraped 1 updated"
+	if _, err := repo.UpsertChapters(ctx, title.ID, scraped); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != "My Name" || !chs[0].TitleCustom {
+		t.Fatalf("after refresh: %q custom=%v, want manual name kept", chs[0].Title, chs[0].TitleCustom)
+	}
+
+	// Single reset restores the LATEST scraped name.
+	if err := repo.ResetChapterTitle(ctx, chs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != "Scraped 1 updated" || chs[0].TitleCustom {
+		t.Fatalf("after reset: %q custom=%v", chs[0].Title, chs[0].TitleCustom)
+	}
+
+	// Renaming back to the scraped name clears the override.
+	if err := repo.RenameChapter(ctx, chs[0].ID, "Scraped 1 updated"); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].TitleCustom {
+		t.Fatal("rename to scraped name should clear title_custom")
+	}
+
+	// Blank range resets everything still overridden.
+	n, err := repo.ResetChapterTitles(ctx, title.ID, "", "")
+	if err != nil || n != 1 {
+		t.Fatalf("ResetChapterTitles(all) = %d, %v; want 1", n, err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[1].Title != "" || chs[1].TitleCustom {
+		t.Fatalf("chapter 2 after bulk reset: %q custom=%v", chs[1].Title, chs[1].TitleCustom)
+	}
+
+	// Numeric range resets only the chapters inside it.
+	if err := repo.RenameChapter(ctx, chs[0].ID, "A"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RenameChapter(ctx, chs[1].ID, "B"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := repo.ResetChapterTitles(ctx, title.ID, "2", "2"); err != nil || n != 1 {
+		t.Fatalf("ResetChapterTitles(range) = %d, %v; want 1", n, err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != "A" || chs[1].Title != "" {
+		t.Fatalf("range reset touched wrong rows: %q / %q", chs[0].Title, chs[1].Title)
+	}
+}

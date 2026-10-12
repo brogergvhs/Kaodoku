@@ -177,6 +177,8 @@ CREATE TABLE IF NOT EXISTS chapters (
 	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
 	label TEXT NOT NULL,
 	title TEXT NOT NULL DEFAULT '',
+	scraped_title TEXT NOT NULL DEFAULT '',
+	title_custom INTEGER NOT NULL DEFAULT 0,
 	url TEXT NOT NULL,
 	number_main INTEGER NOT NULL DEFAULT 0,
 	suffix_type TEXT NOT NULL DEFAULT '',
@@ -366,6 +368,17 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if err = ensureColumn(ctx, tx, "sources", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return fmt.Errorf("migrate sources.%s: %w", col, err)
 		}
+	}
+
+	if err = ensureColumn(ctx, tx, "chapters", "scraped_title", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate chapters.scraped_title: %w", err)
+	}
+	if err = ensureColumn(ctx, tx, "chapters", "title_custom", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate chapters.title_custom: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE chapters SET scraped_title = title
+		WHERE scraped_title = '' AND title != '' AND title_custom = 0`); err != nil {
+		return fmt.Errorf("backfill chapters.scraped_title: %w", err)
 	}
 
 	if err = migrateReadTablesPerUser(ctx, tx); err != nil {

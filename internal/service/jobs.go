@@ -678,6 +678,16 @@ func (s *JobService) RenameChapter(ctx context.Context, chapterID int64, title s
 	return s.lib.RenameChapter(ctx, chapterID, title)
 }
 
+// ResetChapterTitle restores one manually renamed chapter's scraped name.
+func (s *JobService) ResetChapterTitle(ctx context.Context, chapterID int64) error {
+	return s.lib.ResetChapterTitle(ctx, chapterID)
+}
+
+// ResetChapterTitles restores scraped names for the whole title or a range.
+func (s *JobService) ResetChapterTitles(ctx context.Context, titleID int64, from, to string) (int, error) {
+	return s.lib.ResetChapterTitles(ctx, titleID, from, to)
+}
+
 // RemoveChapterDownloadsRange deletes every downloaded chapter whose whole
 // number falls in [from, to]; returns how many were removed.
 func (s *JobService) RemoveChapterDownloadsRange(ctx context.Context, titleID int64, from, to string) (int, error) {

@@ -249,8 +249,51 @@ func (r *Repository) DeleteDownload(ctx context.Context, chapterID int64) (strin
 
 // RenameChapter updates a chapter's descriptive title.
 func (r *Repository) RenameChapter(ctx context.Context, chapterID int64, title string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE chapters SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, strings.TrimSpace(title), chapterID)
+	title = strings.TrimSpace(title)
+	_, err := r.db.ExecContext(ctx, `UPDATE chapters SET title = ?,
+		title_custom = CASE WHEN ? = scraped_title THEN 0 ELSE 1 END,
+		updated_at = CURRENT_TIMESTAMP WHERE id = ?`, title, title, chapterID)
 	return err
+}
+
+// ResetChapterTitle restores one manually renamed chapter to its scraped name.
+func (r *Repository) ResetChapterTitle(ctx context.Context, chapterID int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE chapters SET title = scraped_title, title_custom = 0,
+		updated_at = CURRENT_TIMESTAMP WHERE id = ? AND title_custom = 1`, chapterID)
+	return err
+}
+
+// ResetChapterTitles restores manually renamed chapters to their scraped names.
+func (r *Repository) ResetChapterTitles(ctx context.Context, titleID int64, from, to string) (int, error) {
+	if strings.TrimSpace(from) == "" && strings.TrimSpace(to) == "" {
+		res, err := r.db.ExecContext(ctx, `UPDATE chapters SET title = scraped_title, title_custom = 0,
+			updated_at = CURRENT_TIMESTAMP WHERE title_id = ? AND title_custom = 1`, titleID)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		return int(n), nil
+	}
+	chapters, err := r.ListChapters(ctx, titleID)
+	if err != nil {
+		return 0, err
+	}
+	selected, err := selectChapterRange(chapters, from, to)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, ch := range selected {
+		res, err := r.db.ExecContext(ctx, `UPDATE chapters SET title = scraped_title, title_custom = 0,
+			updated_at = CURRENT_TIMESTAMP WHERE id = ? AND title_custom = 1`, ch.ID)
+		if err != nil {
+			return count, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // SetLanguageMode stores the user's decision for language-gapped titles.
@@ -451,14 +494,18 @@ func (r *Repository) UpsertChapters(
 			title_id,
 			label,
 			title,
+			scraped_title,
 			url,
 			number_main,
 			suffix_type,
 			suffix_num,
 			updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(title_id, label) DO UPDATE SET
-			title = excluded.title,
+			-- A manual rename survives refreshes; the scraped name is kept
+			-- current alongside it so a reset restores the latest one.
+			title = CASE WHEN chapters.title_custom = 1 THEN chapters.title ELSE excluded.title END,
+			scraped_title = excluded.scraped_title,
 			url = excluded.url,
 			number_main = excluded.number_main,
 			suffix_type = excluded.suffix_type,
@@ -484,6 +531,7 @@ func (r *Repository) UpsertChapters(
 			titleID,
 			ch.Label,
 			ch.Title,
+			ch.Title, // scraped_title
 			ch.URL,
 			ch.NumMain,
 			ch.SuffixType,
@@ -553,8 +601,9 @@ func (r *Repository) ListMissingChapters(ctx context.Context, titleID int64) ([]
 // ChapterStatus is a discovered chapter plus its download state.
 type ChapterStatus struct {
 	Chapter
+	TitleCustom  bool
 	Downloaded   bool
-	Failed       bool // failed and reached the attempt cap
+	Failed       bool
 	Attempts     int
 	Error        string
 	OutputFile   string
@@ -569,7 +618,7 @@ type ChapterStatus struct {
 // ListChapters returns all discovered chapters for a title with download state.
 func (r *Repository) ListChapters(ctx context.Context, titleID int64) ([]ChapterStatus, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT c.id, c.title_id, c.label, c.title, c.url, c.number_main, c.suffix_type, c.suffix_num,
+		SELECT c.id, c.title_id, c.label, c.title, c.title_custom, c.url, c.number_main, c.suffix_type, c.suffix_num,
 			c.discovered_at, c.updated_at,
 			COALESCE(d.status, ''), COALESCE(d.attempts, 0), COALESCE(d.error, ''),
 			COALESCE(d.output_file, ''), COALESCE(d.bytes, 0), COALESCE(d.pages, 0),
@@ -591,7 +640,7 @@ func (r *Repository) ListChapters(ctx context.Context, titleID int64) ([]Chapter
 		var cs ChapterStatus
 		var discoveredAt, updatedAt, status, completedAt string
 		var read int
-		if err := rows.Scan(&cs.ID, &cs.TitleID, &cs.Label, &cs.Title, &cs.URL, &cs.NumberMain,
+		if err := rows.Scan(&cs.ID, &cs.TitleID, &cs.Label, &cs.Title, &cs.TitleCustom, &cs.URL, &cs.NumberMain,
 			&cs.SuffixType, &cs.SuffixNum, &discoveredAt, &updatedAt,
 			&status, &cs.Attempts, &cs.Error, &cs.OutputFile, &cs.Bytes, &cs.Pages,
 			&cs.ReadPages, &cs.TotalPages, &read, &completedAt); err != nil {

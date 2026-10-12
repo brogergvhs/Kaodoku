@@ -352,6 +352,8 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/library/{id}/chapters/{chapterID}/remove", u.chapterRemove)
 	mux.HandleFunc("GET /ui/library/{id}/chapters/{chapterID}/rename-dialog", u.chapterRenameDialog)
 	mux.HandleFunc("POST /ui/library/{id}/chapters/{chapterID}/rename", u.chapterRename)
+	mux.HandleFunc("POST /ui/library/{id}/chapters/{chapterID}/reset-name", u.chapterResetName)
+	mux.HandleFunc("POST /ui/library/{id}/chapters/reset-names", u.chapterResetNames)
 	mux.HandleFunc("POST /ui/library/{id}/chapters/range", u.chapterRangeRead)
 	mux.HandleFunc("POST /ui/library/{id}/chapters/delete-range", u.chapterDeleteRange)
 	mux.HandleFunc("POST /ui/library/{id}/link", u.linkSource)
@@ -2446,6 +2448,39 @@ func (u *webUI) chapterRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := u.svc.RenameChapter(r.Context(), chapterID, r.FormValue("title")); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.writeChaptersTable(w, r, titleID)
+}
+
+// chapterResetName restores one manually renamed chapter's scraped name.
+func (u *webUI) chapterResetName(w http.ResponseWriter, r *http.Request) {
+	titleID, chapterID, ok := u.chapterOwned(w, r)
+	if !ok {
+		return
+	}
+	if err := u.svc.ResetChapterTitle(r.Context(), chapterID); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.writeChaptersTable(w, r, titleID)
+}
+
+// chapterResetNames restores scraped names for the whole title (blank range)
+// or an inclusive chapter range.
+func (u *webUI) chapterResetNames(w http.ResponseWriter, r *http.Request) {
+	titleID, err := pathID(r)
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	if !titleAllowed(r.Context(), u.svc, titleID) {
+		http.NotFound(w, r)
+		return
+	}
+	_ = r.ParseForm()
+	if _, err := u.svc.ResetChapterTitles(r.Context(), titleID, r.FormValue("from"), r.FormValue("to")); err != nil {
 		u.fail(w, err)
 		return
 	}

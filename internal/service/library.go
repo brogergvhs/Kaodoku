@@ -283,6 +283,17 @@ func (s *LibraryService) RenameChapter(ctx context.Context, chapterID int64, tit
 	return s.repo.RenameChapter(ctx, chapterID, title)
 }
 
+// ResetChapterTitle restores one manually renamed chapter's scraped name.
+func (s *LibraryService) ResetChapterTitle(ctx context.Context, chapterID int64) error {
+	return s.repo.ResetChapterTitle(ctx, chapterID)
+}
+
+// ResetChapterTitles restores scraped names for the whole title (blank range)
+// or an inclusive label/number range.
+func (s *LibraryService) ResetChapterTitles(ctx context.Context, titleID int64, from, to string) (int, error) {
+	return s.repo.ResetChapterTitles(ctx, titleID, from, to)
+}
+
 // TitleReadStatuses lists all discovered chapters with download + read state.
 func (s *LibraryService) TitleReadStatuses(ctx context.Context, titleID int64) ([]library.ChapterReadStatus, error) {
 	return s.repo.TitleReadStatuses(ctx, titleID)
