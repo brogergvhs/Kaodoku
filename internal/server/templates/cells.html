@@ -72,7 +72,7 @@
     {{if .AverageScore}}<span class="badge badge-warning badge-soft badge-sm">★ {{.AverageScore}}%</span>{{end}}
     {{if .Year}}<span class="badge badge-ghost badge-sm">{{.Year}}</span>{{end}}
   </div>
-  {{if .Description}}<p class="text-sm text-base-content/70 leading-relaxed">{{.Description}}</p>{{end}}
+  {{if .Description}}<p class="text-sm text-base-content/70 leading-relaxed whitespace-pre-line">{{desc .Description}}</p>{{end}}
   <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-base-content/50">
     {{if .Authors}}<span>By {{range $i, $a := .Authors}}{{if $i}}, {{end}}{{$a}}{{end}}</span>{{end}}
     {{if .Chapters}}<span>{{.Chapters}} chapters (AniList)</span>{{end}}
@@ -391,7 +391,7 @@
   {{if .Year}}<span class="badge badge-ghost badge-sm">{{.Year}}</span>{{end}}
   {{if .Chapters}}<span class="badge badge-ghost badge-sm">{{.Chapters}} ch</span>{{end}}
 </div>
-{{if .Description}}<p class="line-clamp-3 text-sm leading-relaxed text-base-content/70">{{.Description}}</p>{{end}}
+{{if .Description}}<p class="line-clamp-3 text-sm leading-relaxed text-base-content/70">{{desc .Description}}</p>{{end}}
 {{if or .Genres .Tags}}
 <div class="flex flex-wrap gap-1.5">
   {{range .Genres}}<span class="badge badge-outline badge-sm">{{.}}</span>{{end}}

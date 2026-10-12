@@ -11,6 +11,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/service"
 	"github.com/brogergvhs/kaodoku/internal/sources"
+	"github.com/brogergvhs/kaodoku/internal/util"
 )
 
 type titleDTO struct {
@@ -120,7 +121,7 @@ type mangaDetailDTO struct {
 
 func toMangaDetailDTO(m catalog.Manga) *mangaDetailDTO {
 	return &mangaDetailDTO{
-		Description: m.Description, Status: m.Status, Format: m.Format, Year: m.Year,
+		Description: util.PlainDescription(m.Description), Status: m.Status, Format: m.Format, Year: m.Year,
 		Chapters: m.Chapters, Volumes: m.Volumes, Authors: m.Authors, Genres: m.Genres,
 		AverageScore: m.AverageScore,
 	}

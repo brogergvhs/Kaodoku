@@ -6,10 +6,23 @@ import (
 	"strings"
 )
 
-var tagPattern = regexp.MustCompile(`<[^>]*>`)
+var (
+	tagPattern   = regexp.MustCompile(`<[^>]*>`)
+	brPattern    = regexp.MustCompile(`(?i)<br\s*/?>`)
+	manyNewlines = regexp.MustCompile(`\n{3,}`)
+)
 
-// PlainSnippet strips simple HTML, collapses whitespace, and truncates to
-// roughly max runes on a word boundary.
+func PlainDescription(s string) string {
+	s = brPattern.ReplaceAllString(s, "\n")
+	s = html.UnescapeString(tagPattern.ReplaceAllString(s, ""))
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSpace(lines[i])
+	}
+	s = manyNewlines.ReplaceAllString(strings.Join(lines, "\n"), "\n\n")
+	return strings.TrimSpace(s)
+}
+
 func PlainSnippet(s string, max int) string {
 	s = html.UnescapeString(tagPattern.ReplaceAllString(s, " "))
 	s = strings.Join(strings.Fields(s), " ")

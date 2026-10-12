@@ -3958,6 +3958,7 @@ func (u *webUI) funcs() template.FuncMap {
 	return template.FuncMap{
 		"assetVer": func() string { return u.assetVer },
 		"chname":   chapters.DisplayName,
+		"desc":     util.PlainDescription,
 		"jobLabel": jobLabel,
 		"tokenExpired": func(expiresAt string) bool {
 			t, err := database.ParseTime(expiresAt)
