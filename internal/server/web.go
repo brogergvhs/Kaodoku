@@ -3487,7 +3487,14 @@ func (u *webUI) srcEdit(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	u.frag(w, "sourceEdit", sourceEditView{Source: src, Scrapers: registry.Names()})
+	names := registry.Names()
+
+	// Dynamic scrapers (kotatsu:<PARSER>) aren't in the registry list; keep
+	// the current one selectable so saving doesn't silently rewrite it.
+	if !slices.Contains(names, src.Scraper) && src.Scraper != "" {
+		names = append([]string{src.Scraper}, names...)
+	}
+	u.frag(w, "sourceEdit", sourceEditView{Source: src, Scrapers: names})
 }
 
 func (u *webUI) srcEditSave(w http.ResponseWriter, r *http.Request) {

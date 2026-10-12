@@ -60,7 +60,7 @@ func New(endpoint, key string) *Client {
 	return &Client{
 		endpoint: strings.TrimRight(endpoint, "/"),
 		key:      key,
-		client: &http.Client{Timeout: 180 * time.Second},
+		client:   &http.Client{Timeout: 180 * time.Second},
 	}
 }
 

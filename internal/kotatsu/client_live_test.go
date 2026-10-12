@@ -39,4 +39,15 @@ func TestClientLive(t *testing.T) {
 		t.Fatalf("Pages = %d, %v", len(pages), err)
 	}
 	t.Logf("live: %d sources, %d chapters, %d pages, image %s", len(srcs), len(chs.Chapters), len(pages), pages[0])
+
+	s := NewScraper(c, "MANGADEX")
+	sch, resolved, err := s.GetChaptersResolved(ctx, res[0].URL)
+	if err != nil || len(sch) == 0 || resolved == "" {
+		t.Fatalf("scraper chapters = %d resolved=%q, %v", len(sch), resolved, err)
+	}
+	imgs, err := s.GetImages(ctx, sch[0].URL)
+	if err != nil || len(imgs) == 0 {
+		t.Fatalf("scraper images = %d, %v", len(imgs), err)
+	}
+	t.Logf("scraper live: %d chapters (first %q %q), %d images", len(sch), sch[0].Label, sch[0].Title, len(imgs))
 }

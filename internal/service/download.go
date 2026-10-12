@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/downloader"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/providers"
 	"github.com/brogergvhs/kaodoku/internal/providers/generic"
 	"github.com/brogergvhs/kaodoku/internal/providers/registry"
@@ -153,14 +155,14 @@ func newDownloadServiceWithScraper(
 ) (*DownloadService, error) {
 	browserState := &util.BrowserState{}
 	client, err := util.NewHTTPClient(util.HTTPClientOptions{
-		Timeout:              30 * time.Second,
-		UserAgent:            util.PickUserAgent(cfg.UserAgent),
-		Cookie:               cfg.Cookie,
-		Transport:            cloudflarebp.AddCloudFlareByPass(http.DefaultTransport),
-		CookieFile:           cfg.CookieFile,
-		State:                browserState,
-		RateLimit:            hostRateLimit(cfg),
-		BlockPrivateNetworks: true,
+		Timeout:    30 * time.Second,
+		UserAgent:  util.PickUserAgent(cfg.UserAgent),
+		Cookie:     cfg.Cookie,
+		Transport:  cloudflarebp.AddCloudFlareByPass(http.DefaultTransport),
+		CookieFile: cfg.CookieFile,
+		State:      browserState,
+		RateLimit:  hostRateLimit(cfg),
+		BlockPrivateNetworks: !strings.HasPrefix(scraperName, kotatsu.ScraperPrefix),
 		DebugLogger:          log,
 	})
 	if err != nil {
@@ -188,7 +190,11 @@ func newDownloadServiceWithScraper(
 		browser = solver
 		downloadBrowser = solver
 	}
-	scraper, err := registry.New(scraperName, client, log, cfg.AllowExt, cfg.CheckJS, browser)
+	var worker *kotatsu.Client
+	if cfg.KotatsuWorker.Enabled {
+		worker = kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey)
+	}
+	scraper, err := registry.New(scraperName, client, log, cfg.AllowExt, cfg.CheckJS, browser, worker)
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +483,9 @@ func (s *DownloadService) downloadChapter(
 
 	files, bytes, err := dl.DownloadImagesConcurrently(ctx, images, tmpFolder, ch.URL, max(1, s.cfg.ImageWorkers), handle)
 	if err != nil {
-		if s.cfg.BrowserDownload.Enabled {
+		// Composite kotatsu chapter ids are not navigable pages so browser
+		// fallback can only waste its timeout on them.
+		if s.cfg.BrowserDownload.Enabled && !strings.Contains(ch.URL, "\t") {
 			return s.downloadChapterWithBrowser(ctx, ch, cbzOut, tmpFolder, err)
 		}
 		return ChapterDownloadResult{}, err

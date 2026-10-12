@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/providers"
 	"github.com/brogergvhs/kaodoku/internal/providers/comickz"
 	"github.com/brogergvhs/kaodoku/internal/providers/generic"
@@ -53,12 +55,22 @@ func Names() []string {
 
 // Supported reports whether name is a known scraper.
 func Supported(name string) bool {
+	if strings.HasPrefix(name, kotatsu.ScraperPrefix) {
+		return true
+	}
 	_, ok := constructors[name]
 	return ok
 }
 
 // New builds the named scraper; an empty name selects the generic one.
-func New(name string, client *http.Client, log ui.Log, allowExt []string, checkJS bool, browser generic.BrowserFetcher) (providers.Scraper, error) {
+// "kotatsu:<PARSER>" names route to the kotatsu-worker sidecar.
+func New(name string, client *http.Client, log ui.Log, allowExt []string, checkJS bool, browser generic.BrowserFetcher, worker *kotatsu.Client) (providers.Scraper, error) {
+	if id, ok := strings.CutPrefix(name, kotatsu.ScraperPrefix); ok {
+		if worker == nil {
+			return nil, fmt.Errorf("source needs the kotatsu worker, which is not enabled")
+		}
+		return kotatsu.NewScraper(worker, id), nil
+	}
 	if name == "" {
 		name = "generic"
 	}

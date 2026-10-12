@@ -1,0 +1,96 @@
+package kotatsu
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/brogergvhs/kaodoku/internal/providers"
+)
+
+const DefaultEndpoint = "http://localhost:8484"
+
+// ScraperPrefix marks source profiles backed by the worker; the suffix is
+// the worker parser id, e.g. "kotatsu:MANGADEX".
+const ScraperPrefix = "kotatsu:"
+
+const urlSep = "\t"
+
+type Scraper struct {
+	c      *Client
+	source string
+}
+
+func NewScraper(c *Client, source string) *Scraper {
+	return &Scraper{c: c, source: source}
+}
+
+func (s *Scraper) GetChapters(ctx context.Context, url string) ([]providers.Chapter, error) {
+	chs, _, err := s.GetChaptersResolved(ctx, url)
+	return chs, err
+}
+
+func (s *Scraper) GetChaptersResolved(ctx context.Context, url string) ([]providers.Chapter, string, error) {
+	res, err := s.c.Chapters(ctx, s.source, url)
+	if err != nil {
+		return nil, "", err
+	}
+	type kept struct {
+		idx    int
+		branch string
+	}
+	byLabel := map[string]kept{}
+	out := make([]providers.Chapter, 0, len(res.Chapters))
+	for _, ch := range res.Chapters {
+		if ch.Number == "" {
+			continue
+		}
+		main, suffixType, suffixNum, label, ok := providers.ParseChapterNumber(ch.Number)
+		if !ok {
+			continue
+		}
+		next := providers.Chapter{
+			URL:        res.ResolvedURL + urlSep + ch.URL,
+			Title:      ch.Title,
+			NumMain:    main,
+			SuffixType: suffixType,
+			SuffixNum:  suffixNum,
+			Label:      label,
+		}
+		if k, seen := byLabel[label]; seen {
+			if english(ch.Branch) && !english(k.branch) {
+				out[k.idx] = next
+				byLabel[label] = kept{k.idx, ch.Branch}
+			}
+			continue
+		}
+		byLabel[label] = kept{len(out), ch.Branch}
+		out = append(out, next)
+	}
+	providers.SortChapters(out)
+	return out, res.ResolvedURL, nil
+}
+
+func english(branch string) bool {
+	return strings.HasPrefix(strings.ToLower(branch), "en")
+}
+
+func (s *Scraper) GetImages(ctx context.Context, chapterURL string) ([]string, error) {
+	manga, chapter, ok := strings.Cut(chapterURL, urlSep)
+	if !ok {
+		return nil, fmt.Errorf("not a kotatsu chapter url: %q", chapterURL)
+	}
+	return s.c.Pages(ctx, s.source, manga, chapter)
+}
+
+func (s *Scraper) SearchManga(ctx context.Context, _ string, query string) ([]string, error) {
+	res, err := s.c.Search(ctx, s.source, query)
+	if err != nil {
+		return nil, err
+	}
+	urls := make([]string, len(res))
+	for i, r := range res {
+		urls[i] = r.URL
+	}
+	return urls, nil
+}

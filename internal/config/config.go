@@ -8,6 +8,7 @@ import (
 
 	"github.com/brogergvhs/kaodoku/internal/browserdownload"
 	"github.com/brogergvhs/kaodoku/internal/browserfetch"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/util"
 
 	"gopkg.in/yaml.v3"
@@ -125,6 +126,10 @@ func DefaultConfig() *Config {
 			Enabled:        false,
 			Endpoint:       browserdownload.DefaultEndpoint,
 			TimeoutSeconds: 180,
+		},
+		KotatsuWorker: KotatsuWorkerConfig{
+			Enabled:  false,
+			Endpoint: kotatsu.DefaultEndpoint,
 		},
 	}
 }
@@ -318,6 +323,9 @@ func normalizeDefaults(c *Config) {
 	}
 	if c.BrowserSolver.TimeoutSeconds == 0 {
 		c.BrowserSolver.TimeoutSeconds = 60
+	}
+	if c.KotatsuWorker.Endpoint == "" {
+		c.KotatsuWorker.Endpoint = kotatsu.DefaultEndpoint
 	}
 	if c.BrowserDownload.Endpoint == "" {
 		c.BrowserDownload.Endpoint = browserdownload.DefaultEndpoint
