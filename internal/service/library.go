@@ -288,6 +288,11 @@ func (s *LibraryService) ResetChapterTitle(ctx context.Context, chapterID int64)
 	return s.repo.ResetChapterTitle(ctx, chapterID)
 }
 
+// BulkRenameChapters applies manual names and volume assignments atomically.
+func (s *LibraryService) BulkRenameChapters(ctx context.Context, titleID int64, items []library.ChapterRename) error {
+	return s.repo.BulkRenameChapters(ctx, titleID, items)
+}
+
 // ResetChapterTitles restores scraped names for the whole title (blank range)
 // or an inclusive label/number range.
 func (s *LibraryService) ResetChapterTitles(ctx context.Context, titleID int64, from, to string) (int, error) {

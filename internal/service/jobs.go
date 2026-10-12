@@ -683,6 +683,11 @@ func (s *JobService) ResetChapterTitle(ctx context.Context, chapterID int64) err
 	return s.lib.ResetChapterTitle(ctx, chapterID)
 }
 
+// BulkRenameChapters applies manual names and volume assignments atomically.
+func (s *JobService) BulkRenameChapters(ctx context.Context, titleID int64, items []library.ChapterRename) error {
+	return s.lib.BulkRenameChapters(ctx, titleID, items)
+}
+
 // ResetChapterTitles restores scraped names for the whole title or a range.
 func (s *JobService) ResetChapterTitles(ctx context.Context, titleID int64, from, to string) (int, error) {
 	return s.lib.ResetChapterTitles(ctx, titleID, from, to)

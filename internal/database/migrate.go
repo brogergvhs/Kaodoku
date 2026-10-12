@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS chapters (
 	title TEXT NOT NULL DEFAULT '',
 	scraped_title TEXT NOT NULL DEFAULT '',
 	title_custom INTEGER NOT NULL DEFAULT 0,
+	volume_num REAL NOT NULL DEFAULT 0,
 	url TEXT NOT NULL,
 	number_main INTEGER NOT NULL DEFAULT 0,
 	suffix_type TEXT NOT NULL DEFAULT '',
@@ -375,6 +376,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if err = ensureColumn(ctx, tx, "chapters", "title_custom", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("migrate chapters.title_custom: %w", err)
+	}
+	if err = ensureColumn(ctx, tx, "chapters", "volume_num", "REAL NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate chapters.volume_num: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE chapters SET scraped_title = title
 		WHERE scraped_title = '' AND title != '' AND title_custom = 0`); err != nil {

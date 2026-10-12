@@ -263,6 +263,48 @@ func (r *Repository) ResetChapterTitle(ctx context.Context, chapterID int64) err
 	return err
 }
 
+type ChapterRename struct {
+	ChapterID int64
+	Title     string
+	Volume    float64
+}
+
+// BulkRenameChapters applies manual names and volume assignments in one
+// transaction.
+func (r *Repository) BulkRenameChapters(ctx context.Context, titleID int64, items []ChapterRename) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin bulk rename: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	stmt, err := tx.PrepareContext(ctx, `UPDATE chapters SET title = ?,
+		title_custom = CASE WHEN ? = scraped_title THEN 0 ELSE 1 END,
+		volume_num = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND title_id = ?`)
+	if err != nil {
+		return fmt.Errorf("prepare bulk rename: %w", err)
+	}
+	defer stmt.Close()
+	for _, item := range items {
+		title := strings.TrimSpace(item.Title)
+		res, execErr := stmt.ExecContext(ctx, title, title, item.Volume, item.ChapterID, titleID)
+		if execErr != nil {
+			err = fmt.Errorf("rename chapter %d: %w", item.ChapterID, execErr)
+			return err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			err = fmt.Errorf("chapter %d does not belong to this title", item.ChapterID)
+			return err
+		}
+	}
+	err = tx.Commit()
+	return err
+}
+
 // ResetChapterTitles restores manually renamed chapters to their scraped names.
 func (r *Repository) ResetChapterTitles(ctx context.Context, titleID int64, from, to string) (int, error) {
 	if strings.TrimSpace(from) == "" && strings.TrimSpace(to) == "" {
@@ -602,6 +644,7 @@ func (r *Repository) ListMissingChapters(ctx context.Context, titleID int64) ([]
 type ChapterStatus struct {
 	Chapter
 	TitleCustom  bool
+	VolumeNum    float64
 	Downloaded   bool
 	Failed       bool
 	Attempts     int
@@ -618,7 +661,7 @@ type ChapterStatus struct {
 // ListChapters returns all discovered chapters for a title with download state.
 func (r *Repository) ListChapters(ctx context.Context, titleID int64) ([]ChapterStatus, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT c.id, c.title_id, c.label, c.title, c.title_custom, c.url, c.number_main, c.suffix_type, c.suffix_num,
+		SELECT c.id, c.title_id, c.label, c.title, c.title_custom, c.volume_num, c.url, c.number_main, c.suffix_type, c.suffix_num,
 			c.discovered_at, c.updated_at,
 			COALESCE(d.status, ''), COALESCE(d.attempts, 0), COALESCE(d.error, ''),
 			COALESCE(d.output_file, ''), COALESCE(d.bytes, 0), COALESCE(d.pages, 0),
@@ -640,7 +683,7 @@ func (r *Repository) ListChapters(ctx context.Context, titleID int64) ([]Chapter
 		var cs ChapterStatus
 		var discoveredAt, updatedAt, status, completedAt string
 		var read int
-		if err := rows.Scan(&cs.ID, &cs.TitleID, &cs.Label, &cs.Title, &cs.TitleCustom, &cs.URL, &cs.NumberMain,
+		if err := rows.Scan(&cs.ID, &cs.TitleID, &cs.Label, &cs.Title, &cs.TitleCustom, &cs.VolumeNum, &cs.URL, &cs.NumberMain,
 			&cs.SuffixType, &cs.SuffixNum, &discoveredAt, &updatedAt,
 			&status, &cs.Attempts, &cs.Error, &cs.OutputFile, &cs.Bytes, &cs.Pages,
 			&cs.ReadPages, &cs.TotalPages, &read, &completedAt); err != nil {

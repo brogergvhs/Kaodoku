@@ -88,7 +88,8 @@
 {{if .Downloaded}}<a class="link link-hover font-medium" href="/reader/{{.TitleID}}?chapter={{.ID}}">{{$text}}</a>
 {{- else if .Failed}}<span class="font-medium" title="{{.Error}}">{{$text}}</span>
 {{- else}}<span class="font-medium">{{$text}}</span>{{end}}
-{{- if $d.Volume}}<div class="text-xs text-base-content/50">{{$d.Volume}}</div>{{end}}
+{{- if gt .VolumeNum 0.0}}<div class="text-xs text-base-content/50">Vol. {{printf "%g" .VolumeNum}}</div>
+{{- else if $d.Volume}}<div class="text-xs text-base-content/50">{{$d.Volume}}</div>{{end}}
 {{end}}
 
 {{define "chapterActions"}}
@@ -110,6 +111,72 @@
   </ul>
 </details>
 {{else}}<span class="text-base-content/30">—</span>{{end}}
+{{end}}
+
+{{define "bulkRenamePaste"}}
+<form class="grid gap-3" hx-post="/ui/library/{{.TitleID}}/chapters/bulk-rename/preview" hx-target="#bulk-rename-body" hx-swap="innerHTML">
+  <textarea name="text" rows="12" class="textarea w-full font-mono text-xs" placeholder='40: "Battlefield Hardline 3", vol: 9' required></textarea>
+  <p class="text-xs text-base-content/50">One chapter per line: <code>&lt;number&gt;: "&lt;name&gt;", vol: &lt;number&gt;</code> — the volume part is optional, an empty name keeps just the number.</p>
+  <div class="flex justify-end gap-2">
+    <button type="button" class="btn btn-ghost" onclick="bulk_rename_modal.close()">Cancel</button>
+    <button class="btn btn-primary">Preview rename</button>
+  </div>
+</form>
+{{end}}
+
+{{define "bulkRenamePreview"}}
+<form id="bulk-rename-form" class="grid gap-2" hx-post="/ui/library/{{.TitleID}}/chapters/bulk-rename" hx-target="#chapters-table" hx-swap="outerHTML" hx-on::after-request="if(event.detail.successful && !event.detail.xhr.getResponseHeader('HX-Retarget')){bulk_rename_modal.close()}">
+  {{if .Errors}}<div class="alert alert-warning text-xs py-2"><div>{{range .Errors}}<div>{{.}}</div>{{end}}</div></div>{{end}}
+  <div class="flex gap-1 pr-1 text-xs text-base-content/50">
+    <span class="w-24 shrink-0">Chapter</span>
+    <span class="w-full">Name</span>
+    <span class="w-16 shrink-0">Volume</span>
+  </div>
+  <div class="max-h-96 overflow-y-auto grid gap-1 pr-1">
+    {{$chapters := .Chapters}}
+    {{range .Rows}}{{$row := .}}
+    <div class="grid gap-0.5">
+      <div class="flex items-center gap-1">
+        <select name="chapter_id" class="select select-sm w-24 shrink-0" onchange="bulkRenameDedupe(this)">
+          <option value=""></option>
+          {{range $chapters}}<option value="{{.ID}}" {{if eq .ID $row.ChapterID}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+        <input name="name" class="input input-sm w-full" value="{{.Name}}" placeholder="name">
+        <input name="vol" class="input input-sm w-16 shrink-0" inputmode="decimal" value="{{.Volume}}" placeholder="vol">
+      </div>
+      {{if .Error}}<div class="text-xs text-warning">{{.Error}}</div>{{end}}
+    </div>
+    {{end}}
+  </div>
+  <div class="flex items-center justify-end gap-2">
+    <span id="bulk-rename-invalid" class="hidden text-xs text-warning mr-auto">Every row needs a unique chapter.</span>
+    <button type="button" class="btn btn-ghost" hx-get="/ui/library/{{.TitleID}}/chapters/bulk-rename" hx-target="#bulk-rename-body" hx-swap="innerHTML">Back</button>
+    <button id="bulk-rename-save" class="btn btn-primary">Save</button>
+  </div>
+</form>
+<script>
+  // One chapter can hold only one name/volume: picking a chapter that is
+  // already used empties its other row, and empty rows block saving.
+  function bulkRenameDedupe(sel) {
+    const form = document.getElementById('bulk-rename-form');
+    if (sel && sel.value) {
+      for (const other of form.querySelectorAll('select[name="chapter_id"]')) {
+        if (other !== sel && other.value === sel.value) other.value = '';
+      }
+    }
+    // Empty rows and duplicates (possible straight from the paste, e.g.
+    // "40" and "040" matching the same chapter) both block saving.
+    let ok = true;
+    const seen = new Set();
+    for (const s of form.querySelectorAll('select[name="chapter_id"]')) {
+      if (!s.value || seen.has(s.value)) ok = false;
+      seen.add(s.value);
+    }
+    document.getElementById('bulk-rename-save').disabled = !ok;
+    document.getElementById('bulk-rename-invalid').classList.toggle('hidden', ok);
+  }
+  bulkRenameDedupe(null);
+</script>
 {{end}}
 
 {{define "chapterRenameDialog"}}
@@ -572,6 +639,7 @@
           <p class="text-xs text-base-content/50">Whole chapter numbers. Files are deleted; chapters become missing.</p>
         </form>
       </details>
+      <button class="btn btn-outline max-sm:w-full" hx-get="/ui/library/{{.Title.ID}}/chapters/bulk-rename" hx-target="#bulk-rename-body" hx-swap="innerHTML" onclick="bulk_rename_modal.showModal()">Bulk rename</button>
       <details class="dropdown dropdown-end max-sm:w-full">
         <summary class="btn btn-outline max-sm:w-full">Reset names</summary>
         <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/chapters/reset-names" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Reset manually renamed chapters back to their scraped names?">
@@ -642,6 +710,13 @@
     <div class="modal-box max-w-sm">
       <h3 class="text-lg font-bold mb-3">Rename chapter</h3>
       <div id="chapter-rename-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
+  <dialog id="bulk_rename_modal" class="modal">
+    <div class="modal-box max-w-2xl">
+      <h3 class="text-lg font-bold mb-3">Bulk rename chapters</h3>
+      <div id="bulk-rename-body"><p class="text-sm text-base-content/60">Loading…</p></div>
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>

@@ -589,3 +589,74 @@ func TestChapterRenameSurvivesRefreshAndResets(t *testing.T) {
 		t.Fatalf("range reset touched wrong rows: %q / %q", chs[0].Title, chs[1].Title)
 	}
 }
+
+func TestBulkRenameChapters(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://example.test/b", DisplayTitle: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://example.test/other", DisplayTitle: "O"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		{Chapter: providers.Chapter{URL: "https://example.test/b1", Title: "Scraped", Label: "40", NumMain: 40}},
+		{Chapter: providers.Chapter{URL: "https://example.test/b2", Title: "", Label: "41", NumMain: 41}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	chs, err := repo.ListChapters(ctx, title.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
+		{ChapterID: chs[0].ID, Title: "Battlefield", Volume: 9},
+		{ChapterID: chs[1].ID, Title: "", Volume: 9},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != "Battlefield" || !chs[0].TitleCustom || chs[0].VolumeNum != 9 {
+		t.Fatalf("row 0 = %q custom=%v vol=%v", chs[0].Title, chs[0].TitleCustom, chs[0].VolumeNum)
+	}
+	// Empty name over empty scraped title: no override, volume still set.
+	if chs[1].Title != "" || chs[1].TitleCustom || chs[1].VolumeNum != 9 {
+		t.Fatalf("row 1 = %q custom=%v vol=%v", chs[1].Title, chs[1].TitleCustom, chs[1].VolumeNum)
+	}
+
+	// Volume 0 clears the association; a foreign chapter aborts everything.
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
+		{ChapterID: chs[0].ID, Title: "Battlefield", Volume: 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].VolumeNum != 0 {
+		t.Fatalf("volume not cleared: %v", chs[0].VolumeNum)
+	}
+	before := chs[0].Title
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
+		{ChapterID: chs[0].ID, Title: "Changed", Volume: 1},
+		{ChapterID: 999999, Title: "X"},
+	}); err == nil {
+		t.Fatal("foreign chapter should fail the whole batch")
+	}
+	_ = other
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != before {
+		t.Fatal("failed batch must not apply partially")
+	}
+}
