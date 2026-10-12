@@ -380,7 +380,7 @@ struct ReaderView: View {
   private func loadChapterRows() async {
     if let localChapters {
       chapterRows = localChapters.map {
-        ReaderChapterRow(id: $0.id, label: $0.label, read: $0.isRead, available: true)
+        ReaderChapterRow(id: $0.id, label: $0.label, name: $0.name, read: $0.isRead, available: true)
       }
       return
     }
@@ -388,7 +388,9 @@ struct ReaderView: View {
        let p: TitleReadProgress = try? await api.get("/api/v1/reader/titles/\(titleID)")
     {
       chapterRows = p.chapters.map {
-        ReaderChapterRow(id: $0.id, label: $0.label, read: $0.completed, available: $0.downloaded)
+        ReaderChapterRow(id: $0.id, label: $0.label,
+                         name: ($0.displayName ?? $0.title).isEmpty ? nil : ($0.displayName ?? $0.title),
+                         read: $0.completed, available: $0.downloaded)
       }
       return
     }
@@ -543,8 +545,19 @@ struct ReaderView: View {
 struct ReaderChapterRow: Identifiable {
   var id: Int64
   var label: String
+  var name: String?
   var read: Bool
   var available: Bool
+
+  func displayTitle(volumes: Bool) -> String {
+    if volumes {
+      return "Vol \(label)"
+    }
+    if let name, !name.isEmpty {
+      return "\(label): \(name)"
+    }
+    return "Chapter \(label)"
+  }
 }
 
 struct ReaderChapterSheet: View {
@@ -564,7 +577,8 @@ struct ReaderChapterSheet: View {
               dismiss()
             } label: {
               HStack {
-                Text("\(volumes ? "Vol" : "Ch") \(row.label)")
+                Text(row.displayTitle(volumes: volumes))
+                  .lineLimit(1)
                   .foregroundStyle(row.available ? Color.primary : .secondary)
                 Spacer()
                 if row.id == currentID {

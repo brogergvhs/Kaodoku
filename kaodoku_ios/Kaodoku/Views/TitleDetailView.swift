@@ -352,8 +352,10 @@ struct TitleDetailView: View {
           { fraction in
             Task { @MainActor in store.setProgress(fraction) }
           }
+          let display = ch.displayName ?? ch.title
           try await app.store.save(file: tmp, chapterID: ch.id, titleId: titleID,
                                    titleName: p.title.displayTitle, label: name,
+                                   name: display.isEmpty ? nil : display,
                                    readPages: ch.readPages, completed: ch.completed, volume: volumes)
         } catch {
           note = error.localizedDescription

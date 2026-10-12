@@ -34,6 +34,7 @@ final class LocalStore {
     var titleId: Int64
     var titleName: String
     var label: String
+    var name: String?
     var path: String
     var pages: Int
     var size: Int64
@@ -458,7 +459,7 @@ final class LocalStore {
   /// save moves a downloaded temp file into place; sanitized names that would
   /// collide across titles or chapters get an id suffix.
   func save(file src: URL, chapterID: Int64, titleId: Int64, titleName: String, label: String,
-            readPages: Int = 0, completed: Bool = false, volume: Bool = false) async throws
+            name: String? = nil, readPages: Int = 0, completed: Bool = false, volume: Bool = false) async throws
   {
     defer { try? FileManager.default.removeItem(at: src) }
     let prepared = try await Task.detached(priority: .utility) {
@@ -485,7 +486,7 @@ final class LocalStore {
     }
     chapters[key(chapterID, volume: volume)] = Entry(
       id: chapterID, titleId: titleId, titleName: titleName,
-      label: label, path: path, pages: prepared.pages, size: prepared.size,
+      label: label, name: name, path: path, pages: prepared.pages, size: prepared.size,
       readPages: readPages, completed: completed, pageAspects: prepared.pageAspects,
       pageCrops: prepared.pageCrops, volume: volume
     )
