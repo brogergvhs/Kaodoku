@@ -31,11 +31,20 @@ class MemoryCookieJar : CookieJar {
     }
 }
 
+private val privateAddressGuard = okhttp3.Interceptor { chain ->
+    val addr = (chain.connection()?.route()?.socketAddress as? java.net.InetSocketAddress)?.address
+    if (addr != null && (addr.isLoopbackAddress || addr.isSiteLocalAddress ||
+            addr.isLinkLocalAddress || addr.isAnyLocalAddress)
+    ) throw java.io.IOException("refused private address ${addr.hostAddress}")
+    chain.proceed(chain.request())
+}
+
 class JvmLoaderContext : MangaLoaderContext() {
     override val cookieJar: CookieJar = MemoryCookieJar()
 
     override val httpClient: OkHttpClient = OkHttpClient.Builder()
         .cookieJar(cookieJar)
+        .addNetworkInterceptor(privateAddressGuard)
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()

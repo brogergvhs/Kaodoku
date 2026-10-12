@@ -37,15 +37,21 @@ fun main() {
     val key = System.getenv("WORKER_KEY") ?: error("WORKER_KEY env is required")
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8484
     val ctx = JvmLoaderContext()
+    val api = Api(ctx, key)
+    val open = setOf("/healthz", "/image")
     val sources by lazy { listSources(ctx) }
 
     Javalin.create()
         .before { c ->
-            if (c.path() != "/healthz" && c.header("X-Worker-Key") != key) throw UnauthorizedResponse()
+            if (c.path() !in open && c.header("X-Worker-Key") != key) throw UnauthorizedResponse()
         }
         .get("/healthz") { c ->
             c.json(mapOf("ok" to true, "parsers" to sources.size, "version" to System.getProperty("worker.lib", "dev")))
         }
         .get("/sources") { c -> c.json(sources) }
+        .get("/search", api::search)
+        .get("/chapters", api::chapters)
+        .get("/pages", api::pages)
+        .get("/image", api::image)
         .start(port)
 }
