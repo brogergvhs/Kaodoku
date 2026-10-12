@@ -42,7 +42,14 @@ type Config struct {
 	RateLimit       RateLimitConfig       `yaml:"rate_limit"`
 	BrowserSolver   BrowserSolverConfig   `yaml:"browser_solver"`
 	BrowserDownload BrowserDownloadConfig `yaml:"browser_downloader"`
+	KotatsuWorker   KotatsuWorkerConfig   `yaml:"kotatsu_worker"`
 	CookieDBPath    string                `yaml:"-"`
+}
+
+type KotatsuWorkerConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Endpoint string `yaml:"endpoint"`
+	APIKey   string `yaml:"api_key"`
 }
 
 // RateLimitConfig controls per-host request pacing. Zero values use the
@@ -197,6 +204,17 @@ func mergeConfig(c *Config, o Options) {
 		if seconds, err := strconv.Atoi(env); err == nil {
 			c.BrowserDownload.TimeoutSeconds = seconds
 		}
+	}
+	if env := strings.TrimSpace(os.Getenv("KAODOKU_KOTATSU_WORKER_ENABLED")); env != "" {
+		if enabled, err := strconv.ParseBool(env); err == nil {
+			c.KotatsuWorker.Enabled = enabled
+		}
+	}
+	if env := strings.TrimSpace(os.Getenv("KAODOKU_KOTATSU_WORKER_ENDPOINT")); env != "" {
+		c.KotatsuWorker.Endpoint = env
+	}
+	if env := strings.TrimSpace(os.Getenv("KAODOKU_KOTATSU_WORKER_API_KEY")); env != "" {
+		c.KotatsuWorker.APIKey = env
 	}
 	if env := strings.TrimSpace(os.Getenv("KAODOKU_BROWSER_SOLVER_ENABLED")); env != "" {
 		if enabled, err := strconv.ParseBool(env); err == nil {
