@@ -8,7 +8,6 @@ import io.javalin.http.Context
 import io.javalin.http.NotFoundResponse
 import io.javalin.http.UnauthorizedResponse
 import kotlinx.coroutines.runBlocking
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.koitharu.kotatsu.parsers.InternalParsersApi
 import org.koitharu.kotatsu.parsers.MangaParser
@@ -16,13 +15,13 @@ import org.koitharu.kotatsu.parsers.model.Manga
 import org.koitharu.kotatsu.parsers.model.MangaListFilter
 import org.koitharu.kotatsu.parsers.model.MangaPage
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
+import org.koitharu.kotatsu.parsers.model.MangaSource
 import org.koitharu.kotatsu.parsers.model.SortOrder
 import org.koitharu.kotatsu.parsers.util.generateUid
 import java.net.URLEncoder
 import java.util.Collections
 import java.security.MessageDigest
 import java.time.Instant
-import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -34,8 +33,6 @@ data class ChapterInfo(
 data class ChaptersResult(val resolved_url: String, val chapters: List<ChapterInfo>)
 
 class Api(private val ctx: JvmLoaderContext, private val key: String) {
-    private val parsers = ConcurrentHashMap<MangaParserSource, MangaParser>()
-    private val clients = ConcurrentHashMap<MangaParserSource, OkHttpClient>()
     private val mangaCache = Collections.synchronizedMap(
         object : LinkedHashMap<String, Manga>(16, 0.75f, true) {
             override fun removeEldestEntry(e: MutableMap.MutableEntry<String, Manga>?) = size > 64
@@ -44,11 +41,7 @@ class Api(private val ctx: JvmLoaderContext, private val key: String) {
     private fun parser(id: String?): MangaParser {
         val s = id?.let { runCatching { MangaParserSource.valueOf(it) }.getOrNull() }
             ?: throw NotFoundResponse("unknown source")
-        return parsers.getOrPut(s) { ctx.newParserInstance(s) }
-    }
-
-    private fun client(p: MangaParser) = clients.getOrPut(p.source) {
-        ctx.httpClient.newBuilder().addInterceptor(p).build()
+        return ctx.parser(s)
     }
 
     private fun order(p: MangaParser, preferred: SortOrder) =
@@ -98,9 +91,12 @@ class Api(private val ctx: JvmLoaderContext, private val key: String) {
         val p = parser(src)
         val direct = runBlocking { p.getPageUrl(MangaPage(p.generateUid(url), url, null, p.source)) }
         val req = runCatching {
-            Request.Builder().url(direct).header("User-Agent", ctx.getDefaultUserAgent()).build()
+            Request.Builder().url(direct)
+                .tag(MangaSource::class.java, p.source)
+                .header("User-Agent", ctx.getDefaultUserAgent())
+                .build()
         }.getOrElse { throw BadRequestResponse("bad image url") }
-        val resp = client(p).newCall(req).execute()
+        val resp = ctx.httpClient.newCall(req).execute()
         if (!resp.isSuccessful) {
             resp.close()
             throw BadGatewayResponse("upstream ${resp.code}")

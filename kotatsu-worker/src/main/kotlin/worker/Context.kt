@@ -3,12 +3,15 @@ package worker
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
+import org.koitharu.kotatsu.parsers.MangaParser
 import org.koitharu.kotatsu.parsers.bitmap.Bitmap
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.config.MangaSourceConfig
+import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.MangaSource
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -42,19 +45,30 @@ private val privateAddressGuard = okhttp3.Interceptor { chain ->
 class JvmLoaderContext : MangaLoaderContext() {
     override val cookieJar: CookieJar = MemoryCookieJar()
 
+    private val parsers = ConcurrentHashMap<MangaParserSource, MangaParser>()
+
+    internal fun parser(source: MangaParserSource): MangaParser = parsers.getOrPut(source) { newParserInstance(source) }
+
+    internal val parserDispatch = Interceptor { chain ->
+        val source = chain.request().tag(MangaSource::class.java)
+        if (source is MangaParserSource) parser(source).intercept(chain) else chain.proceed(chain.request())
+    }
+
     override val httpClient: OkHttpClient = OkHttpClient.Builder()
         .cookieJar(cookieJar)
+        .addInterceptor(parserDispatch)
         .addNetworkInterceptor(privateAddressGuard)
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    // IOException, not UnsupportedOperationException: parsers call this inside interceptors.
     @Deprecated("Provide a base url")
     override suspend fun evaluateJs(script: String): String? =
-        throw UnsupportedOperationException("JS evaluation is not available")
+        throw java.io.IOException("JS evaluation is not available")
 
     override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String? =
-        throw UnsupportedOperationException("JS evaluation is not available")
+        throw java.io.IOException("JS evaluation is not available")
 
     override fun getConfig(source: MangaSource): MangaSourceConfig = DefaultConfig
 
