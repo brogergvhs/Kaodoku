@@ -40,7 +40,9 @@ fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
 fun main() {
     val key = System.getenv("WORKER_KEY") ?: error("WORKER_KEY env is required")
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8484
-    val ctx = JvmLoaderContext()
+    val solverUrl = System.getenv("FLARESOLVERR_URL")?.takeIf { it.isNotBlank() }
+    val solverTimeout = System.getenv("FLARESOLVERR_TIMEOUT_MS")?.toLongOrNull() ?: 60_000
+    val ctx = JvmLoaderContext(solverUrl?.let { FlareSolverr(it, solverTimeout) })
     val api = Api(ctx, key)
     val open = setOf("/healthz", "/image")
     val sources by lazy { listSources(ctx) }
@@ -51,7 +53,14 @@ fun main() {
             if (c.path() !in open && c.header("X-Worker-Key") != key) throw UnauthorizedResponse()
         }
         .get("/healthz") { c ->
-            c.json(mapOf("ok" to true, "parsers" to sources.size, "version" to System.getProperty("worker.lib", "dev")))
+            c.json(
+                mapOf(
+                    "ok" to true,
+                    "parsers" to sources.size,
+                    "version" to System.getProperty("worker.lib", "dev"),
+                    "solver" to ctx.solverEnabled,
+                ),
+            )
         }
         .get("/sources") { c -> c.json(sources) }
         .get("/search", api::search)

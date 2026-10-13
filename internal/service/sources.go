@@ -199,12 +199,15 @@ func (s *sourceService) verify(ctx context.Context, cfg *config.Config, logSvc u
 
 	searchStep, pickStep, mangaURL := s.verifySearch(ctx, cfg, logSvc, src)
 
+	// Kotatsu sources fetch through the worker, which the solver never touches.
 	attempts := []bool{false}
-	if cfg.BrowserSolver.Enabled || src.ChapterFetch == sources.FetchSolver || src.RequiresBrowserSolver {
-		attempts = append(attempts, true)
-	}
-	if src.ChapterFetch == sources.FetchSolver {
-		attempts = []bool{true}
+	if !strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix) {
+		if cfg.BrowserSolver.Enabled || src.ChapterFetch == sources.FetchSolver || src.RequiresBrowserSolver {
+			attempts = append(attempts, true)
+		}
+		if src.ChapterFetch == sources.FetchSolver {
+			attempts = []bool{true}
+		}
 	}
 	var chapStep, imgStep sources.VerifyStep
 	var lastErr error

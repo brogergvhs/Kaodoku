@@ -94,6 +94,7 @@ class Api(private val ctx: JvmLoaderContext, private val key: String) {
             Request.Builder().url(direct)
                 .tag(MangaSource::class.java, p.source)
                 .header("User-Agent", ctx.getDefaultUserAgent())
+                .header("Referer", "https://${p.domain}/")
                 .build()
         }.getOrElse { throw BadRequestResponse("bad image url") }
         val resp = ctx.httpClient.newCall(req).execute()

@@ -65,6 +65,7 @@ type Health struct {
 	OK      bool   `json:"ok"`
 	Parsers int    `json:"parsers"`
 	Version string `json:"version"`
+	Solver  bool   `json:"solver"`
 }
 
 type Client struct {

@@ -105,6 +105,9 @@ services:
     mem_limit: 384m
     environment:
       WORKER_KEY: change-me
+      # Optional: lets the worker clear Cloudflare challenges. 
+      # Must share the worker's egress IP, so run it next to this service.
+      FLARESOLVERR_URL: http://flaresolverr:8191
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8484/healthz"]
       interval: 30s

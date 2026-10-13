@@ -211,4 +211,5 @@ func (u *webUI) kotatsuImport(w http.ResponseWriter, r *http.Request) {
 		}
 		u.frag(w, "kotatsuSourcesTableOOB", kot)
 	}
+	u.frag(w, "kotatsuModalClose", nil)
 }

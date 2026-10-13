@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/config"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/service"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
@@ -133,6 +134,9 @@ func TestKotatsuBrowseImportLive(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "verifying") {
 		t.Fatalf("imported row not marked verifying: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `id="kotatsu-add-modal" hx-swap-oob="delete"`) {
+		t.Fatalf("import response must close the modal: %s", rec.Body.String())
 	}
 
 	srcs, err := svc.ListSources(ctx)
@@ -258,11 +262,21 @@ func TestKotatsuBrowseImportLive(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("import onisaga: %d %s", rec.Code, rec.Body.String())
 	}
-	cf, cferr := svc.VerifySource(ctx, cfg, logSvc, "kotatsu:onisaga_en")
-	if cf.Status != sources.StatusRequiresCF {
-		t.Fatalf("cloudflare source status = %q, want %q (err %v, steps %+v)", cf.Status, sources.StatusRequiresCF, cferr, cf.Steps)
+	health, err := kotatsu.New(endpoint, key).Health(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(cf.Error, "kotatsu cloudflare_challenge:") {
-		t.Fatalf("verify error should come from the typed worker error: %q", cf.Error)
+	cf, cferr := svc.VerifySource(ctx, cfg, logSvc, "kotatsu:onisaga_en")
+	if health.Solver {
+		if cf.Status == sources.StatusRequiresCF {
+			t.Fatalf("solver is enabled, cloudflare should be cleared: %q (%v)", cf.Status, cferr)
+		}
+	} else {
+		if cf.Status != sources.StatusRequiresCF {
+			t.Fatalf("cloudflare source status = %q, want %q (err %v, steps %+v)", cf.Status, sources.StatusRequiresCF, cferr, cf.Steps)
+		}
+		if !strings.Contains(cf.Error, "kotatsu cloudflare_challenge:") {
+			t.Fatalf("verify error should come from the typed worker error: %q", cf.Error)
+		}
 	}
 }

@@ -23,7 +23,7 @@ data class ApiError(
     val upstream_status: Int? = null,
 )
 
-private val log = LoggerFactory.getLogger("worker")
+internal val log = LoggerFactory.getLogger("worker")
 
 internal fun errorFor(e: Exception): Pair<Int, ApiError> = when (e) {
     is CloudflareBlocked -> 503 to ApiError("cloudflare_challenge", msg(e), url = e.url)

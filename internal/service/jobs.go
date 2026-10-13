@@ -2193,6 +2193,9 @@ func (s *JobService) ServicesHealth(ctx context.Context) []ServiceHealth {
 		func() ServiceHealth {
 			return check("Kotatsu worker (sources)", cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.Enabled, func(c context.Context) (string, error) {
 				h, err := kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey).Health(c)
+				if h.Solver {
+					return h.Version + " · solver", err
+				}
 				return h.Version, err
 			})
 		},

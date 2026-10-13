@@ -148,6 +148,121 @@ class ApiTest {
     }
 
     @Test
+    fun solverClearsChallengeAndPinsAgent() {
+        val solves = java.util.concurrent.atomic.AtomicInteger()
+        val cleared = java.util.concurrent.atomic.AtomicBoolean()
+        val agents = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val site = challengeServer(cleared, agents)
+        val solver = solverServer(solves, site.address.port)
+        try {
+            val ctx = JvmLoaderContext(FlareSolverr("http://127.0.0.1:${solver.address.port}", 5_000))
+            val client = okhttp3.OkHttpClient.Builder()
+                .cookieJar(ctx.cookieJar)
+                .addInterceptor(ctx.cloudflareGuard)
+                .addInterceptor(ctx.solvedAgentPin)
+                .build()
+            val url = "http://127.0.0.1:${site.address.port}/x"
+
+            client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use {
+                assertEquals(204, it.code)
+            }
+            assertEquals(1, solves.get())
+            assertEquals("solved-agent", agents.last())
+
+            client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use {
+                assertEquals(204, it.code)
+            }
+            assertEquals(1, solves.get(), "clearance should be reused")
+        } finally {
+            site.stop(0)
+            solver.stop(0)
+        }
+    }
+
+    @Test
+    fun unsolvableHostStopsRetryingSolves() {
+        val solves = java.util.concurrent.atomic.AtomicInteger()
+        val site = challengeServer(java.util.concurrent.atomic.AtomicBoolean(), java.util.Collections.synchronizedList(mutableListOf()))
+        val solver = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        solver.createContext("/v1") { ex ->
+            solves.incrementAndGet()
+            val body = """{"status":"error","message":"Cloudflare has blocked this request"}""".toByteArray()
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(500, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
+            ex.close()
+        }
+        solver.start()
+        try {
+            val ctx = JvmLoaderContext(FlareSolverr("http://127.0.0.1:${solver.address.port}", 2_000))
+            val client = okhttp3.OkHttpClient.Builder().addInterceptor(ctx.cloudflareGuard).build()
+            val url = "http://127.0.0.1:${site.address.port}/x"
+            repeat(3) {
+                assertFailsWith<CloudflareBlocked> {
+                    client.newCall(okhttp3.Request.Builder().url(url).build()).execute()
+                }
+            }
+            assertEquals(1, solves.get(), "blocked host must back off instead of re-solving")
+        } finally {
+            site.stop(0)
+            solver.stop(0)
+        }
+    }
+
+    @Test
+    fun solverFailureReportsCloudflareBlocked() {
+        val site = challengeServer(java.util.concurrent.atomic.AtomicBoolean(), java.util.Collections.synchronizedList(mutableListOf()))
+        try {
+            val ctx = JvmLoaderContext(FlareSolverr("http://127.0.0.1:1", 1_000))
+            val client = okhttp3.OkHttpClient.Builder().addInterceptor(ctx.cloudflareGuard).build()
+            assertFailsWith<CloudflareBlocked> {
+                client.newCall(okhttp3.Request.Builder().url("http://127.0.0.1:${site.address.port}/x").build()).execute()
+            }
+        } finally {
+            site.stop(0)
+        }
+    }
+
+    private fun challengeServer(
+        cleared: java.util.concurrent.atomic.AtomicBoolean,
+        agents: MutableList<String>,
+    ): com.sun.net.httpserver.HttpServer {
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/x") { ex ->
+            agents.add(ex.requestHeaders.getFirst("User-Agent").orEmpty())
+            if (ex.requestHeaders.getFirst("Cookie")?.contains("cf_clearance") == true) cleared.set(true)
+            if (cleared.get()) {
+                ex.sendResponseHeaders(204, -1)
+            } else {
+                val body = """<html><body><div id="challenge-error-text">Just a moment</div></body></html>""".toByteArray()
+                ex.sendResponseHeaders(403, body.size.toLong())
+                ex.responseBody.use { it.write(body) }
+            }
+            ex.close()
+        }
+        server.start()
+        return server
+    }
+
+    private fun solverServer(
+        solves: java.util.concurrent.atomic.AtomicInteger,
+        sitePort: Int,
+    ): com.sun.net.httpserver.HttpServer {
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1") { ex ->
+            solves.incrementAndGet()
+            val body = """{"status":"ok","solution":{"userAgent":"solved-agent","cookies":[
+                {"name":"cf_clearance","value":"ok","domain":"127.0.0.1","path":"/","expiry":4102444800}]}}""".toByteArray()
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
+            ex.close()
+        }
+        server.start()
+        return server
+    }
+
+    @Test
     fun privateAddressGuardBlocksLoopback() {
         val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/x") { ex -> ex.sendResponseHeaders(200, 0); ex.close() }
