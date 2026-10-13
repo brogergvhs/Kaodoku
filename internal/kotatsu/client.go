@@ -12,6 +12,23 @@ import (
 	"time"
 )
 
+// APIError is a structured failure reported by the worker.
+type APIError struct {
+	Code    string `json:"error"`
+	Message string `json:"message"`
+	Source  string `json:"source"`
+}
+
+func (e *APIError) Error() string {
+	s := "kotatsu " + e.Code + ": " + e.Message
+	if e.Source != "" {
+		s += " (" + e.Source + ")"
+	}
+	return s
+}
+
+func (e *APIError) IsCloudflare() bool { return e.Code == "cloudflare_challenge" }
+
 type Source struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
@@ -123,8 +140,12 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("kotatsu worker %s: %s: %s", path, resp.Status, strings.TrimSpace(string(msg)))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		var e APIError
+		if json.Unmarshal(body, &e) == nil && e.Code != "" {
+			return &e
+		}
+		return fmt.Errorf("kotatsu worker %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }

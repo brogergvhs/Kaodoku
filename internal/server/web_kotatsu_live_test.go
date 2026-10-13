@@ -16,6 +16,7 @@ import (
 
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/service"
+	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
 )
 
@@ -247,5 +248,21 @@ func TestKotatsuBrowseImportLive(t *testing.T) {
 				t.Logf("images step %s (upstream flake tolerated): %s %v", step.Status, step.Log, verr)
 			}
 		}
+	}
+
+	form = url.Values{"id": {"ONISAGA_EN"}}
+	req = httptest.NewRequest(http.MethodPost, "/ui/sources/kotatsu/import", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import onisaga: %d %s", rec.Code, rec.Body.String())
+	}
+	cf, cferr := svc.VerifySource(ctx, cfg, logSvc, "kotatsu:onisaga_en")
+	if cf.Status != sources.StatusRequiresCF {
+		t.Fatalf("cloudflare source status = %q, want %q (err %v, steps %+v)", cf.Status, sources.StatusRequiresCF, cferr, cf.Steps)
+	}
+	if !strings.Contains(cf.Error, "kotatsu cloudflare_challenge:") {
+		t.Fatalf("verify error should come from the typed worker error: %q", cf.Error)
 	}
 }

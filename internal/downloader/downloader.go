@@ -303,7 +303,12 @@ func (d *Downloader) download(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return statusError{Code: resp.StatusCode}
+		e := statusError{Code: resp.StatusCode}
+		if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt == "application/json" {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			e.Body = strings.TrimSpace(string(body))
+		}
+		return e
 	}
 
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -340,9 +345,13 @@ func (d *Downloader) download(
 
 type statusError struct {
 	Code int
+	Body string
 }
 
 func (e statusError) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("HTTP %d: %s", e.Code, e.Body)
+	}
 	return fmt.Sprintf("HTTP %d", e.Code)
 }
 

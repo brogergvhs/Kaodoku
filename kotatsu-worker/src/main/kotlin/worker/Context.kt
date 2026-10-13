@@ -13,6 +13,7 @@ import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.config.MangaSourceConfig
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.MangaSource
+import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -49,6 +50,16 @@ class JvmLoaderContext : MangaLoaderContext() {
 
     internal fun parser(source: MangaParserSource): MangaParser = parsers.getOrPut(source) { newParserInstance(source) }
 
+    internal val cloudflareGuard = Interceptor { chain ->
+        val response = chain.proceed(chain.request())
+        if (CloudFlareHelper.checkResponseForProtection(response) == CloudFlareHelper.PROTECTION_NOT_DETECTED) {
+            response
+        } else {
+            response.close()
+            throw CloudflareBlocked(chain.request().url.toString())
+        }
+    }
+
     internal val parserDispatch = Interceptor { chain ->
         val source = chain.request().tag(MangaSource::class.java)
         if (source is MangaParserSource) parser(source).intercept(chain) else chain.proceed(chain.request())
@@ -56,19 +67,18 @@ class JvmLoaderContext : MangaLoaderContext() {
 
     override val httpClient: OkHttpClient = OkHttpClient.Builder()
         .cookieJar(cookieJar)
+        .addInterceptor(cloudflareGuard)
         .addInterceptor(parserDispatch)
         .addNetworkInterceptor(privateAddressGuard)
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    // IOException, not UnsupportedOperationException: parsers call this inside interceptors.
+    // IOException subtype, not UnsupportedOperationException: parsers call this inside interceptors.
     @Deprecated("Provide a base url")
-    override suspend fun evaluateJs(script: String): String? =
-        throw java.io.IOException("JS evaluation is not available")
+    override suspend fun evaluateJs(script: String): String? = throw JsUnsupported()
 
-    override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String? =
-        throw java.io.IOException("JS evaluation is not available")
+    override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String? = throw JsUnsupported()
 
     override fun getConfig(source: MangaSource): MangaSourceConfig = DefaultConfig
 

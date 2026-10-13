@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/url"
@@ -437,6 +438,17 @@ func sampleTitleQuery(src sources.Source) string {
 // fetchFailureStatus maps a fetch error to a health status: a Cloudflare wall
 // is distinct from a generically broken source.
 func fetchFailureStatus(err error) string {
+	var ke *kotatsu.APIError
+	if errors.As(err, &ke) {
+		switch {
+		case ke.IsCloudflare():
+			return sources.StatusRequiresCF
+		case ke.Code == "rate_limited":
+			return sources.StatusDegraded
+		default:
+			return sources.StatusBroken
+		}
+	}
 	if strings.Contains(strings.ToLower(err.Error()), "cloudflare") {
 		return sources.StatusRequiresCF
 	}

@@ -46,6 +46,7 @@ fun main() {
     val sources by lazy { listSources(ctx) }
 
     Javalin.create()
+        .exception(Exception::class.java, ::handleError)
         .before { c ->
             if (c.path() !in open && c.header("X-Worker-Key") != key) throw UnauthorizedResponse()
         }

@@ -1,3 +1,5 @@
+@file:OptIn(org.koitharu.kotatsu.parsers.InternalParsersApi::class)
+
 package worker
 
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
@@ -63,6 +65,83 @@ class ApiTest {
             val tagged = seen["user-agent"].orEmpty()
             assertTrue(tagged.contains("Android 13"), "parser did not set its user agent: $seen")
             assertTrue(ctx.parserDispatch in ctx.httpClient.interceptors, "dispatch not installed on shared client")
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun errorsMapToStatusAndCode() {
+        val cases = listOf(
+            CloudflareBlocked("https://x/y") to (503 to "cloudflare_challenge"),
+            org.koitharu.kotatsu.parsers.exception.NotFoundException("nope", "https://x") to (404 to "not_found"),
+            org.koitharu.kotatsu.parsers.exception.TooManyRequestExceptions("https://x", 0) to (429 to "rate_limited"),
+            org.koitharu.kotatsu.parsers.exception.AuthRequiredException(MangaParserSource.MANGADEX) to (401 to "auth_required"),
+            org.koitharu.kotatsu.parsers.exception.ContentUnavailableException("gone") to (410 to "content_unavailable"),
+            org.koitharu.kotatsu.parsers.exception.ParseException("bad", "https://x", null) to (502 to "parse_failed"),
+            org.jsoup.HttpStatusException("boom", 403, "https://x/y") to (502 to "upstream_http"),
+            UnsupportedOperationException("no js") to (501 to "unsupported"),
+            java.net.SocketTimeoutException("slow") to (504 to "upstream_timeout"),
+            JsUnsupported() to (501 to "unsupported"),
+            java.io.IOException("io") to (502 to "upstream_io"),
+            IllegalStateException("boom") to (500 to "internal"),
+        )
+        for ((e, want) in cases) {
+            val (status, body) = errorFor(e)
+            assertEquals(want.first, status, "status for ${e::class.simpleName}")
+            assertEquals(want.second, body.error, "code for ${e::class.simpleName}")
+            assertTrue(body.message.isNotBlank())
+        }
+        val http = errorFor(org.jsoup.HttpStatusException("boom", 403, "https://x/y")).second
+        assertEquals(403, http.upstream_status)
+        assertEquals("https://x/y", http.url)
+    }
+
+    @Test
+    fun handlerWritesErrorStatusAndJson() {
+        val app = io.javalin.Javalin.create()
+            .exception(Exception::class.java, ::handleError)
+            .get("/boom") { throw CloudflareBlocked("https://x/y") }
+            .start(0)
+        try {
+            val resp = okhttp3.OkHttpClient().newCall(
+                okhttp3.Request.Builder().url("http://127.0.0.1:${app.port()}/boom?source=TEST").build()
+            ).execute()
+            val body = resp.use { it.body!!.string() }
+            assertEquals(503, resp.code)
+            assertTrue(body.contains("\"error\":\"cloudflare_challenge\""), body)
+            assertTrue(body.contains("\"source\":\"TEST\""), body)
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun cloudflareGuardThrowsOnChallenge() {
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/x") { ex ->
+            val body = """<html><body><div id="challenge-error-text">Just a moment</div></body></html>""".toByteArray()
+            ex.sendResponseHeaders(403, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
+        }
+        server.createContext("/ok") { ex -> ex.sendResponseHeaders(204, -1); ex.close() }
+        server.start()
+        try {
+            val ctx = JvmLoaderContext()
+            val client = okhttp3.OkHttpClient.Builder().addInterceptor(ctx.cloudflareGuard).build()
+            val base = "http://127.0.0.1:${server.address.port}"
+            assertFailsWith<CloudflareBlocked> {
+                client.newCall(okhttp3.Request.Builder().url("$base/x").build()).execute()
+            }
+            client.newCall(okhttp3.Request.Builder().url("$base/ok").build()).execute().use {
+                assertEquals(204, it.code)
+            }
+            val installed = ctx.httpClient.interceptors
+            assertTrue(ctx.cloudflareGuard in installed, "guard not installed")
+            assertTrue(
+                installed.indexOf(ctx.cloudflareGuard) < installed.indexOf(ctx.parserDispatch),
+                "cloudflare guard must wrap parser dispatch",
+            )
         } finally {
             server.stop(0)
         }

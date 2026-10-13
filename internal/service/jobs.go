@@ -2063,7 +2063,7 @@ func (s *JobService) ExportSource(ctx context.Context, sourceID string) ([]byte,
 // VerifySource checks one source profile.
 func (s *JobService) VerifySource(ctx context.Context, cfg *config.Config, logSvc ui.Log, sourceID string) (SourceVerifyResult, error) {
 	result, err := s.src.VerifySource(ctx, cfg, logSvc, sourceID)
-	if result.Status == sources.StatusHealthy || result.Status == sources.StatusDegraded {
+	if err == nil {
 		if cerr := s.want.catalog.ClearMissesForSource(ctx, result.SourceID); cerr != nil {
 			logSvc.Warnf("Clearing match misses for %s failed: %v\n", result.SourceID, cerr)
 		}
