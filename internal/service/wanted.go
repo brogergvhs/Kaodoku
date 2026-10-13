@@ -24,6 +24,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
@@ -173,12 +174,18 @@ func (s *WantedService) MatchSources(ctx context.Context, cfg *config.Config, lo
 	matches := make(chan catalog.Match, len(enabled))
 	jobs := make(chan sources.Source)
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	attempted := map[string]bool{}
 	for range min(len(enabled), matchSourceWorkers) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for src := range jobs {
-				if match, ok := s.matchSource(ctx, cfg, logSvc, manga, src); ok {
+				match, ok, tried := s.matchSource(ctx, cfg, logSvc, manga, src)
+				mu.Lock()
+				attempted[src.ID] = tried
+				mu.Unlock()
+				if ok {
 					select {
 					case matches <- match:
 					case <-ctx.Done():
@@ -213,7 +220,7 @@ func (s *WantedService) MatchSources(ctx context.Context, cfg *config.Config, lo
 		out = append(out, stored)
 	}
 	for _, src := range enabled {
-		if matched[src.ID] {
+		if matched[src.ID] || !attempted[src.ID] {
 			continue
 		}
 		if err := s.catalog.RecordMatchMiss(ctx, catalogID, src.ID); err != nil {
@@ -263,31 +270,36 @@ const (
 	sourceMatchTimeout    = 45 * time.Second
 )
 
-func (s *WantedService) matchSource(ctx context.Context, cfg *config.Config, logSvc ui.Log, manga catalog.Manga, src sources.Source) (catalog.Match, bool) {
+// attempted is false when the source could not be searched at all, such runs must not cache a miss.
+func (s *WantedService) matchSource(ctx context.Context, cfg *config.Config, logSvc ui.Log, manga catalog.Manga, src sources.Source) (match catalog.Match, matched, attempted bool) {
 	ctx, cancel := context.WithTimeout(ctx, sourceMatchTimeout)
 	defer cancel()
 
-	// ConfigForSource routes unknown sources by their profile hint and known
-	// ones by the method verify learned; no discovery probe needed here.
 	probeCfg := ConfigForSource(*cfg, src, SourceConfigOptions{})
 	downloadSvc, err := NewSourceDownloadService(&probeCfg, logSvc, nil, src.Scraper)
 	if err != nil {
 		if logSvc != nil {
 			logSvc.Debugf("Source %s scraper setup failed: %v\n", src.ID, err)
 		}
-		return catalog.Match{}, false
+		return catalog.Match{}, false, false
 	}
 
-	candidates, searched := nativeSearchURLs(ctx, downloadSvc, logSvc, src, manga)
+	candidates, searched, failed := nativeSearchURLs(ctx, downloadSvc, logSvc, src, manga)
+	if failed {
+		return catalog.Match{}, false, false
+	}
 	if !searched {
-		candidates, searched = searchSourceURLs(ctx, probeCfg, logSvc, src, manga)
+		candidates, searched, failed = searchSourceURLs(ctx, probeCfg, logSvc, src, manga)
+		if failed {
+			return catalog.Match{}, false, false
+		}
 	}
 	method := "search"
 	if !searched {
 		method = "slug_probe"
 		guesses := candidateSourceURLs(src, manga)
 		// On a solver source each probe costs a full CF solve, so only the
-		// best guess is worth trying; wrong guesses can't be told apart cheaply.
+		// best guess is worth trying.
 		if probeCfg.BrowserSolver.Enabled && len(guesses) > 1 {
 			guesses = guesses[:1]
 		}
@@ -295,7 +307,8 @@ func (s *WantedService) matchSource(ctx context.Context, cfg *config.Config, log
 	} else if len(candidates) == 0 && logSvc != nil {
 		logSvc.Debugf("Source search %s completed with no candidates; skipping guessed slug probes.\n", src.ID)
 	}
-	return s.bestCandidate(ctx, downloadSvc, logSvc, manga, src, uniqueStrings(candidates), method)
+	match, matched = s.bestCandidate(ctx, downloadSvc, logSvc, manga, src, uniqueStrings(candidates), method)
+	return match, matched, true
 }
 
 // bestCandidate verifies candidates concurrently (bounded) and returns the
@@ -394,37 +407,42 @@ func (s *WantedService) verifyCandidate(ctx context.Context, downloadSvc *Downlo
 // nativeSearchURLs uses the scraper's own search API when it has one
 // generic HTML search scrape can't read JSON APIs and its slug-probe fallback
 // fabricates wrong URLs on sites where the path carries an id.
-func nativeSearchURLs(ctx context.Context, downloadSvc *DownloadService, logSvc ui.Log, src sources.Source, manga catalog.Manga) ([]string, bool) {
-	if strings.TrimSpace(src.SearchURL) == "" {
-		return nil, false
+// failed is true when every query errored, so "no results" can't be trusted.
+func nativeSearchURLs(ctx context.Context, downloadSvc *DownloadService, logSvc ui.Log, src sources.Source, manga catalog.Manga) (urls []string, searched, failed bool) {
+	if strings.TrimSpace(src.SearchURL) == "" && !strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix) {
+		return nil, false, false
 	}
+	errs, tried := 0, 0
 	for _, title := range mangaTitleVariants(manga) {
+		tried++
 		urls, handled, err := downloadSvc.SearchManga(ctx, src.SearchURL, title)
 		if !handled {
-			return nil, false
+			return nil, false, false
 		}
 		if err != nil {
+			errs++
 			if logSvc != nil {
 				logSvc.Debugf("Native search failed for %s %q: %v\n", src.ID, title, err)
 			}
 			continue
 		}
 		if len(urls) > 0 {
-			return urls, true
+			return urls, true, false
 		}
 	}
-	return nil, true
+	return nil, true, errs > 0 && errs == tried
 }
 
-func searchSourceURLs(ctx context.Context, cfg config.Config, logSvc ui.Log, src sources.Source, manga catalog.Manga) ([]string, bool) {
+// failed is true when the search page never loaded, so the source can't be
+// told apart from one that simply has no match.
+func searchSourceURLs(ctx context.Context, cfg config.Config, logSvc ui.Log, src sources.Source, manga catalog.Manga) (out []string, searched, failed bool) {
 	if strings.TrimSpace(src.SearchURL) == "" {
 		if logSvc != nil {
 			logSvc.Debugf("Source search skipped for %s: no search_url.\n", src.ID)
 		}
-		return nil, false
+		return nil, false, false
 	}
-	var out []string
-	searched := false
+	errs := 0
 	for _, title := range mangaTitleVariants(manga) {
 		searchURL := strings.ReplaceAll(src.SearchURL, "{query}", url.QueryEscape(title))
 		if logSvc != nil {
@@ -432,6 +450,7 @@ func searchSourceURLs(ctx context.Context, cfg config.Config, logSvc ui.Log, src
 		}
 		body, finalURL, err := fetchSearchPage(ctx, cfg, searchURL)
 		if err != nil {
+			errs++
 			if logSvc != nil {
 				logSvc.Debugf("Source search failed for %s: %v\n", searchURL, err)
 			}
@@ -461,7 +480,7 @@ func searchSourceURLs(ctx context.Context, cfg config.Config, logSvc ui.Log, src
 	if len(out) == 0 && logSvc != nil {
 		logSvc.Debugf("Source search %s found no candidates for %q.\n", src.ID, displayMangaTitle(manga))
 	}
-	return out, searched
+	return out, searched, !searched && errs > 0
 }
 
 // fetchSearchPage fetches a source search page over HTTP only;

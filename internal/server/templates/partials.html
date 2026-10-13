@@ -103,12 +103,26 @@
 {{define "sourcesTable"}}
 <div id="sources-table" class="rounded-xl">
 <table class="table table-rounded">
-  {{range .}}{{template "sourceRow" sourceRow .}}{{end}}</table>
+  {{range .}}{{template "sourceRow" .}}{{end}}</table>
+</div>
+{{end}}
+
+{{define "kotatsuSourcesTable"}}
+<div id="kotatsu-sources-table" class="rounded-xl">
+<table class="table table-rounded">
+  {{range .}}{{template "sourceRow" .}}{{end}}</table>
+</div>
+{{end}}
+
+{{define "kotatsuSourcesTableOOB"}}
+<div id="kotatsu-sources-table" hx-swap-oob="true" class="rounded-xl">
+<table class="table table-rounded">
+  {{range .}}{{template "sourceRow" .}}{{end}}</table>
 </div>
 {{end}}
 
 {{define "sourceRow"}}
-<tbody id="src-{{.Source.ID}}" {{if .Active}}hx-get="/ui/sources/{{.Source.ID}}/row" hx-trigger="load delay:1500ms" hx-swap="outerHTML"{{end}}>
+<tbody id="src-{{.Source.ID}}" {{if .Poll}}hx-get="/ui/sources/{{.Source.ID}}/row" hx-trigger="load delay:1500ms" hx-swap="outerHTML" hx-sync="this:drop"{{end}}>
 <tr class="row-toggle" data-target="det-src-{{.Source.ID}}">
   <td class="w-6"><span class="caret text-base-content/50">{{template "iconChevron"}}</span></td>
   <td class="min-w-0"><span class="font-medium">{{.Source.Name}}</span><div class="truncate max-w-40 text-xs text-base-content/50">{{range .Source.Domains}}{{.}} {{end}}</div></td>
@@ -119,10 +133,10 @@
     <details class="dropdown dropdown-end">
       <summary class="btn btn-sm btn-ghost btn-square" aria-label="Source actions">{{template "iconDots"}}</summary>
       <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-48 p-2 shadow-lg border border-base-300">
-        <li><button hx-post="/ui/sources/{{.Source.ID}}/verify" hx-target="#src-{{.Source.ID}}" hx-swap="outerHTML" {{if not .Source.Enabled}}disabled{{end}}>{{template "iconVerify"}}Verify</button></li>
+        <li><button hx-post="/ui/sources/{{.Source.ID}}/verify" hx-target="closest tbody" hx-swap="outerHTML" {{if not .Source.Enabled}}disabled{{end}}>{{template "iconVerify"}}Verify</button></li>
         <li><button hx-get="/ui/sources/{{.Source.ID}}/edit" hx-target="body" hx-swap="beforeend">{{template "iconEdit"}}Edit</button></li>
-        <li><button {{if .Source.Enabled}}class="text-error" {{end}}hx-post="/ui/sources/{{.Source.ID}}/enabled" hx-vals='{"on":"{{if .Source.Enabled}}false{{else}}true{{end}}"}' hx-target="#src-{{.Source.ID}}" hx-swap="outerHTML">{{template "iconPower"}}{{if .Source.Enabled}}Disable{{else}}Enable{{end}}</button></li>
-        {{if eq .Source.Origin "local"}}<li><button class="text-error" hx-post="/ui/sources/{{.Source.ID}}/delete" hx-target="#sources-table" hx-swap="outerHTML" hx-confirm="Delete this source? Titles linked to it keep their chapters but lose the source.">{{template "iconTrash"}}Delete</button></li>{{end}}
+        <li><button {{if .Source.Enabled}}class="text-error" {{end}}hx-post="/ui/sources/{{.Source.ID}}/enabled" hx-vals='{"on":"{{if .Source.Enabled}}false{{else}}true{{end}}"}' hx-target="closest tbody" hx-swap="outerHTML">{{template "iconPower"}}{{if .Source.Enabled}}Disable{{else}}Enable{{end}}</button></li>
+        {{if eq .Source.Origin "local"}}<li><button class="text-error" hx-post="/ui/sources/{{.Source.ID}}/delete" hx-target="closest tbody" hx-swap="delete" hx-confirm="Delete this source? Titles linked to it keep their chapters but lose the source.">{{template "iconTrash"}}Delete</button></li>{{end}}
       </ul>
     </details>
   </td>

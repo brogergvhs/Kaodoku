@@ -14,6 +14,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/browserfetch"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/config"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
 )
@@ -231,7 +232,7 @@ func (s *sourceService) verifySearch(ctx context.Context, cfg *config.Config, lo
 	search = sources.VerifyStep{Name: "search", Status: sources.StepSkipped}
 	pick = sources.VerifyStep{Name: "pick manga", Status: sources.StepSkipped, Detail: "using sample manga"}
 	mangaURL = src.SampleMangaURL
-	if src.SingleManga || strings.TrimSpace(src.SearchURL) == "" {
+	if src.SingleManga || (strings.TrimSpace(src.SearchURL) == "" && !strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix)) {
 		search.Detail = "source has no search"
 		return search, pick, mangaURL
 	}
@@ -239,6 +240,12 @@ func (s *sourceService) verifySearch(ctx context.Context, cfg *config.Config, lo
 	query := sampleTitleQuery(src)
 	searchURL := strings.ReplaceAll(src.SearchURL, "{query}", url.QueryEscape(query))
 	search.Detail = fmt.Sprintf("%q", query)
+
+	// Kotatsu sample URLs are often slugless (UUIDs)
+	// a blank query lists popular manga through the native search API instead.
+	if strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix) {
+		query, search.Detail = "", "popular list"
+	}
 
 	// A scraper with a native search API (e.g. comickz, whose results page is
 	// JS-rendered) answers directly — no HTML parsing.
@@ -248,13 +255,13 @@ func (s *sourceService) verifySearch(ctx context.Context, cfg *config.Config, lo
 			if err != nil {
 				search.Log = fmt.Sprintf("search API: %v", err)
 			} else {
-				search.Log = fmt.Sprintf("search API returned no results for %q", query)
+				search.Log = fmt.Sprintf("search API returned no results for %s", search.Detail)
 			}
 			pick.Detail = "falling back to sample manga"
 			return search, pick, mangaURL
 		}
 		search.Status = sources.StepOK
-		search.Detail = fmt.Sprintf("%d results for %q", len(urls), query)
+		search.Detail = fmt.Sprintf("%d results for %s", len(urls), search.Detail)
 		mangaURL = urls[rand.Intn(len(urls))]
 		pick.Status = sources.StepOK
 		pick.Detail = mangaURL

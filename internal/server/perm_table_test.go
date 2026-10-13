@@ -30,6 +30,8 @@ func TestRequiredPerm(t *testing.T) {
 		{"POST", "/ui/users/3/delete", auth.PermUsersManage},
 		{"POST", "/ui/users/3/approve", auth.PermUsersApprove},
 		{"POST", "/ui/sources/x/delete", auth.PermSourcesManage},
+		{"GET", "/ui/sources/kotatsu", auth.PermSourcesManage},
+		{"POST", "/ui/sources/kotatsu/import", auth.PermSourcesManage},
 		{"GET", "/api/v1/jobs", auth.PermJobsView},
 		{"GET", "/api/v1/jobs/5", auth.PermJobsView},
 		{"POST", "/api/v1/jobs/5/cancel", auth.PermJobsManage},

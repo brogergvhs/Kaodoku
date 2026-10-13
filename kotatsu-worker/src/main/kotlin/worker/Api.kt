@@ -51,13 +51,16 @@ class Api(private val ctx: JvmLoaderContext, private val key: String) {
         ctx.httpClient.newBuilder().addInterceptor(p).build()
     }
 
-    private fun order(p: MangaParser) =
-        if (SortOrder.RELEVANCE in p.availableSortOrders) SortOrder.RELEVANCE else p.availableSortOrders.first()
+    private fun order(p: MangaParser, preferred: SortOrder) =
+        if (preferred in p.availableSortOrders) preferred else p.availableSortOrders.first()
 
     fun search(c: Context) {
         val p = parser(c.queryParam("source"))
-        val q = c.queryParam("q") ?: throw BadRequestResponse("q required")
-        val list = runBlocking { p.getList(0, order(p), MangaListFilter(query = q)) }
+        val q = c.queryParam("q").orEmpty()
+        val (filter, sort) =
+            if (q.isBlank()) MangaListFilter() to SortOrder.POPULARITY
+            else MangaListFilter(query = q) to SortOrder.RELEVANCE
+        val list = runBlocking { p.getList(0, order(p, sort), filter) }
         c.json(list.take(20).map { SearchResult(it.publicUrl, it.title, it.coverUrl, it.altTitles.toList()) })
     }
 

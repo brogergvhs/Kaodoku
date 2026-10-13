@@ -113,6 +113,27 @@
 {{else}}<span class="text-base-content/30">—</span>{{end}}
 {{end}}
 
+{{define "kotatsuRow"}}
+<div class="k-row flex items-center gap-2 py-1.5">
+  <div class="min-w-0 flex-1 truncate">
+    <span class="font-medium">{{.Source.Name}}</span>
+    <span class="text-xs text-base-content/50">{{.Source.Language}}{{if .Source.NSFW}} · nsfw{{end}}{{if .Source.Domains}} · {{index .Source.Domains 0}}{{end}}</span>
+  </div>
+  {{if .Imported}}<span class="badge badge-success badge-soft shrink-0">imported</span>
+  {{else}}<button class="btn btn-xs btn-outline shrink-0" hx-post="/ui/sources/kotatsu/import" hx-vals='{"id":"{{.Source.ID}}"}' hx-target="closest .k-row" hx-swap="outerHTML" hx-disabled-elt="this"><span class="htmx-indicator loading loading-xs"></span>Import</button>{{end}}
+</div>
+{{end}}
+
+{{define "kotatsuBrowse"}}
+{{if .Error}}<p class="text-sm text-error">{{.Error}}</p>
+{{else}}
+<p class="text-xs text-base-content/50">{{.Total}} matching{{if .Capped}} · showing the first {{len .Rows}}, refine the filter{{end}}</p>
+<div class="max-h-96 overflow-y-auto divide-y divide-line/25">
+  {{range .Rows}}{{template "kotatsuRow" .}}{{end}}
+</div>
+{{end}}
+{{end}}
+
 {{define "bulkRenamePaste"}}
 <form class="grid gap-3" hx-post="/ui/library/{{.TitleID}}/chapters/bulk-rename/preview" hx-target="#bulk-rename-body" hx-swap="innerHTML">
   <textarea name="text" rows="12" class="textarea w-full font-mono text-xs" placeholder='40: "Battlefield Hardline 3", vol: 9' required></textarea>

@@ -30,6 +30,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/providers/registry"
 	"github.com/brogergvhs/kaodoku/internal/service"
@@ -131,6 +132,7 @@ type activityView struct {
 type sourceRowView struct {
 	Source sources.Source
 	Active bool
+	Poll   bool
 }
 type sourceProbeView struct {
 	TitleID  int64
@@ -375,6 +377,8 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/sources/sync", u.srcSync)
 	mux.HandleFunc("POST /ui/sources/test", u.srcTest)
 	mux.HandleFunc("POST /ui/sources/custom", u.srcAddCustom)
+	mux.HandleFunc("GET /ui/sources/kotatsu", u.kotatsuBrowse)
+	mux.HandleFunc("POST /ui/sources/kotatsu/import", u.kotatsuImport)
 	mux.HandleFunc("GET /ui/library/table", u.libraryTable)
 	mux.HandleFunc("GET /ui/jobs/table", u.jobsTable)
 	mux.HandleFunc("POST /ui/jobs/start", u.jobStart)
@@ -2689,12 +2693,20 @@ func (u *webUI) sourcesPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	srcs = filterNSFWSources(r.Context(), srcs)
-	u.page(w, r, "sources", "Sources", sourcesPageView{Sources: srcs, Scrapers: registry.Names()})
+	main, kot := splitKotatsuSources(u.sourceRows(r.Context(), srcs))
+	u.page(w, r, "sources", "Sources", sourcesPageView{
+		Sources:        main,
+		KotatsuSources: kot,
+		Scrapers:       registry.Names(),
+		Kotatsu:        u.kotatsuStatus(r.Context()),
+	})
 }
 
 type sourcesPageView struct {
-	Sources  []sources.Source
-	Scrapers []string
+	Sources        []sourceRowView
+	KotatsuSources []sourceRowView
+	Scrapers       []string
+	Kotatsu        kotatsuStatusView
 }
 
 type backupsView struct {
@@ -3438,7 +3450,7 @@ func (u *webUI) srcVerify(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: true})
+	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: true, Poll: true})
 }
 
 func (u *webUI) srcEnabled(w http.ResponseWriter, r *http.Request) {
@@ -3456,12 +3468,39 @@ func (u *webUI) srcDelete(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	srcs, err := u.svc.ListSources(r.Context())
-	if err != nil {
-		u.fail(w, err)
-		return
+	w.Header().Set("HX-Trigger", "source-deleted")
+	w.WriteHeader(http.StatusOK)
+}
+
+// sourceRows marks rows with a queued/running verify job so they render the
+// verifying spinner.
+func (u *webUI) sourceRows(ctx context.Context, srcs []sources.Source) []sourceRowView {
+	verifying := map[string]bool{}
+	for _, j := range u.jobs(ctx) {
+		if j.Type != jobs.TypeVerifySource || (j.Status != "queued" && j.Status != "running") {
+			continue
+		}
+		var p service.JobPayload
+		if json.Unmarshal([]byte(j.Payload), &p) == nil {
+			verifying[p.SourceID] = true
+		}
 	}
-	u.frag(w, "sourcesTable", srcs)
+	rows := make([]sourceRowView, len(srcs))
+	for i, s := range srcs {
+		rows[i] = sourceRowView{Source: s, Active: verifying[s.ID]}
+	}
+	return rows
+}
+
+func splitKotatsuSources(rows []sourceRowView) (main, kot []sourceRowView) {
+	for _, row := range rows {
+		if strings.HasPrefix(row.Source.Scraper, kotatsu.ScraperPrefix) {
+			kot = append(kot, row)
+		} else {
+			main = append(main, row)
+		}
+	}
+	return main, kot
 }
 
 func (u *webUI) srcRow(w http.ResponseWriter, r *http.Request) {
@@ -3472,7 +3511,7 @@ func (u *webUI) srcRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active, _, _ := u.jobStateFor(r.Context(), jobs.TypeVerifySource, service.JobPayload{SourceID: id})
-	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: active})
+	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: active, Poll: active})
 }
 
 // sourceEditView carries the scraper choices next to the profile fields.
@@ -3559,7 +3598,8 @@ func (u *webUI) srcSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	srcs, _ := u.svc.ListSources(r.Context())
-	u.frag(w, "sourcesTable", srcs)
+	main, _ := splitKotatsuSources(u.sourceRows(r.Context(), filterNSFWSources(r.Context(), srcs)))
+	u.frag(w, "sourcesTable", main)
 }
 
 func (u *webUI) srcTest(w http.ResponseWriter, r *http.Request) {
@@ -4081,8 +4121,7 @@ func (u *webUI) funcs() template.FuncMap {
 		"releaseStatus": func(s string) string {
 			return strings.ToLower(strings.ReplaceAll(s, "_", " "))
 		},
-		"pct":       func(done, total int64) int64 { return percent(done, total) },
-		"sourceRow": func(s sources.Source) sourceRowView { return sourceRowView{Source: s} },
+		"pct": func(done, total int64) int64 { return percent(done, total) },
 		"missingTotal": func(ts []library.Title) int64 {
 			var n int64
 			for _, t := range ts {

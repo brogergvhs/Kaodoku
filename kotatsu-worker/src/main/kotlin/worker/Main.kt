@@ -16,6 +16,9 @@ data class SourceInfo(
     val base_url: String,
 )
 
+// Some adult parsers are typed MANGA upstream, so a name/domain hint backs up the content type.
+private val nsfwHint = Regex("hentai|porn|adult|doujin|yaoi", RegexOption.IGNORE_CASE)
+
 fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
     MangaParserSource.entries.mapNotNull { s ->
         runCatching {
@@ -25,7 +28,8 @@ fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
                 name = s.title,
                 language = s.locale,
                 content_type = s.contentType.name.lowercase(),
-                nsfw = s.contentType == ContentType.HENTAI,
+                nsfw = s.contentType == ContentType.HENTAI ||
+                    nsfwHint.containsMatchIn(s.name) || nsfwHint.containsMatchIn(parser.domain),
                 broken = s.isBroken,
                 domains = parser.configKeyDomain.presetValues.toList(),
                 base_url = "https://${parser.domain}",

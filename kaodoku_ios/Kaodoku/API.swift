@@ -30,7 +30,6 @@ struct APIClient {
     return URLSession(configuration: cfg, delegate: redirectGuard, delegateQueue: nil)
   }()
 
-  /// clearCache drops cached authenticated responses (covers, pages) on sign-out.
   static func clearCache() {
     session.configuration.urlCache?.removeAllCachedResponses()
   }

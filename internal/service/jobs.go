@@ -22,6 +22,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
@@ -2061,7 +2062,13 @@ func (s *JobService) ExportSource(ctx context.Context, sourceID string) ([]byte,
 
 // VerifySource checks one source profile.
 func (s *JobService) VerifySource(ctx context.Context, cfg *config.Config, logSvc ui.Log, sourceID string) (SourceVerifyResult, error) {
-	return s.src.VerifySource(ctx, cfg, logSvc, sourceID)
+	result, err := s.src.VerifySource(ctx, cfg, logSvc, sourceID)
+	if result.Status == sources.StatusHealthy || result.Status == sources.StatusDegraded {
+		if cerr := s.want.catalog.ClearMissesForSource(ctx, result.SourceID); cerr != nil {
+			logSvc.Warnf("Clearing match misses for %s failed: %v\n", result.SourceID, cerr)
+		}
+	}
+	return result, err
 }
 
 // VerifySourceURL probes a user-specified manga URL within a chosen source,
@@ -2191,6 +2198,45 @@ func (s *JobService) SetSourceMethods(ctx context.Context, sourceID, chapterFetc
 	// Re-check chapters with the new methods; duplicates from a paired
 	// ImportLocalSource call are absorbed by enqueue dedup.
 	return s.enqueueRefreshForSource(ctx, sourceID)
+}
+
+// KotatsuClient returns the worker client, or nil when the sidecar is off.
+func (s *JobService) KotatsuClient(ctx context.Context) *kotatsu.Client {
+	cfg, _, err := s.RuntimeConfig(ctx)
+	if err != nil || !cfg.KotatsuWorker.Enabled {
+		return nil
+	}
+	return kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey)
+}
+
+// ImportKotatsuSource imports one worker parser as a regular source profile;
+// id and scraper both carry the kotatsu:<PARSER> name.
+func (s *JobService) ImportKotatsuSource(ctx context.Context, src kotatsu.Source, version string) error {
+	id := kotatsu.ScraperPrefix + src.ID
+	var langs []string
+	if src.Language != "" {
+		langs = []string{src.Language}
+	}
+	sample := src.BaseURL
+	if kc := s.KotatsuClient(ctx); kc != nil {
+		sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		if res, err := kc.Search(sctx, src.ID, ""); err == nil && len(res) > 0 {
+			sample = res[0].URL
+		}
+		cancel()
+	}
+	if err := s.ImportLocalSource(ctx, sources.Profile{
+		ID: id, Name: src.Name, Domains: src.Domains, BaseURL: src.BaseURL,
+		SampleMangaURL: sample,
+		Scraper:        id, NSFW: src.NSFW, Languages: langs, Enabled: true, Version: version,
+	}); err != nil {
+		return err
+	}
+	if err := s.src.SetEnabled(ctx, strings.ToLower(id), true); err != nil {
+		return err
+	}
+	_, err := s.EnqueueSource(ctx, strings.ToLower(id), time.Now())
+	return err
 }
 
 func (s *JobService) enqueueSourceSearchForTitle(ctx context.Context, title library.Title) error {

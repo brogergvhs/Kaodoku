@@ -288,6 +288,13 @@ func (r *Repository) RecordMatchMiss(ctx context.Context, catalogMangaID int64, 
 	return err
 }
 
+// ClearMissesForSource drops cached no-match markers so a source that just
+// turned usable is retried immediately instead of after the 24h cache.
+func (r *Repository) ClearMissesForSource(ctx context.Context, sourceID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM title_source_matches WHERE source_id = ? AND match_method = 'miss'`, sourceID)
+	return err
+}
+
 // UpsertMatch stores a source match.
 func (r *Repository) UpsertMatch(ctx context.Context, m Match) (Match, error) {
 	m.SourceID = strings.TrimSpace(m.SourceID)

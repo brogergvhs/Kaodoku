@@ -703,6 +703,30 @@
 </div>
 {{template "sourcesTable" .Sources}}
 
+{{if or .Kotatsu.Enabled .KotatsuSources}}
+<div class="mt-10">
+  <div class="flex items-center justify-between gap-2 mb-4">
+    <h2 class="text-lg font-semibold">Kotatsu sources</h2>
+    {{if .Kotatsu.Enabled}}{{if .Kotatsu.Reachable}}<span class="badge badge-success badge-soft">{{if .Kotatsu.Parsers}}{{.Kotatsu.Parsers}} parsers · {{end}}{{.Kotatsu.Version}}</span>
+    {{else}}<span class="badge badge-error badge-soft" {{with .Kotatsu.Error}}title="{{.}}"{{end}}>unreachable</span>{{end}}{{end}}
+  </div>
+  {{template "kotatsuSourcesTable" .KotatsuSources}}
+  {{if .Kotatsu.Reachable}}
+  <div class="card card-sm bg-base-100 border border-base-300 mt-4">
+    <div class="card-body gap-2">
+      <div class="flex items-center gap-2">
+        <input class="input input-sm w-full" name="q" placeholder="Filter worker sources by name, id, or domain…"
+          hx-get="/ui/sources/kotatsu" hx-target="#kotatsu-browse" hx-swap="innerHTML"
+          hx-trigger="keyup changed delay:300ms, source-deleted from:body">
+        <button class="btn btn-sm btn-outline" hx-get="/ui/sources/kotatsu" hx-include="previous input" hx-target="#kotatsu-browse" hx-swap="innerHTML">Browse</button>
+      </div>
+      <div id="kotatsu-browse"></div>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
 <dialog id="source_add_modal" class="modal">
   <div class="modal-box max-w-xl">
     <h3 class="text-lg font-bold mb-1">Add a custom source</h3>
