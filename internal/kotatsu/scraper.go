@@ -3,6 +3,7 @@ package kotatsu
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/brogergvhs/kaodoku/internal/providers"
@@ -41,11 +42,22 @@ func (s *Scraper) GetChaptersResolved(ctx context.Context, url string) ([]provid
 	}
 	byLabel := map[string]kept{}
 	out := make([]providers.Chapter, 0, len(res.Chapters))
+	numbered := false
 	for _, ch := range res.Chapters {
-		if ch.Number == "" {
-			continue
+		if ch.Number != "" {
+			numbered = true
+			break
 		}
-		main, suffixType, suffixNum, label, ok := providers.ParseChapterNumber(ch.Number)
+	}
+	for i, ch := range res.Chapters {
+		number := ch.Number
+		if number == "" {
+			if numbered {
+				continue
+			}
+			number = strconv.Itoa(i + 1)
+		}
+		main, suffixType, suffixNum, label, ok := providers.ParseChapterNumber(number)
 		if !ok {
 			continue
 		}

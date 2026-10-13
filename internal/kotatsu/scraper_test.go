@@ -52,6 +52,26 @@ func TestScraperChapters(t *testing.T) {
 	}
 }
 
+func TestScraperNumbersGalleryChapters(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"resolved_url":"https://g/390009","chapters":[
+			{"url":"/g/390009/","number":"","title":"Chapter","volume":0,"branch":"","uploaded_at":""}]}`))
+	}))
+	defer srv.Close()
+
+	chs, _, err := NewScraper(New(srv.URL, "k"), "NHENTAI").GetChaptersResolved(context.Background(), "https://g/390009")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chs) != 1 {
+		t.Fatalf("a source that numbers nothing must keep its chapters: %+v", chs)
+	}
+	if chs[0].Label != "1" || chs[0].URL != "https://g/390009\t/g/390009/" {
+		t.Fatalf("ch[0] = %+v", chs[0])
+	}
+}
+
 func TestScraperImages(t *testing.T) {
 	t.Parallel()
 	s := scraperServer(t)

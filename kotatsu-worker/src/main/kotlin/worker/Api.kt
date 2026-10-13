@@ -57,16 +57,21 @@ class Api(private val ctx: JvmLoaderContext, private val key: String) {
         c.json(list.take(20).map { SearchResult(it.publicUrl, it.title, it.coverUrl, it.altTitles.toList()) })
     }
 
+    // Some parsers resolve a link without chapters; those need getDetails.
     private fun resolve(p: MangaParser, publicUrl: String): Manga =
         mangaCache.getOrPut("${p.source.name}|$publicUrl") {
-            runBlocking { ctx.newLinkResolver(publicUrl).getManga() }
-                ?.takeIf { it.source == p.source }
-                ?: throw NotFoundResponse("manga not found on source")
+            runBlocking {
+                val manga = ctx.newLinkResolver(publicUrl).getManga()?.takeIf { it.source == p.source }
+                    ?: throw NotFoundResponse("manga not found on source")
+                if (manga.chapters.isNullOrEmpty()) p.getDetails(manga) else manga
+            }
         }
 
     fun chapters(c: Context) {
         val p = parser(c.queryParam("source"))
         val url = c.queryParam("url") ?: throw BadRequestResponse("url required")
+        // The cache has no TTL, so a chapter list is always refetched; /pages reuses this entry.
+        mangaCache.remove("${p.source.name}|$url")
         val manga = resolve(p, url)
         c.json(ChaptersResult(manga.publicUrl, manga.chapters.orEmpty().map {
             ChapterInfo(it.url, it.numberString() ?: "", it.title ?: "", it.volume,

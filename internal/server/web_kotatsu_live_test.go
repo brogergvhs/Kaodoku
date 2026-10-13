@@ -271,6 +271,19 @@ func TestKotatsuBrowseImportLive(t *testing.T) {
 		if cf.Status == sources.StatusRequiresCF {
 			t.Fatalf("solver is enabled, cloudflare should be cleared: %q (%v)", cf.Status, cferr)
 		}
+
+		var chapters *sources.VerifyStep
+		for i, step := range cf.Steps {
+			if step.Name == "chapters" {
+				chapters = &cf.Steps[i]
+			}
+		}
+		if chapters == nil {
+			t.Fatalf("verify reported no chapters step: %+v", cf.Steps)
+		}
+		if chapters.Status != "ok" {
+			t.Fatalf("chapters step = %s (%s %s)", chapters.Status, chapters.Detail, chapters.Log)
+		}
 	} else {
 		if cf.Status != sources.StatusRequiresCF {
 			t.Fatalf("cloudflare source status = %q, want %q (err %v, steps %+v)", cf.Status, sources.StatusRequiresCF, cferr, cf.Steps)
