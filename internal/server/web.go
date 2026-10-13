@@ -377,7 +377,8 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/sources/sync", u.srcSync)
 	mux.HandleFunc("POST /ui/sources/test", u.srcTest)
 	mux.HandleFunc("POST /ui/sources/custom", u.srcAddCustom)
-	mux.HandleFunc("GET /ui/sources/kotatsu", u.kotatsuBrowse)
+	mux.HandleFunc("GET /ui/sources/kotatsu", u.kotatsuModal)
+	mux.HandleFunc("GET /ui/sources/kotatsu/list", u.kotatsuBrowse)
 	mux.HandleFunc("POST /ui/sources/kotatsu/import", u.kotatsuImport)
 	mux.HandleFunc("GET /ui/library/table", u.libraryTable)
 	mux.HandleFunc("GET /ui/jobs/table", u.jobsTable)
@@ -3468,7 +3469,6 @@ func (u *webUI) srcDelete(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	w.Header().Set("HX-Trigger", "source-deleted")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -3518,6 +3518,7 @@ func (u *webUI) srcRow(w http.ResponseWriter, r *http.Request) {
 type sourceEditView struct {
 	sources.Source
 	Scrapers []string
+	Kotatsu  bool
 }
 
 func (u *webUI) srcEdit(w http.ResponseWriter, r *http.Request) {
@@ -3533,7 +3534,10 @@ func (u *webUI) srcEdit(w http.ResponseWriter, r *http.Request) {
 	if !slices.Contains(names, src.Scraper) && src.Scraper != "" {
 		names = append([]string{src.Scraper}, names...)
 	}
-	u.frag(w, "sourceEdit", sourceEditView{Source: src, Scrapers: names})
+	u.frag(w, "sourceEdit", sourceEditView{
+		Source: src, Scrapers: names,
+		Kotatsu: strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix),
+	})
 }
 
 func (u *webUI) srcEditSave(w http.ResponseWriter, r *http.Request) {
@@ -3548,11 +3552,17 @@ func (u *webUI) srcEditSave(w http.ResponseWriter, r *http.Request) {
 	p.Name = strings.TrimSpace(r.FormValue("name"))
 	p.BaseURL = strings.TrimSpace(r.FormValue("base_url"))
 	p.SampleMangaURL = strings.TrimSpace(r.FormValue("manga_url"))
-	p.SearchURL = strings.TrimSpace(r.FormValue("search_url"))
 	p.Domains = splitList(r.FormValue("domains"))
-	p.AllowedExtensions = splitList(r.FormValue("extensions"))
 	p.Scraper = strings.TrimSpace(r.FormValue("scraper"))
-	p.Languages = splitList(r.FormValue("languages"))
+	if r.Form.Has("search_url") {
+		p.SearchURL = strings.TrimSpace(r.FormValue("search_url"))
+	}
+	if r.Form.Has("extensions") {
+		p.AllowedExtensions = splitList(r.FormValue("extensions"))
+	}
+	if r.Form.Has("languages") {
+		p.Languages = splitList(r.FormValue("languages"))
+	}
 	p.SingleManga = formChecked(r, "single_manga")
 	p.Chapterless = formChecked(r, "chapterless")
 	p.NSFW = formChecked(r, "nsfw")
@@ -3562,9 +3572,11 @@ func (u *webUI) srcEditSave(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	if err := u.svc.SetSourceMethods(r.Context(), id, r.FormValue("chapter_fetch"), r.FormValue("image_fetch")); err != nil {
-		u.fail(w, err)
-		return
+	if r.Form.Has("chapter_fetch") || r.Form.Has("image_fetch") {
+		if err := u.svc.SetSourceMethods(r.Context(), id, r.FormValue("chapter_fetch"), r.FormValue("image_fetch")); err != nil {
+			u.fail(w, err)
+			return
+		}
 	}
 	u.kick()
 	w.Header().Set("HX-Refresh", "true")

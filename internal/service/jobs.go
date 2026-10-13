@@ -2154,40 +2154,60 @@ type ServiceHealth struct {
 	Endpoint string `json:"endpoint"`
 	Enabled  bool   `json:"enabled"`
 	Healthy  bool   `json:"healthy"`
+	Version  string `json:"version,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
 
-// ServicesHealth checks the configured FlareSolverr solver and browser
-// downloader, reporting each one's reachability.
+// ServicesHealth reports reachability of each configured helper service.
 func (s *JobService) ServicesHealth(ctx context.Context) []ServiceHealth {
 	cfg, _, err := s.RuntimeConfig(ctx)
 	if err != nil || cfg == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-
-	solver := ServiceHealth{Name: "FlareSolverr (page solver)", Endpoint: cfg.BrowserSolver.Endpoint, Enabled: cfg.BrowserSolver.Enabled}
-	if solver.Enabled {
-		client := browserfetch.NewFlareSolverr(cfg.BrowserSolver.Endpoint, time.Duration(cfg.BrowserSolver.TimeoutSeconds)*time.Second, nil)
-		if err := client.Health(ctx); err != nil {
-			solver.Error = err.Error()
-		} else {
-			solver.Healthy = true
+	check := func(name, endpoint string, enabled bool, probe func(context.Context) (string, error)) ServiceHealth {
+		h := ServiceHealth{Name: name, Endpoint: endpoint, Enabled: enabled}
+		if !enabled {
+			return h
 		}
-	}
-
-	browser := ServiceHealth{Name: "Browser downloader (Selenium)", Endpoint: cfg.BrowserDownload.Endpoint, Enabled: cfg.BrowserDownload.Enabled}
-	if browser.Enabled {
-		client := browserdownload.New(cfg.BrowserDownload.Endpoint, 8*time.Second, nil)
-		if err := client.Health(ctx); err != nil {
-			browser.Error = err.Error()
-		} else {
-			browser.Healthy = true
+		pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		version, err := probe(pctx)
+		if err != nil {
+			h.Error = err.Error()
+			return h
 		}
+		h.Healthy, h.Version = true, version
+		return h
 	}
-
-	return []ServiceHealth{solver, browser}
+	probes := []func() ServiceHealth{
+		func() ServiceHealth {
+			return check("FlareSolverr (page solver)", cfg.BrowserSolver.Endpoint, cfg.BrowserSolver.Enabled, func(c context.Context) (string, error) {
+				return "", browserfetch.NewFlareSolverr(cfg.BrowserSolver.Endpoint, time.Duration(cfg.BrowserSolver.TimeoutSeconds)*time.Second, nil).Health(c)
+			})
+		},
+		func() ServiceHealth {
+			return check("Browser downloader (Selenium)", cfg.BrowserDownload.Endpoint, cfg.BrowserDownload.Enabled, func(c context.Context) (string, error) {
+				return "", browserdownload.New(cfg.BrowserDownload.Endpoint, 8*time.Second, nil).Health(c)
+			})
+		},
+		func() ServiceHealth {
+			return check("Kotatsu worker (sources)", cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.Enabled, func(c context.Context) (string, error) {
+				h, err := kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey).Health(c)
+				return h.Version, err
+			})
+		},
+	}
+	out := make([]ServiceHealth, len(probes))
+	var wg sync.WaitGroup
+	for i, p := range probes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = p()
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // SetSourceMethods overrides a source's chapter/image fetch methods.

@@ -186,8 +186,9 @@
       <label class="fieldset"><span class="fieldset-legend">Name</span><input class="input w-full" name="name" value="{{.Name}}"></label>
       <label class="fieldset"><span class="fieldset-legend">Site base URL</span><input class="input w-full" name="base_url" value="{{.BaseURL}}" required></label>
       <label class="fieldset"><span class="fieldset-legend">Sample manga URL</span><input class="input w-full" name="manga_url" value="{{.SampleMangaURL}}" required></label>
-      <label class="fieldset"><span class="fieldset-legend">Search URL ({query} placeholder)</span><input class="input w-full" name="search_url" value="{{.SearchURL}}"></label>
+      {{if not .Kotatsu}}<label class="fieldset"><span class="fieldset-legend">Search URL ({query} placeholder)</span><input class="input w-full" name="search_url" value="{{.SearchURL}}"></label>{{end}}
       <label class="fieldset"><span class="fieldset-legend">Domains (comma-separated)</span><input class="input w-full" name="domains" value="{{range $i, $d := .Domains}}{{if $i}}, {{end}}{{$d}}{{end}}"></label>
+      {{if not .Kotatsu}}
       <label class="fieldset"><span class="fieldset-legend">Image types (comma-separated)</span><input class="input w-full" name="extensions" value="{{range $i, $e := .AllowedExtensions}}{{if $i}}, {{end}}{{$e}}{{end}}"></label>
       <label class="fieldset"><span class="fieldset-legend">Preferred languages (comma-separated)</span><input class="input w-full" name="languages" value="{{range $i, $l := .Languages}}{{if $i}}, {{end}}{{$l}}{{end}}" placeholder="en"><span class="label">For multi-language sources (MangaDex): ISO codes in preference order, e.g. en, it.</span></label>
       <div class="grid grid-cols-2 gap-3">
@@ -206,6 +207,7 @@
           </select>
         </label>
       </div>
+      {{else}}<p class="text-xs text-base-content/50">Chapters, pages and images come from the Kotatsu worker, so search URL, image types, languages and fetch methods do not apply.</p>{{end}}
       <label class="fieldset"><span class="fieldset-legend">Scraper</span>
         <select class="select w-full" name="scraper">
           {{$cur := .Scraper}}{{range .Scrapers}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}

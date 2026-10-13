@@ -122,6 +122,18 @@ document.body.addEventListener("htmx:afterSwap", function () {
   });
 });
 
+// Kotatsu picker: the import button counts the selected parsers.
+document.addEventListener("change", function (e) {
+  if (!e.target.matches("#kotatsu-browse input[name='id']")) return;
+  var btn = document.getElementById("kotatsu-import-btn");
+  if (!btn) return;
+  var n = document.querySelectorAll(
+    "#kotatsu-browse input[name='id']:checked:not(:disabled)",
+  ).length;
+  btn.disabled = n === 0;
+  btn.textContent = n ? "Import " + n : "Import";
+});
+
 // Tag picker: the filter input hides non-matching checkbox rows.
 document.addEventListener("input", function (e) {
   var filter = e.target.closest("[data-tag-filter]");
