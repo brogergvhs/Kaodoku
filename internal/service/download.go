@@ -483,8 +483,6 @@ func (s *DownloadService) downloadChapter(
 
 	files, bytes, err := dl.DownloadImagesConcurrently(ctx, images, tmpFolder, ch.URL, max(1, s.cfg.ImageWorkers), handle)
 	if err != nil {
-		// Composite kotatsu chapter ids are not navigable pages so browser
-		// fallback can only waste its timeout on them.
 		if s.cfg.BrowserDownload.Enabled && !strings.Contains(ch.URL, "\t") {
 			return s.downloadChapterWithBrowser(ctx, ch, cbzOut, tmpFolder, err)
 		}

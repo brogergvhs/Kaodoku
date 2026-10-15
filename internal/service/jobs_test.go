@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -264,25 +265,29 @@ func TestTitleJobUpdatesSourceHealth(t *testing.T) {
 		t.Fatalf("AddTitle() error = %v", err)
 	}
 
-	if err := svc.markTitleSourceHealth(ctx, title, nil); err != nil {
+	if err := svc.markTitleSourceHealth(ctx, title, nil, false); err != nil {
 		t.Fatalf("mark healthy: %v", err)
 	}
 	src, err := svc.src.GetSource(ctx, "demo")
 	if err != nil {
 		t.Fatalf("Get(source) error = %v", err)
 	}
-	if src.Status != sources.StatusHealthy || src.LastError != "" || src.LastCheckedAt == "" {
+	// A title update must not claim the source was verified.
+	if src.Status != sources.StatusHealthy || src.LastError != "" || src.LastCheckedAt != "" {
 		t.Fatalf("healthy source = %#v", src)
 	}
 
-	if err := svc.markTitleSourceHealth(ctx, title, errors.New("cloudflare blocked")); err != nil {
+	if err := svc.markTitleSourceHealth(ctx, title, errors.New("cloudflare blocked"), false); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	}
 	src, err = svc.src.GetSource(ctx, "demo")
 	if err != nil {
 		t.Fatalf("Get(source) error = %v", err)
 	}
-	if src.Status != sources.StatusRequiresCF || src.LastError != "cloudflare blocked" {
+	// The error must name the title, since it did not come from a verify run.
+	if src.Status != sources.StatusRequiresCF ||
+		!strings.Contains(src.LastError, "cloudflare blocked") ||
+		!strings.Contains(src.LastError, title.DisplayTitle) {
 		t.Fatalf("failed source = %#v", src)
 	}
 }

@@ -199,7 +199,6 @@ func (s *sourceService) verify(ctx context.Context, cfg *config.Config, logSvc u
 
 	searchStep, pickStep, mangaURL := s.verifySearch(ctx, cfg, logSvc, src)
 
-	// Kotatsu sources fetch through the worker, which the solver never touches.
 	attempts := []bool{false}
 	if !strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix) {
 		if cfg.BrowserSolver.Enabled || src.ChapterFetch == sources.FetchSolver || src.RequiresBrowserSolver {
@@ -245,8 +244,6 @@ func (s *sourceService) verifySearch(ctx context.Context, cfg *config.Config, lo
 	searchURL := strings.ReplaceAll(src.SearchURL, "{query}", url.QueryEscape(query))
 	search.Detail = fmt.Sprintf("%q", query)
 
-	// Kotatsu sample URLs are often slugless (UUIDs)
-	// a blank query lists popular manga through the native search API instead.
 	if strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix) {
 		query, search.Detail = "", "popular list"
 	}

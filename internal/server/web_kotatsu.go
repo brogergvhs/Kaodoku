@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
@@ -48,11 +49,11 @@ type kotatsuBrowseView struct {
 }
 
 type kotatsuFilter struct {
-	Q, Language, Type, Status string
+	Q, Language, Type, Status, Trait string
 }
 
 func (f kotatsuFilter) any() bool {
-	return f.Q != "" || f.Language != "" || f.Type != "" || f.Status != ""
+	return f.Q != "" || f.Language != "" || f.Type != "" || f.Status != "" || f.Trait != ""
 }
 
 func (u *webUI) kotatsuStatus(ctx context.Context) kotatsuStatusView {
@@ -83,16 +84,12 @@ func (u *webUI) kotatsuBrowseView(r *http.Request) kotatsuBrowseView {
 		Language: strings.TrimSpace(r.FormValue("lang")),
 		Type:     strings.TrimSpace(r.FormValue("type")),
 		Status:   strings.TrimSpace(r.FormValue("status")),
+		Trait:    strings.TrimSpace(r.FormValue("trait")),
 	}
 	v := kotatsuBrowseView{Filter: f, Filtered: f.any()}
-	kc := u.svc.KotatsuClient(r.Context())
-	if kc == nil {
-		v.Error = "kotatsu worker is not enabled"
-		return v
-	}
 	sctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	srcs, err := kc.Sources(sctx)
+	srcs, err := u.svc.KotatsuSources(sctx)
 	if err != nil {
 		v.Error = err.Error()
 		return v
@@ -121,6 +118,9 @@ func (u *webUI) kotatsuBrowseView(r *http.Request) kotatsuBrowseView {
 			continue
 		}
 		if f.Type != "" && s.ContentType != f.Type {
+			continue
+		}
+		if (f.Trait == "cloudflare" && !s.Cloudflare) || (f.Trait == "searchable" && !s.Searchable) {
 			continue
 		}
 		got := imported[strings.ToLower(kotatsu.ScraperPrefix+s.ID)]
@@ -161,7 +161,7 @@ func (u *webUI) kotatsuImport(w http.ResponseWriter, r *http.Request) {
 	}
 	sctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	srcs, err := kc.Sources(sctx)
+	srcs, err := u.svc.KotatsuSources(sctx)
 	if err != nil {
 		u.fail(w, err)
 		return
@@ -193,23 +193,48 @@ func (u *webUI) kotatsuImport(w http.ResponseWriter, r *http.Request) {
 		version = h.Version
 	}
 	hcancel()
-	for _, s := range picked {
-		if err := u.svc.ImportKotatsuSource(r.Context(), s, version); err != nil {
+	samples := make([]string, len(picked))
+	ictx, icancel := context.WithTimeout(r.Context(), 45*time.Second)
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, s := range picked {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			samples[i] = u.svc.KotatsuSample(ictx, s)
+		}()
+	}
+	wg.Wait()
+	icancel()
+	for i, s := range picked {
+		if err := u.svc.ImportKotatsuSource(r.Context(), s, version, samples[i]); err != nil {
 			u.fail(w, err)
 			return
 		}
 	}
 	u.frag(w, "kotatsuBrowse", u.kotatsuBrowseView(r))
-	if all, err := u.svc.ListSources(r.Context()); err == nil {
-		_, kot := splitKotatsuSources(u.sourceRows(r.Context(), filterNSFWSources(r.Context(), all)))
-		fresh := make(map[string]bool, len(picked))
-		for _, s := range picked {
-			fresh[strings.ToLower(kotatsu.ScraperPrefix+s.ID)] = true
-		}
-		for i := range kot {
-			kot[i].Poll = fresh[kot[i].Source.ID]
-		}
-		u.frag(w, "kotatsuSourcesTableOOB", kot)
+	if rows, err := u.kotatsuRows(r.Context()); err == nil {
+		u.frag(w, "kotatsuSourcesTableOOB", rows)
 	}
 	u.frag(w, "kotatsuModalClose", nil)
+}
+
+func (u *webUI) kotatsuTable(w http.ResponseWriter, r *http.Request) {
+	rows, err := u.kotatsuRows(r.Context())
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.frag(w, "kotatsuSourcesTable", rows)
+}
+
+func (u *webUI) kotatsuRows(ctx context.Context) ([]sourceRowView, error) {
+	all, err := u.svc.ListSources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_, kot := splitKotatsuSources(u.sourceRows(ctx, filterNSFWSources(ctx, all)))
+	return kot, nil
 }

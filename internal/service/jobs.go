@@ -49,6 +49,9 @@ type JobService struct {
 	adultMu    sync.Mutex
 	adultTags  []string // vocabulary names flagged adult, briefly cached
 	adultExp   time.Time
+	kotMu      sync.Mutex
+	kotSources []kotatsu.Source
+	kotExp     time.Time
 }
 
 // cachedRecs is a user's recommendation pool, cached to spare AniList calls.
@@ -2032,6 +2035,10 @@ func (s *JobService) ListSources(ctx context.Context) ([]sources.Source, error) 
 	return s.src.ListSources(ctx)
 }
 
+func (s *JobService) SourceTitleCounts(ctx context.Context) (map[string]int, error) {
+	return s.src.repo.TitleCounts(ctx)
+}
+
 // GetSource returns one source profile.
 func (s *JobService) GetSource(ctx context.Context, id string) (sources.Source, error) {
 	return s.src.GetSource(ctx, id)
@@ -2223,7 +2230,6 @@ func (s *JobService) SetSourceMethods(ctx context.Context, sourceID, chapterFetc
 	return s.enqueueRefreshForSource(ctx, sourceID)
 }
 
-// KotatsuClient returns the worker client, or nil when the sidecar is off.
 func (s *JobService) KotatsuClient(ctx context.Context) *kotatsu.Client {
 	cfg, _, err := s.RuntimeConfig(ctx)
 	if err != nil || !cfg.KotatsuWorker.Enabled {
@@ -2232,23 +2238,49 @@ func (s *JobService) KotatsuClient(ctx context.Context) *kotatsu.Client {
 	return kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey)
 }
 
-// ImportKotatsuSource imports one worker parser as a regular source profile;
-// id and scraper both carry the kotatsu:<PARSER> name.
-func (s *JobService) ImportKotatsuSource(ctx context.Context, src kotatsu.Source, version string) error {
+const kotatsuSourcesTTL = 5 * time.Minute
+
+func (s *JobService) KotatsuSources(ctx context.Context) ([]kotatsu.Source, error) {
+	kc := s.KotatsuClient(ctx)
+	if kc == nil {
+		return nil, fmt.Errorf("kotatsu worker is not enabled")
+	}
+	s.kotMu.Lock()
+	defer s.kotMu.Unlock()
+	if time.Now().Before(s.kotExp) {
+		return s.kotSources, nil
+	}
+	list, err := kc.Sources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.kotSources, s.kotExp = list, time.Now().Add(kotatsuSourcesTTL)
+	return list, nil
+}
+
+func (s *JobService) KotatsuSample(ctx context.Context, src kotatsu.Source) string {
+	kc := s.KotatsuClient(ctx)
+	if kc == nil {
+		return src.BaseURL
+	}
+	sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if res, err := kc.Search(sctx, src.ID, ""); err == nil && len(res) > 0 {
+		return res[0].URL
+	}
+	return src.BaseURL
+}
+
+func (s *JobService) ImportKotatsuSource(ctx context.Context, src kotatsu.Source, version, sample string) error {
 	id := kotatsu.ScraperPrefix + src.ID
 	var langs []string
 	if src.Language != "" {
 		langs = []string{src.Language}
 	}
-	sample := src.BaseURL
-	if kc := s.KotatsuClient(ctx); kc != nil {
-		sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		if res, err := kc.Search(sctx, src.ID, ""); err == nil && len(res) > 0 {
-			sample = res[0].URL
-		}
-		cancel()
+	if strings.TrimSpace(sample) == "" {
+		sample = src.BaseURL
 	}
-	if err := s.ImportLocalSource(ctx, sources.Profile{
+	if err := s.src.ImportLocal(ctx, sources.Profile{
 		ID: id, Name: src.Name, Domains: src.Domains, BaseURL: src.BaseURL,
 		SampleMangaURL: sample,
 		Scraper:        id, NSFW: src.NSFW, Languages: langs, Enabled: true, Version: version,
@@ -2294,7 +2326,7 @@ func (s *JobService) enqueueRefreshForSource(ctx context.Context, sourceID strin
 	}
 	var errs []error
 	for _, title := range titles {
-		if title.SourceID != sourceID {
+		if title.SourceID != sourceID || !title.Monitored {
 			continue
 		}
 		errs = append(errs, s.enqueueRefreshForTitle(ctx, title))
@@ -2392,17 +2424,11 @@ func (s *JobService) coveringJob(ctx context.Context, typ string, payload JobPay
 	if payload.TitleID <= 0 || !titleScopedJob(typ) {
 		return jobs.Job{}, false, nil
 	}
-	all, err := s.jobs.List(ctx)
+	all, err := s.jobs.ActiveForTitle(ctx, typ, payload.TitleID)
 	if err != nil {
 		return jobs.Job{}, false, err
 	}
 	for _, job := range all {
-		if job.Type != typ {
-			continue
-		}
-		if !activeJobStatus(job.Status) {
-			continue
-		}
 		var existing JobPayload
 		if json.Unmarshal([]byte(job.Payload), &existing) != nil {
 			continue
@@ -2604,7 +2630,7 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 				return err
 			}
 			_, err = s.lib.RefreshTitle(ctx, cfg, logSvc, title)
-			if markErr := s.markTitleSourceHealth(ctx, title, err); markErr != nil {
+			if markErr := s.markTitleSourceHealth(ctx, title, err, false); markErr != nil {
 				return errors.Join(err, markErr)
 			}
 			if err != nil {
@@ -2635,7 +2661,7 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 			}
 			if title.DiscoveredCount == 0 {
 				_, err := s.lib.RefreshTitle(ctx, cfg, logSvc, title)
-				if markErr := s.markTitleSourceHealth(ctx, title, err); markErr != nil {
+				if markErr := s.markTitleSourceHealth(ctx, title, err, false); markErr != nil {
 					return errors.Join(err, markErr)
 				}
 				if err != nil {
@@ -2644,7 +2670,7 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 			}
 			results, err := s.lib.DownloadMissing(ctx, cfg, logSvc, payload.TitleID, progress)
 			if err != nil || len(results) > 0 {
-				if markErr := s.markTitleSourceHealth(ctx, title, err); markErr != nil {
+				if markErr := s.markTitleSourceHealth(ctx, title, err, len(results) > 0); markErr != nil {
 					return errors.Join(err, markErr)
 				}
 			}
@@ -2683,17 +2709,28 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 	}
 }
 
-func (s *JobService) markTitleSourceHealth(ctx context.Context, title library.Title, runErr error) error {
+func (s *JobService) markTitleSourceHealth(ctx context.Context, title library.Title, runErr error, partial bool) error {
 	if strings.TrimSpace(title.SourceID) == "" {
 		return nil
 	}
-	status := sources.StatusHealthy
-	lastError := ""
 	if runErr != nil {
-		status = fetchFailureStatus(runErr)
-		lastError = runErr.Error()
+		status := fetchFailureStatus(runErr)
+		if partial && status == sources.StatusBroken {
+			status = sources.StatusDegraded
+		}
+		return s.src.repo.UpdateHealth(ctx, title.SourceID, status,
+			fmt.Sprintf("while updating %q: %v", title.DisplayTitle, runErr))
 	}
-	return s.src.repo.UpdateHealth(ctx, title.SourceID, status, lastError)
+	src, err := s.src.GetSource(ctx, title.SourceID)
+	if err != nil {
+		return err
+	}
+	for _, step := range src.VerifySteps {
+		if step.Status == sources.StepFailed {
+			return nil
+		}
+	}
+	return s.src.repo.UpdateHealth(ctx, title.SourceID, sources.StatusHealthy, "")
 }
 
 func (s *JobService) expandTitleJob(ctx context.Context, typ string, parentID int64) error {

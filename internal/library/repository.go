@@ -469,6 +469,7 @@ func (r *Repository) pruneSourceChapters(ctx context.Context, titleID int64, unl
 }
 
 func chapterHost(raw string) string {
+	raw, _, _ = strings.Cut(raw, "\t")
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ""
