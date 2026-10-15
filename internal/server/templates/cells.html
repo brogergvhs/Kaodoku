@@ -118,7 +118,7 @@
   <input type="checkbox" class="checkbox checkbox-sm" name="id" value="{{.Source.ID}}" {{if .Imported}}checked disabled{{end}}>
   <div class="min-w-0 flex-1 truncate">
     <span class="font-medium">{{.Source.Name}}</span>
-    <span class="text-xs text-base-content/50">{{with .Source.Language}}{{.}}{{else}}multi{{end}}{{if .Source.NSFW}} · nsfw{{end}}{{if .Source.Domains}} · {{index .Source.Domains 0}}{{end}}</span>
+    <span class="text-xs text-base-content/50">{{with .Source.Language}}{{.}}{{else}}multi{{end}} · {{.Source.ContentType}}{{if .Source.NSFW}} · nsfw{{end}}{{if .Source.Cloudflare}} · cloudflare{{end}}{{if not .Source.Searchable}} · no search{{end}}{{if .Source.Domains}} · {{index .Source.Domains 0}}{{end}}</span>
   </div>
   {{if .Imported}}<span class="badge badge-success badge-soft shrink-0">imported</span>{{end}}
 </label>
@@ -132,7 +132,7 @@
   {{range .Rows}}{{template "kotatsuRow" .}}{{else}}<p class="py-3 text-sm text-base-content/60">No parser matches these filters.</p>{{end}}
 </div>
 <div class="flex items-center justify-between gap-2 mt-3">
-  <p class="text-xs text-base-content/50">{{if .Filtered}}{{.Total}} matching · {{end}}{{.Available}} parsers available{{if .Capped}}{{end}}</p>
+  <p class="text-xs text-base-content/50">{{if .Filtered}}{{.Total}} matching · {{end}}{{.Available}} parsers available{{if .Capped}} · showing the first {{len .Rows}}, search to narrow it down{{end}}</p>
   <button id="kotatsu-import-btn" class="btn btn-sm btn-primary" disabled
     hx-post="/ui/sources/kotatsu/import" hx-include="#kotatsu-browse input[name='id']:checked, #kotatsu-filters"
     hx-target="#kotatsu-browse" hx-swap="outerHTML" hx-disabled-elt="this">Import</button>
@@ -153,7 +153,7 @@
     <form id="kotatsu-filters" class="mt-3 grid gap-2" hx-get="/ui/sources/kotatsu/list" hx-target="#kotatsu-browse" hx-swap="outerHTML"
       hx-trigger="submit, change target:select, keyup changed delay:300ms from:input[name='q']">
       <input class="input input-sm w-full" name="q" value="{{.Filter.Q}}" placeholder="Search by name, id, or domain…">
-      <div class="grid grid-cols-3 gap-2">
+      <div class="grid grid-cols-4 gap-2">
         <select class="select select-sm" name="lang">
           <option value="">Any language</option>
           {{$l := .Filter.Language}}{{range .Languages}}<option value="{{.}}" {{if eq . $l}}selected{{end}}>{{.}}</option>{{end}}
@@ -166,6 +166,11 @@
           <option value="">All</option>
           <option value="new" {{if eq .Filter.Status "new"}}selected{{end}}>Not imported</option>
           <option value="imported" {{if eq .Filter.Status "imported"}}selected{{end}}>Imported</option>
+        </select>
+        <select class="select select-sm" name="trait">
+          <option value="">Any source</option>
+          <option value="searchable" {{if eq .Filter.Trait "searchable"}}selected{{end}}>Searchable only</option>
+          <option value="cloudflare" {{if eq .Filter.Trait "cloudflare"}}selected{{end}}>Cloudflare-gated</option>
         </select>
       </div>
     </form>

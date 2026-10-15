@@ -170,3 +170,42 @@ func testRepository(t *testing.T) (context.Context, *Repository, func()) {
 	}
 	return ctx, NewRepository(db), func() { _ = db.Close() }
 }
+
+func TestTitleCounts(t *testing.T) {
+	t.Parallel()
+
+	ctx, repo, closeDB := testRepository(t)
+	defer closeDB()
+	if err := repo.Sync(ctx, []Profile{
+		{ID: "alpha", Name: "Alpha", BaseURL: "https://a.test/", SampleMangaURL: "https://a.test/m/1", Enabled: true},
+		{ID: "beta", Name: "Beta", BaseURL: "https://b.test/", SampleMangaURL: "https://b.test/m/1", Enabled: true},
+	}, OriginLocal); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO titles (id, source_id, source_url, display_title) VALUES (1, 'alpha', 'https://a.test/m/1', 'One')`,
+		`INSERT INTO titles (id, source_id, source_url, display_title) VALUES (2, 'alpha', 'https://a.test/m/2', 'Two')`,
+		`INSERT INTO titles (id, source_id, source_url, display_title) VALUES (3, NULL, 'pending:t3', 'Three')`,
+		// title 1 already counts for alpha via titles.source_id: must not double-count.
+		`INSERT INTO title_sources (title_id, source_id, url) VALUES (1, 'alpha', 'https://a.test/m/1')`,
+		`INSERT INTO title_sources (title_id, source_id, url) VALUES (1, 'beta', 'https://b.test/m/1')`,
+	} {
+		if _, err := repo.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := repo.TitleCounts(ctx)
+	if err != nil {
+		t.Fatalf("TitleCounts() error = %v", err)
+	}
+	if got["alpha"] != 2 {
+		t.Errorf("alpha count = %d, want 2", got["alpha"])
+	}
+	if got["beta"] != 1 {
+		t.Errorf("beta count = %d, want 1", got["beta"])
+	}
+	if _, ok := got[""]; ok {
+		t.Error("empty source id must not be counted")
+	}
+}

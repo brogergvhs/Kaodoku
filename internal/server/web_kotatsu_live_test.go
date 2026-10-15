@@ -21,7 +21,6 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/ui"
 )
 
-// Run with KAODOKU_KOTATSU_LIVE="<endpoint>|<key>" against a running worker.
 func TestKotatsuBrowseImportLive(t *testing.T) {
 	live := os.Getenv("KAODOKU_KOTATSU_LIVE")
 	if live == "" {
@@ -172,7 +171,6 @@ func TestKotatsuBrowseImportLive(t *testing.T) {
 		t.Fatalf("kotatsu source not in separate section below main table (main=%d kot=%d row=%d)", mainIdx, kotIdx, rowIdx)
 	}
 
-	// A pending sweep must show spinners without arming a poller per row.
 	if _, err := svc.EnqueueSourceVerification(ctx, time.Now()); err != nil {
 		t.Fatal(err)
 	}

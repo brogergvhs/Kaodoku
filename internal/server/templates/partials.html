@@ -108,17 +108,22 @@
 {{end}}
 
 {{define "kotatsuSourcesTable"}}
-<div id="kotatsu-sources-table" class="rounded-xl">
+<div id="kotatsu-sources-table" class="rounded-xl" {{template "kotatsuTablePoll" .}}>
 <table class="table table-rounded">
   {{range .}}{{template "sourceRow" .}}{{end}}</table>
 </div>
 {{end}}
 
 {{define "kotatsuSourcesTableOOB"}}
-<div id="kotatsu-sources-table" hx-swap-oob="true" class="rounded-xl">
+<div id="kotatsu-sources-table" hx-swap-oob="true" class="rounded-xl" {{template "kotatsuTablePoll" .}}>
 <table class="table table-rounded">
   {{range .}}{{template "sourceRow" .}}{{end}}</table>
 </div>
+{{end}}
+
+{{define "kotatsuTablePoll"}}
+{{- $verifying := false}}{{range .}}{{if .Active}}{{$verifying = true}}{{end}}{{end}}
+{{- if $verifying}}hx-get="/ui/sources/kotatsu/table" hx-trigger="load delay:2s" hx-swap="outerHTML" hx-sync="this:drop"{{end}}
 {{end}}
 
 {{define "sourceRow"}}
@@ -126,7 +131,8 @@
 <tr class="row-toggle" data-target="det-src-{{.Source.ID}}">
   <td class="w-6"><span class="caret text-base-content/50">{{template "iconChevron"}}</span></td>
   <td class="min-w-0"><span class="font-medium">{{.Source.Name}}</span><div class="truncate max-w-40 text-xs text-base-content/50">{{range .Source.Domains}}{{.}} {{end}}</div></td>
-  <td>{{if .Active}}<span class="loading loading-spinner loading-xs"></span> <span class="text-sm">verifying</span>{{else if not .Source.Enabled}}<span class="badge badge-ghost badge-sm">disabled</span>{{else}}{{template "sourceStatusBadge" .Source.Status}}{{end}}</td>
+  <td>{{if .Active}}<span class="loading loading-spinner loading-xs"></span> <span class="text-sm">verifying</span>{{else if not .Source.Enabled}}<span class="badge badge-ghost badge-sm">disabled</span>{{else}}<span {{with .Source.LastError}}title="{{.}}"{{end}}>{{template "sourceStatusBadge" .Source.Status}}</span>{{end}}</td>
+  <td class="max-sm:hidden">{{if .Titles}}{{.Titles}}<div class="text-xs text-base-content/50">{{if eq .Titles 1}}title{{else}}titles{{end}}</div>{{else}}<span class="text-base-content/40">—</span>{{end}}</td>
   <td class="max-sm:hidden">{{.Source.ChaptersFound}}<div class="text-xs text-base-content/50">{{.Source.SampleImagesFound}} imgs</div></td>
   <td class="text-sm max-sm:hidden">{{orDash .Source.ChapterFetch}} / {{orDash .Source.ImageFetch}}</td>
   <td class="text-right">
@@ -142,7 +148,7 @@
   </td>
 </tr>
 <tr id="det-src-{{.Source.ID}}" class="bg-base-200" hidden>
-  <td colspan="6">{{template "sourceSteps" .Source}}</td>
+  <td colspan="7">{{template "sourceSteps" .Source}}</td>
 </tr>
 </tbody>
 {{end}}
@@ -156,6 +162,7 @@
 {{end}}
 
 {{define "sourceSteps"}}
+{{$failed := false}}{{range .VerifySteps}}{{if eq .Status "failed"}}{{$failed = true}}{{end}}{{end}}
 {{if .VerifySteps}}
 <div class="steps-line my-2">
   {{range .VerifySteps}}
@@ -166,12 +173,18 @@
   </div>
   {{end}}
 </div>
-{{range .VerifySteps}}{{if .Log}}
+{{range .VerifySteps}}{{if and .Log (eq .Status "failed")}}
 <div class="mt-2"><span class="badge badge-error badge-soft badge-sm">{{.Name}}</span><pre class="mt-1 rounded bg-base-300 p-2 text-xs whitespace-pre-wrap break-all">{{.Log}}</pre></div>
 {{end}}{{end}}
-{{else if .LastError}}<pre class="rounded bg-base-300 p-2 text-xs whitespace-pre-wrap break-all">{{.LastError}}</pre>
-{{else}}<p class="text-sm text-base-content/60 my-2">Not verified yet — run Verify to see the pipeline.</p>{{end}}
-{{if .LastCheckedAt}}<div class="text-xs text-base-content/50 mt-1">Last checked: {{.LastCheckedAt}}</div>{{end}}
+{{else if not .LastError}}<p class="text-sm text-base-content/60 my-2">Not verified yet — run Verify to see the pipeline.</p>{{end}}
+{{if and .LastError (not $failed)}}
+<div class="mt-2"><span class="badge badge-error badge-soft badge-sm">last error</span><pre class="mt-1 rounded bg-base-300 p-2 text-xs whitespace-pre-wrap break-all">{{.LastError}}</pre>
+{{if .VerifySteps}}<p class="text-xs text-base-content/50">This happened after the verification above — re-run Verify to re-test the pipeline.</p>{{end}}</div>
+{{end}}
+{{if and .VerifySteps $failed (eq .Status "healthy")}}
+<p class="text-xs text-base-content/50 mt-1">A later title update succeeded, so the badge is green while this older check still shows a failure.</p>
+{{end}}
+{{if .LastCheckedAt}}<div class="text-xs text-base-content/50 mt-1">Last verified: {{.LastCheckedAt}}</div>{{end}}
 {{end}}
 
 {{define "sourceEdit"}}

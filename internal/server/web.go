@@ -133,6 +133,7 @@ type sourceRowView struct {
 	Source sources.Source
 	Active bool
 	Poll   bool
+	Titles int // library titles using this source
 }
 type sourceProbeView struct {
 	TitleID  int64
@@ -379,6 +380,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/sources/custom", u.srcAddCustom)
 	mux.HandleFunc("GET /ui/sources/kotatsu", u.kotatsuModal)
 	mux.HandleFunc("GET /ui/sources/kotatsu/list", u.kotatsuBrowse)
+	mux.HandleFunc("GET /ui/sources/kotatsu/table", u.kotatsuTable)
 	mux.HandleFunc("POST /ui/sources/kotatsu/import", u.kotatsuImport)
 	mux.HandleFunc("GET /ui/library/table", u.libraryTable)
 	mux.HandleFunc("GET /ui/jobs/table", u.jobsTable)
@@ -3451,7 +3453,7 @@ func (u *webUI) srcVerify(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: true, Poll: true})
+	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: true, Poll: true, Titles: u.sourceTitleCount(r.Context(), id)})
 }
 
 func (u *webUI) srcEnabled(w http.ResponseWriter, r *http.Request) {
@@ -3485,9 +3487,10 @@ func (u *webUI) sourceRows(ctx context.Context, srcs []sources.Source) []sourceR
 			verifying[p.SourceID] = true
 		}
 	}
+	counts, _ := u.svc.SourceTitleCounts(ctx)
 	rows := make([]sourceRowView, len(srcs))
 	for i, s := range srcs {
-		rows[i] = sourceRowView{Source: s, Active: verifying[s.ID]}
+		rows[i] = sourceRowView{Source: s, Active: verifying[s.ID], Titles: counts[s.ID]}
 	}
 	return rows
 }
@@ -3511,7 +3514,12 @@ func (u *webUI) srcRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active, _, _ := u.jobStateFor(r.Context(), jobs.TypeVerifySource, service.JobPayload{SourceID: id})
-	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: active, Poll: active})
+	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: active, Poll: active, Titles: u.sourceTitleCount(r.Context(), id)})
+}
+
+func (u *webUI) sourceTitleCount(ctx context.Context, id string) int {
+	counts, _ := u.svc.SourceTitleCounts(ctx)
+	return counts[id]
 }
 
 // sourceEditView carries the scraper choices next to the profile fields.
@@ -3529,8 +3537,6 @@ func (u *webUI) srcEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	names := registry.Names()
 
-	// Dynamic scrapers (kotatsu:<PARSER>) aren't in the registry list; keep
-	// the current one selectable so saving doesn't silently rewrite it.
 	if !slices.Contains(names, src.Scraper) && src.Scraper != "" {
 		names = append([]string{src.Scraper}, names...)
 	}
