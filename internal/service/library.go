@@ -703,7 +703,11 @@ func (s *LibraryService) downloadServiceForTitle(
 	title library.Title,
 ) (*DownloadService, error) {
 	svc, err := func() (*DownloadService, error) {
-		if src, ok := s.sourceForTitle(ctx, title); ok {
+		src, ok, err := s.sourceForTitle(ctx, title)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			next := ConfigForSource(*cfg, src, SourceConfigOptions{})
 			next.LanguageMode = title.LanguageMode
 			return NewSourceDownloadService(&next, logSvc, progress, src.Scraper)
@@ -743,17 +747,24 @@ func (s *LibraryService) comicInfoTemplate(ctx context.Context, title library.Ti
 	return &ci
 }
 
-func (s *LibraryService) sourceForTitle(ctx context.Context, title library.Title) (sources.Source, bool) {
+var errSourceDisabled = errors.New("disabled")
+
+func (s *LibraryService) sourceForTitle(ctx context.Context, title library.Title) (sources.Source, bool, error) {
 	if strings.TrimSpace(title.SourceID) != "" {
 		if list, err := s.listSources(ctx); err == nil {
 			for _, src := range list {
-				if src.ID == title.SourceID && src.Enabled {
-					return src, true
+				if src.ID != title.SourceID {
+					continue
 				}
+				if !src.Enabled {
+					return sources.Source{}, false, fmt.Errorf("source %s: %w", src.ID, errSourceDisabled)
+				}
+				return src, true, nil
 			}
 		}
 	}
-	return s.sourceForURL(ctx, title.SourceURL)
+	src, ok := s.sourceForURL(ctx, title.SourceURL)
+	return src, ok, nil
 }
 
 func (s *LibraryService) sourceForURL(ctx context.Context, target string) (sources.Source, bool) {

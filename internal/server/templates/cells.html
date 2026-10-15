@@ -135,7 +135,8 @@
   <p class="text-xs text-base-content/50">{{if .Filtered}}{{.Total}} matching · {{end}}{{.Available}} parsers available{{if .Capped}} · showing the first {{len .Rows}}, search to narrow it down{{end}}</p>
   <button id="kotatsu-import-btn" class="btn btn-sm btn-primary" disabled
     hx-post="/ui/sources/kotatsu/import" hx-include="#kotatsu-browse input[name='id']:checked, #kotatsu-filters"
-    hx-target="#kotatsu-browse" hx-swap="outerHTML" hx-disabled-elt="this">Import</button>
+    hx-target="#kotatsu-browse" hx-swap="outerHTML" hx-disabled-elt="this" hx-indicator="this">
+    <span class="htmx-indicator loading loading-spinner loading-xs"></span><span id="kotatsu-import-label">Import</span></button>
 </div>
 {{end}}
 </div>

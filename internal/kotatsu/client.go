@@ -134,7 +134,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		var e APIError
 		if json.Unmarshal(body, &e) == nil && e.Code != "" {
 			return &e

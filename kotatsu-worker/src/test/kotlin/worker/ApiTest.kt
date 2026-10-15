@@ -85,6 +85,11 @@ class ApiTest {
             JsUnsupported() to (501 to "unsupported"),
             java.io.IOException("io") to (502 to "upstream_io"),
             IllegalStateException("boom") to (500 to "internal"),
+            io.javalin.http.NotFoundResponse("unknown source") to (404 to "not_found"),
+            io.javalin.http.BadRequestResponse("url required") to (400 to "bad_request"),
+            io.javalin.http.UnauthorizedResponse() to (401 to "unauthorized"),
+            io.javalin.http.BadGatewayResponse("upstream 500") to (502 to "upstream_http"),
+            io.javalin.http.HttpResponseException(418, "teapot") to (418 to "http_418"),
         )
         for ((e, want) in cases) {
             val (status, body) = errorFor(e)
@@ -100,17 +105,28 @@ class ApiTest {
     @Test
     fun handlerWritesErrorStatusAndJson() {
         val app = io.javalin.Javalin.create()
+            .exception(io.javalin.http.HttpResponseException::class.java, ::handleError)
             .exception(Exception::class.java, ::handleError)
             .get("/boom") { throw CloudflareBlocked("https://x/y") }
+            .get("/missing") { throw io.javalin.http.NotFoundResponse("manga not found on source") }
             .start(0)
         try {
-            val resp = okhttp3.OkHttpClient().newCall(
+            val client = okhttp3.OkHttpClient()
+            val resp = client.newCall(
                 okhttp3.Request.Builder().url("http://127.0.0.1:${app.port()}/boom?source=TEST").build()
             ).execute()
             val body = resp.use { it.body!!.string() }
             assertEquals(503, resp.code)
             assertTrue(body.contains("\"error\":\"cloudflare_challenge\""), body)
             assertTrue(body.contains("\"source\":\"TEST\""), body)
+
+            val nf = client.newCall(
+                okhttp3.Request.Builder().url("http://127.0.0.1:${app.port()}/missing?source=TEST").build()
+            ).execute()
+            val nfBody = nf.use { it.body!!.string() }
+            assertEquals(404, nf.code)
+            assertTrue(nfBody.contains("\"error\":\"not_found\""), nfBody)
+            assertTrue(nfBody.contains("manga not found on source"), nfBody)
         } finally {
             app.stop()
         }

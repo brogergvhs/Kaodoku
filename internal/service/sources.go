@@ -173,6 +173,15 @@ func (s *sourceService) VerifySource(ctx context.Context, cfg *config.Config, lo
 	checkErr := s.verify(ctx, cfg, logSvc, src, &result)
 	if checkErr != nil {
 		result.Error = checkErr.Error()
+		// A dead worker says nothing about the parser: keep the last good
+		// verify pipeline and only flag the source degraded.
+		if workerUnavailable(checkErr) {
+			result.Status = sources.StatusDegraded
+			if err := s.repo.UpdateHealth(ctx, src.ID, sources.StatusDegraded, result.Error); err != nil {
+				return result, err
+			}
+			return result, checkErr
+		}
 	}
 	if err := s.repo.UpdateCheck(ctx, src.ID, sources.CheckResult{
 		Status: result.Status, LastError: result.Error,
@@ -443,7 +452,7 @@ func fetchFailureStatus(err error) string {
 		switch {
 		case ke.IsCloudflare():
 			return sources.StatusRequiresCF
-		case ke.Code == "rate_limited":
+		case ke.Code == "rate_limited" || ke.Code == "unauthorized":
 			return sources.StatusDegraded
 		default:
 			return sources.StatusBroken
@@ -452,7 +461,14 @@ func fetchFailureStatus(err error) string {
 	if strings.Contains(strings.ToLower(err.Error()), "cloudflare") {
 		return sources.StatusRequiresCF
 	}
+	if workerUnavailable(err) {
+		return sources.StatusDegraded
+	}
 	return sources.StatusBroken
+}
+
+func workerUnavailable(err error) bool {
+	return strings.Contains(err.Error(), "kotatsu worker")
 }
 
 func imageExtensions(images []string) []string {

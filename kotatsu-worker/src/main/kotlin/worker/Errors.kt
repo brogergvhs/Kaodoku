@@ -1,6 +1,7 @@
 package worker
 
 import io.javalin.http.Context
+import io.javalin.http.HttpResponseException
 import org.jsoup.HttpStatusException
 import org.koitharu.kotatsu.parsers.exception.AuthRequiredException
 import org.koitharu.kotatsu.parsers.exception.ContentUnavailableException
@@ -27,6 +28,17 @@ internal val log = LoggerFactory.getLogger("worker")
 
 internal fun errorFor(e: Exception): Pair<Int, ApiError> = when (e) {
     is CloudflareBlocked -> 503 to ApiError("cloudflare_challenge", msg(e), url = e.url)
+    is HttpResponseException -> e.status to ApiError(
+        when (e.status) {
+            400 -> "bad_request"
+            401 -> "unauthorized"
+            404 -> "not_found"
+            429 -> "rate_limited"
+            502 -> "upstream_http"
+            else -> "http_${e.status}"
+        },
+        msg(e),
+    )
     is NotFoundException -> 404 to ApiError("not_found", msg(e))
     is TooManyRequestExceptions -> 429 to ApiError("rate_limited", msg(e), url = e.url)
     is AuthRequiredException -> 401 to ApiError("auth_required", msg(e))

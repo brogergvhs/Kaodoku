@@ -2710,7 +2710,7 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 }
 
 func (s *JobService) markTitleSourceHealth(ctx context.Context, title library.Title, runErr error, partial bool) error {
-	if strings.TrimSpace(title.SourceID) == "" {
+	if strings.TrimSpace(title.SourceID) == "" || errors.Is(runErr, errSourceDisabled) {
 		return nil
 	}
 	if runErr != nil {

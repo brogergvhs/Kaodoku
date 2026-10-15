@@ -131,7 +131,8 @@ document.addEventListener("change", function (e) {
     "#kotatsu-browse input[name='id']:checked:not(:disabled)",
   ).length;
   btn.disabled = n === 0;
-  btn.textContent = n ? "Import " + n : "Import";
+  var label = btn.querySelector("#kotatsu-import-label") || btn;
+  label.textContent = n ? "Import " + n : "Import";
 });
 
 // Tag picker: the filter input hides non-matching checkbox rows.

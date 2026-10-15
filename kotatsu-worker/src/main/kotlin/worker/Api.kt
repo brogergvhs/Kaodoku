@@ -73,6 +73,7 @@ class Api(private val ctx: JvmLoaderContext, private val key: String) {
         val url = c.queryParam("url") ?: throw BadRequestResponse("url required")
         mangaCache.remove("${p.source.name}|$url")
         val manga = resolve(p, url)
+        mangaCache["${p.source.name}|${manga.publicUrl}"] = manga
         c.json(ChaptersResult(manga.publicUrl, manga.chapters.orEmpty().map {
             ChapterInfo(it.url, it.numberString() ?: "", it.title ?: "", it.volume,
                 it.branch ?: "", if (it.uploadDate > 0) Instant.ofEpochMilli(it.uploadDate).toString() else "")

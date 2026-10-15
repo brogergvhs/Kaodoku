@@ -23,6 +23,9 @@ func TestFetchFailureStatus(t *testing.T) {
 		{"upstream http", &kotatsu.APIError{Code: "upstream_http"}, sources.StatusBroken},
 		{"plain text mentioning cloudflare", errors.New("blocked by Cloudflare"), sources.StatusRequiresCF},
 		{"other", errors.New("connection refused"), sources.StatusBroken},
+		{"worker unreachable", fmt.Errorf("fetch chapters: %w", errors.New("kotatsu worker: dial tcp: connection refused")), sources.StatusDegraded},
+		{"worker disabled", errors.New("source needs the kotatsu worker, which is not enabled"), sources.StatusDegraded},
+		{"structured worker error stays broken", &kotatsu.APIError{Code: "parse_failed"}, sources.StatusBroken},
 	}
 	for _, c := range cases {
 		if got := fetchFailureStatus(c.err); got != c.want {

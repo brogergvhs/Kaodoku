@@ -1,6 +1,7 @@
 package worker
 
 import io.javalin.Javalin
+import io.javalin.http.HttpResponseException
 import io.javalin.http.UnauthorizedResponse
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.model.ContentType
@@ -44,7 +45,7 @@ fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
     }.sortedBy { it.name.lowercase() }
 
 fun main() {
-    val key = System.getenv("WORKER_KEY") ?: error("WORKER_KEY env is required")
+    val key = System.getenv("WORKER_KEY")?.takeIf { it.isNotBlank() } ?: error("WORKER_KEY env is required")
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8484
     val solverUrl = System.getenv("FLARESOLVERR_URL")?.takeIf { it.isNotBlank() }
     val solverTimeout = System.getenv("FLARESOLVERR_TIMEOUT_MS")?.toLongOrNull() ?: 60_000
@@ -54,6 +55,7 @@ fun main() {
     val sources = listSources(ctx)
 
     Javalin.create()
+        .exception(HttpResponseException::class.java, ::handleError)
         .exception(Exception::class.java, ::handleError)
         .before { c ->
             if (c.path() !in open && c.header("X-Worker-Key") != key) throw UnauthorizedResponse()
