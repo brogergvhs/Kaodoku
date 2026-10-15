@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// Live check against a running worker; set KAODOKU_KOTATSU_LIVE to
-// "<endpoint>|<key>" to enable, e.g. "http://127.0.0.1:8484|change-me".
 func TestClientLive(t *testing.T) {
 	spec := os.Getenv("KAODOKU_KOTATSU_LIVE")
 	if spec == "" {
@@ -19,7 +17,7 @@ func TestClientLive(t *testing.T) {
 	ctx := context.Background()
 
 	h, err := c.Health(ctx)
-	if err != nil || !h.OK || h.Parsers == 0 {
+	if err != nil || !h.OK {
 		t.Fatalf("Health = %+v, %v", h, err)
 	}
 	srcs, err := c.Sources(ctx)

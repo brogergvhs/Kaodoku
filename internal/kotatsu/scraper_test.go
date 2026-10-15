@@ -40,7 +40,6 @@ func TestScraperChapters(t *testing.T) {
 	if err != nil || resolved != "https://m/x2" {
 		t.Fatalf("resolved = %q, %v", resolved, err)
 	}
-	// Unnumbered chapter dropped; English branch wins the duplicate label.
 	if len(chs) != 2 {
 		t.Fatalf("chapters = %+v", chs)
 	}

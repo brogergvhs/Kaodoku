@@ -2,6 +2,7 @@ package worker
 
 import io.javalin.Javalin
 import io.javalin.http.UnauthorizedResponse
+import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.model.ContentType
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 
@@ -12,17 +13,20 @@ data class SourceInfo(
     val content_type: String,
     val nsfw: Boolean,
     val broken: Boolean,
+    val cloudflare: Boolean,
+    val searchable: Boolean,
     val domains: List<String>,
     val base_url: String,
 )
 
-// Some adult parsers are typed MANGA upstream, so a name/domain hint backs up the content type.
 private val nsfwHint = Regex("hentai|porn|adult|doujin|yaoi", RegexOption.IGNORE_CASE)
 
 fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
     MangaParserSource.entries.mapNotNull { s ->
         runCatching {
             val parser = ctx.newParserInstance(s)
+            val keys = ArrayList<ConfigKey<*>>()
+            parser.onCreateConfig(keys)
             SourceInfo(
                 id = s.name,
                 name = s.title,
@@ -31,6 +35,8 @@ fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
                 nsfw = s.contentType == ContentType.HENTAI ||
                     nsfwHint.containsMatchIn(s.name) || nsfwHint.containsMatchIn(parser.domain),
                 broken = s.isBroken,
+                cloudflare = keys.any { it.key == "intercept_cloudflare" },
+                searchable = parser.filterCapabilities.isSearchSupported,
                 domains = parser.configKeyDomain.presetValues.toList(),
                 base_url = "https://${parser.domain}",
             )
@@ -45,7 +51,7 @@ fun main() {
     val ctx = JvmLoaderContext(solverUrl?.let { FlareSolverr(it, solverTimeout) })
     val api = Api(ctx, key)
     val open = setOf("/healthz", "/image")
-    val sources by lazy { listSources(ctx) }
+    val sources = listSources(ctx)
 
     Javalin.create()
         .exception(Exception::class.java, ::handleError)

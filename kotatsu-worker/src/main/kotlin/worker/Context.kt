@@ -58,14 +58,12 @@ class JvmLoaderContext(private val solver: FlareSolverr? = null) : MangaLoaderCo
 
     internal fun parser(source: MangaParserSource): MangaParser = parsers.getOrPut(source) { newParserInstance(source) }
 
-    // peekBody caps the read: the helper itself peeks Long.MAX_VALUE.
     private fun isChallenge(response: Response): Boolean {
         if (response.code != 403 && response.code != 503) return false
         val probe = response.newBuilder().body(response.peekBody(256_000)).build()
         return CloudFlareHelper.checkResponseForProtection(probe) != CloudFlareHelper.PROTECTION_NOT_DETECTED
     }
 
-    // Hosts that can never be solved (banned IP, protected CDN) back off to 30 min.
     private fun backOff(host: String) {
         val fails = solveFails.merge(host, 1, Int::plus) ?: 1
         solveFailedUntil[host] = System.currentTimeMillis() + minOf(60_000L shl minOf(fails - 1, 5), 1_800_000L)
@@ -135,7 +133,6 @@ class JvmLoaderContext(private val solver: FlareSolverr? = null) : MangaLoaderCo
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    // IOException subtype, not UnsupportedOperationException: parsers call this inside interceptors.
     @Deprecated("Provide a base url")
     override suspend fun evaluateJs(script: String): String? = throw JsUnsupported()
 

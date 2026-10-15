@@ -1,4 +1,3 @@
-// Package kotatsu calls the kotatsu-worker sidecar for external manga sources.
 package kotatsu
 
 import (
@@ -12,7 +11,6 @@ import (
 	"time"
 )
 
-// APIError is a structured failure reported by the worker.
 type APIError struct {
 	Code    string `json:"error"`
 	Message string `json:"message"`
@@ -36,6 +34,8 @@ type Source struct {
 	ContentType string   `json:"content_type"`
 	NSFW        bool     `json:"nsfw"`
 	Broken      bool     `json:"broken"`
+	Cloudflare  bool     `json:"cloudflare"`
+	Searchable  bool     `json:"searchable"`
 	Domains     []string `json:"domains"`
 	BaseURL     string   `json:"base_url"`
 }
@@ -63,7 +63,6 @@ type Chapters struct {
 
 type Health struct {
 	OK      bool   `json:"ok"`
-	Parsers int    `json:"parsers"`
 	Version string `json:"version"`
 	Solver  bool   `json:"solver"`
 }
@@ -80,11 +79,6 @@ func New(endpoint, key string) *Client {
 		key:      key,
 		client:   &http.Client{Timeout: 180 * time.Second},
 	}
-}
-
-// Endpoint returns the worker base URL, for absolutizing /image paths.
-func (c *Client) Endpoint() string {
-	return c.endpoint
 }
 
 func (c *Client) Health(ctx context.Context) (Health, error) {
@@ -107,7 +101,6 @@ func (c *Client) Chapters(ctx context.Context, source, mangaURL string) (Chapter
 	return out, c.get(ctx, "/chapters", url.Values{"source": {source}, "url": {mangaURL}}, &out)
 }
 
-// Pages returns worker-relative, pre-signed /image paths in page order.
 func (c *Client) Pages(ctx context.Context, source, mangaURL, chapterURL string) ([]string, error) {
 	var raw []struct {
 		Image string `json:"image"`

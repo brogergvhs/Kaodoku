@@ -11,8 +11,6 @@ import (
 
 const DefaultEndpoint = "http://localhost:8484"
 
-// ScraperPrefix marks source profiles backed by the worker; the suffix is
-// the worker parser id, e.g. "kotatsu:MANGADEX".
 const ScraperPrefix = "kotatsu:"
 
 const urlSep = "\t"

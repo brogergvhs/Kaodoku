@@ -57,7 +57,7 @@ func TestClientRoundTrips(t *testing.T) {
 		t.Fatalf("Chapters = %+v, %v", chs, err)
 	}
 	pages, err := c.Pages(ctx, "MANGADEX", "https://m/x", "c1")
-	if err != nil || len(pages) != 1 || pages[0] != c.Endpoint()+"/image?source=S&url=u&sig=s" {
+	if err != nil || len(pages) != 1 || pages[0] != c.endpoint+"/image?source=S&url=u&sig=s" {
 		t.Fatalf("Pages = %v, %v", pages, err)
 	}
 }
@@ -76,11 +76,11 @@ func TestClientErrors(t *testing.T) {
 	if _, err := c.Search(ctx, "NOPE", "q"); err == nil {
 		t.Fatal("want error for 404")
 	}
-	bad := New(c.Endpoint(), "wrong")
+	bad := New(c.endpoint, "wrong")
 	if _, err := bad.Sources(ctx); err == nil {
 		t.Fatal("want error for bad key")
 	}
-	if h, err := bad.Health(ctx); err != nil || !h.OK || h.Parsers != 3 {
+	if h, err := bad.Health(ctx); err != nil || !h.OK || h.Version != "v" {
 		t.Fatalf("Health = %+v, %v (healthz must work without a key)", h, err)
 	}
 }
