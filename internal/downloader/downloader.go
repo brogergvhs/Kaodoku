@@ -136,6 +136,15 @@ func (d *Downloader) DownloadImagesConcurrently(
 				continue
 			}
 
+			if ext == ".jpg" {
+				if real := sniffImageExt(path); real != "" && real != ext {
+					renamed := strings.TrimSuffix(path, ext) + real
+					if os.Rename(path, renamed) == nil {
+						path = renamed
+					}
+				}
+			}
+
 			filesMu.Lock()
 			files = append(files, path)
 			filesMu.Unlock()
@@ -465,6 +474,24 @@ func imageExt(rawURL string) string {
 		return cleanImageExt(path.Ext(u.Path))
 	}
 	return cleanImageExt(filepath.Ext(rawURL))
+}
+
+func sniffImageExt(file string) string {
+	f, err := os.Open(file)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	head := make([]byte, 512)
+	n, _ := f.Read(head)
+	mt, _, err := mime.ParseMediaType(http.DetectContentType(head[:n]))
+	if err != nil {
+		return ""
+	}
+	if ext := cleanImageExt("." + strings.TrimPrefix(mt, "image/")); ext != ".jpeg" {
+		return ext
+	}
+	return ".jpg"
 }
 
 func cleanImageExt(ext string) string {
