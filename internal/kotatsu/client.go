@@ -1,6 +1,7 @@
 package kotatsu
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -118,6 +119,28 @@ func (c *Client) Pages(ctx context.Context, source, mangaURL, chapterURL string)
 	return out, nil
 }
 
+func (c *Client) SetConfig(ctx context.Context, source string, values map[string]string) error {
+	body, err := json.Marshal(map[string]any{"source": source, "values": values})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/config", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Worker-Key", c.key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("kotatsu worker: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return apiError("/config", resp)
+	}
+	return nil
+}
+
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
 	u := c.endpoint + path
 	if len(q) > 0 {
@@ -134,12 +157,16 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		var e APIError
-		if json.Unmarshal(body, &e) == nil && e.Code != "" {
-			return &e
-		}
-		return fmt.Errorf("kotatsu worker %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+		return apiError(path, resp)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func apiError(path string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	var e APIError
+	if json.Unmarshal(body, &e) == nil && e.Code != "" {
+		return &e
+	}
+	return fmt.Errorf("kotatsu worker %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
 }

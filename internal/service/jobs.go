@@ -2255,7 +2255,27 @@ func (s *JobService) KotatsuSources(ctx context.Context) ([]kotatsu.Source, erro
 		return nil, err
 	}
 	s.kotSources, s.kotExp = list, time.Now().Add(kotatsuSourcesTTL)
+
+	go s.pushKotatsuConfigs(kc)
 	return list, nil
+}
+
+func (s *JobService) pushKotatsuConfigs(kc *kotatsu.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	srcs, err := s.src.ListSources(ctx)
+	if err != nil {
+		return
+	}
+	for _, src := range srcs {
+		id, ok := strings.CutPrefix(src.Scraper, kotatsu.ScraperPrefix)
+		if !ok || len(src.Domains) == 0 {
+			continue
+		}
+		if err := kc.SetConfig(ctx, id, map[string]string{"domain": src.Domains[0]}); err != nil {
+			return
+		}
+	}
 }
 
 func (s *JobService) KotatsuSample(ctx context.Context, src kotatsu.Source) string {
@@ -2362,9 +2382,11 @@ func (s *JobService) EnqueueSourceVerification(ctx context.Context, runAfter tim
 	if err != nil {
 		return 0, err
 	}
+	counts := map[string]int{}
 	var errs []error
 	n := 0
 	for _, src := range srcs {
+		counts[src.Status]++
 		if !src.Enabled {
 			continue
 		}
@@ -2374,6 +2396,8 @@ func (s *JobService) EnqueueSourceVerification(ctx context.Context, runAfter tim
 		}
 		errs = append(errs, err)
 	}
+	log.Printf("source verification sweep: %d queued; current health: healthy %d, degraded %d, requires_cf %d, broken %d, unknown %d",
+		n, counts[sources.StatusHealthy], counts[sources.StatusDegraded], counts[sources.StatusRequiresCF], counts[sources.StatusBroken], counts["unknown"])
 	return n, errors.Join(errs...)
 }
 

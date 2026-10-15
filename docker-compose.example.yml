@@ -108,6 +108,9 @@ services:
       # Optional: lets the worker clear Cloudflare challenges. 
       # Must share the worker's egress IP, so run it next to this service.
       FLARESOLVERR_URL: http://flaresolverr:8191
+      # Optional: lets parsers that need JavaScript run it in the Selenium
+      # browser-worker (same egress-IP caveat as FlareSolverr).
+      BROWSER_WORKER_URL: http://browser-worker:8192
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8484/healthz"]
       interval: 30s

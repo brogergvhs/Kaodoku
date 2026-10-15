@@ -2,8 +2,11 @@ package kotatsu
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -82,5 +85,33 @@ func TestClientErrors(t *testing.T) {
 	}
 	if h, err := bad.Health(ctx); err != nil || !h.OK || h.Version != "v" {
 		t.Fatalf("Health = %+v, %v (healthz must work without a key)", h, err)
+	}
+}
+
+func TestSetConfig(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c, mux := testServer(t)
+
+	var got string
+	mux.HandleFunc("/config", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.SetConfig(ctx, "MANGADEX", map[string]string{"domain": "mirror.example"}); err != nil {
+		t.Fatalf("SetConfig() error = %v", err)
+	}
+	for _, want := range []string{`"source":"MANGADEX"`, `"domain":"mirror.example"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("body %s missing %s", got, want)
+		}
+	}
+
+	bad := New(c.endpoint, "wrong")
+	err := bad.SetConfig(ctx, "MANGADEX", nil)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != "unauthorized" {
+		t.Fatalf("SetConfig(bad key) = %v, want structured unauthorized", err)
 	}
 }

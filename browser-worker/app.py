@@ -79,8 +79,11 @@ def driver_options():
 SESSIONS = threading.BoundedSemaphore(int_env("BROWSER_WORKER_MAX_SESSIONS", 1))
 
 
-def open_driver():
-    driver = webdriver.Remote(command_executor=env("SELENIUM_REMOTE_URL", "http://selenium:4444/wd/hub"), options=driver_options())
+def open_driver(load_strategy=None):
+    options = driver_options()
+    if load_strategy:
+        options.page_load_strategy = load_strategy
+    driver = webdriver.Remote(command_executor=env("SELENIUM_REMOTE_URL", "http://selenium:4444/wd/hub"), options=options)
     timeout = int_env("BROWSER_WORKER_PAGE_LOAD_TIMEOUT_S", 120)
     driver.set_page_load_timeout(timeout)
     driver.set_script_timeout(timeout)
@@ -217,6 +220,103 @@ def rendered_html(page_url):
             if not looks_like_reader_url(page_url) and has_chapter_links(driver):
                 return rendered_chapter_links(driver, pause)
             return rendered_images(driver, pause)
+        finally:
+            driver.quit()
+
+
+def apply_session(driver, cookies, user_agent):
+    if user_agent:
+        cdp(driver, "Network.setUserAgentOverride", {"userAgent": user_agent})
+    for c in cookies or []:
+        params = {"name": c["name"], "value": c["value"], "domain": c.get("domain", ""), "path": c.get("path", "/")}
+        if c.get("secure"):
+            params["secure"] = True
+        try:
+            cdp(driver, "Network.setCookie", params)
+        except Exception:
+            pass
+
+
+def intercept_requests(page_url, pattern, page_script, timeout_ms, max_requests, cookies=None, user_agent=None):
+    rx = re.compile(pattern) if pattern else None
+    limit = max_requests or 10
+    with SESSIONS:
+        # The payload arrives as a navigation while the page is still loading,
+        # and that navigation can wedge the original load forever.
+        driver = open_driver("none")
+        try:
+            cdp(driver, "Network.enable")
+            apply_session(driver, cookies, user_agent)
+            if page_script:
+                cdp(driver, "Page.enable")
+                cdp(driver, "Page.addScriptToEvaluateOnNewDocument", {"source": page_script})
+            driver.get(page_url)
+            deadline = time.time() + max(1, (timeout_ms or 30000) / 1000)
+            # Results arrive as navigations whose payload rides in the URL
+            # fragment; Network events strip fragments, Page events keep them.
+            found = {}
+            while time.time() < deadline and len(found) < limit:
+                for entry in driver.get_log("performance"):
+                    try:
+                        msg = json.loads(entry["message"])["message"]
+                    except (KeyError, ValueError):
+                        continue
+                    method = msg.get("method")
+                    params = msg.get("params", {})
+                    if method == "Network.requestWillBeSent":
+                        req = params.get("request", {})
+                        urls = [req.get("url", ""), params.get("documentURL", "")]
+                    elif method in ("Page.frameRequestedNavigation", "Page.frameScheduledNavigation"):
+                        req = {}
+                        urls = [params.get("url", "")]
+                    else:
+                        continue
+                    for url in urls:
+                        if not url or (rx and not rx.search(url)):
+                            continue
+                        body = req.get("postData")
+                        if body is None and req.get("hasPostData"):
+                            try:
+                                body = cdp(driver, "Network.getRequestPostData", {"requestId": params["requestId"]}).get("postData")
+                            except Exception:
+                                body = None
+                        base = url.split("#")[0]
+                        cur = found.get(base)
+                        if cur is None:
+                            found[base] = {"url": url, "method": req.get("method", "GET"), "headers": req.get("headers", {}), "body": body}
+                        else:
+                            if len(url) > len(cur["url"]):
+                                cur["url"] = url
+                            if body and not cur["body"]:
+                                cur["body"] = body
+                            if req.get("headers") and not cur["headers"]:
+                                cur["headers"] = req["headers"]
+                                cur["method"] = req.get("method", cur["method"])
+                if not found:
+                    try:
+                        check_blocked_page(driver)
+                    except RuntimeError:
+                        raise
+                    except Exception:
+                        pass
+                time.sleep(0.3)
+            return list(found.values())[:limit]
+        finally:
+            driver.quit()
+
+
+def evaluate_script(page_url, script, timeout_ms, cookies=None, user_agent=None):
+    with SESSIONS:
+        driver = open_driver()
+        try:
+            if timeout_ms:
+                driver.set_script_timeout(max(1, timeout_ms / 1000))
+            if page_url and page_url != "about:blank":
+                cdp(driver, "Network.enable")
+                apply_session(driver, cookies, user_agent)
+                driver.get(page_url)
+                check_blocked_page(driver)
+            return driver.execute_script("return (" + script + ");")
         finally:
             driver.quit()
 
@@ -368,12 +468,44 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        if self.path not in ("/download", "/html"):
+        if self.path not in ("/download", "/html", "/evaluate", "/intercept"):
             self.send_error(404)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length))
+            if self.path == "/intercept":
+                started = time.time()
+                page_url = payload["page_url"]
+                print(f"intercept on {page_url} cookies={len(payload.get('cookies') or [])} ua={(payload.get('user_agent') or '')[:40]}", flush=True)
+                requests = intercept_requests(
+                    page_url, payload.get("url_pattern"), payload.get("page_script"),
+                    int(payload.get("timeout_ms") or 0), int(payload.get("max_requests") or 0),
+                    payload.get("cookies"), payload.get("user_agent"))
+                print(f"intercept done {page_url} requests={len(requests)} elapsed={time.time() - started:.1f}s", flush=True)
+                data = json.dumps({"requests": requests}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
+            if self.path == "/evaluate":
+                started = time.time()
+                page_url = payload.get("page_url") or "about:blank"
+                print(f"evaluate on {page_url}", flush=True)
+                result = evaluate_script(page_url, payload["script"], int(payload.get("timeout_ms") or 0),
+                                         payload.get("cookies"), payload.get("user_agent"))
+                print(f"evaluate done {page_url} elapsed={time.time() - started:.1f}s", flush=True)
+                data = json.dumps({"result": result}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
             if self.path == "/html":
                 started = time.time()
                 page_url = payload["page_url"]
@@ -396,6 +528,7 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             return
         except Exception as exc:
+            print(f"{self.path} failed: {exc}", flush=True)
             data = json.dumps({"error": str(exc)}).encode()
             self.send_response(502)
             self.send_header("Content-Type", "application/json")

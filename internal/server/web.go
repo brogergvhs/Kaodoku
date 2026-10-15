@@ -3578,6 +3578,20 @@ func (u *webUI) srcEditSave(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
+	// The sync upsert deliberately preserves the stored enabled flag, so the
+	// checkbox needs its own write.
+	if err := u.svc.SetSourceEnabled(r.Context(), id, p.Enabled); err != nil {
+		u.fail(w, err)
+		return
+	}
+	if parserID, ok := strings.CutPrefix(p.Scraper, kotatsu.ScraperPrefix); ok && len(p.Domains) > 0 {
+		if kc := u.svc.KotatsuClient(r.Context()); kc != nil {
+			if err := kc.SetConfig(r.Context(), parserID, map[string]string{"domain": p.Domains[0]}); err != nil {
+				u.fail(w, fmt.Errorf("saved, but the worker rejected the domain: %w", err))
+				return
+			}
+		}
+	}
 	if r.Form.Has("chapter_fetch") || r.Form.Has("image_fetch") {
 		if err := u.svc.SetSourceMethods(r.Context(), id, r.FormValue("chapter_fetch"), r.FormValue("image_fetch")); err != nil {
 			u.fail(w, err)

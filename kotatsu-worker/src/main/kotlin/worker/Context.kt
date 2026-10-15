@@ -3,18 +3,29 @@ package worker
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.koitharu.kotatsu.parsers.bitmap.Bitmap
+import org.koitharu.kotatsu.parsers.bitmap.Rect
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.config.MangaSourceConfig
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.MangaSource
 import org.koitharu.kotatsu.parsers.network.CloudFlareHelper
+import org.koitharu.kotatsu.parsers.webview.InterceptedRequest
+import org.koitharu.kotatsu.parsers.webview.InterceptionConfig
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import javax.imageio.ImageIO
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -44,12 +55,17 @@ private val privateAddressGuard = okhttp3.Interceptor { chain ->
     chain.proceed(chain.request())
 }
 
-class JvmLoaderContext(private val solver: FlareSolverr? = null) : MangaLoaderContext() {
+class JvmLoaderContext(
+    private val solver: FlareSolverr? = null,
+    private val js: BrowserJs? = null,
+) : MangaLoaderContext() {
     override val cookieJar: CookieJar = MemoryCookieJar()
 
     internal val solverEnabled = solver != null
+    internal val jsEnabled = js != null
 
     private val parsers = ConcurrentHashMap<MangaParserSource, MangaParser>()
+    private val configs = ConcurrentHashMap<String, Map<String, String>>()
     private val solveLocks = ConcurrentHashMap<String, Any>()
     private val solveFailedUntil = ConcurrentHashMap<String, Long>()
     private val solveFails = ConcurrentHashMap<String, Int>()
@@ -57,6 +73,12 @@ class JvmLoaderContext(private val solver: FlareSolverr? = null) : MangaLoaderCo
     private val solvedAgents = ConcurrentHashMap<String, String>()
 
     internal fun parser(source: MangaParserSource): MangaParser = parsers.getOrPut(source) { newParserInstance(source) }
+
+    internal fun setConfig(source: MangaParserSource, values: Map<String, String>) {
+        if (configs[source.name] == values) return
+        if (values.isEmpty()) configs.remove(source.name) else configs[source.name] = values
+        parsers.remove(source)
+    }
 
     private fun isChallenge(response: Response): Boolean {
         if (response.code != 403 && response.code != 503) return false
@@ -134,21 +156,105 @@ class JvmLoaderContext(private val solver: FlareSolverr? = null) : MangaLoaderCo
         .build()
 
     @Deprecated("Provide a base url")
-    override suspend fun evaluateJs(script: String): String? = throw JsUnsupported()
+    override suspend fun evaluateJs(script: String): String? = evaluateJs("about:blank", script, 60_000)
 
-    override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String? = throw JsUnsupported()
+    override suspend fun evaluateJs(baseUrl: String, script: String, timeout: Long): String? {
+        val browser = js ?: throw JsUnsupported()
+        return withContext(Dispatchers.IO) {
+            withBrowser(baseUrl) {
+                browser.evaluate(baseUrl, script, if (timeout > 0) timeout else 60_000, session(baseUrl))
+            }
+        }
+    }
 
-    override fun getConfig(source: MangaSource): MangaSourceConfig = DefaultConfig
+    // Selenium sessions get a fresh FlareSolverr clearance: minutes-old
+    // cookies that still satisfy OkHttp are rejected by Cloudflare when a new
+    // browser presents them, and a block inside the page retries once more.
+    private fun <T> withBrowser(url: String, block: () -> T): T {
+        val parsed = url.toHttpUrlOrNull()
+        if (solver != null && parsed != null) {
+            val last = solvedAt[parsed.host]
+            if (last != null && System.currentTimeMillis() - last > 60_000) {
+                solve(parsed, last)
+            }
+        }
+        return try {
+            block()
+        } catch (e: IOException) {
+            if (solver == null || parsed == null || e.message?.contains("blocked by Cloudflare") != true) throw e
+            solve(parsed, solvedAt[parsed.host] ?: 0)
+            block()
+        }
+    }
+
+    // Hand the FlareSolverr clearance to the Selenium session: cf_clearance is
+    // bound to the user agent it was solved with.
+    private fun session(url: String): BrowserSession {
+        val parsed = url.toHttpUrlOrNull() ?: return BrowserSession(emptyList(), null)
+        return BrowserSession(cookieJar.loadForRequest(parsed), solvedAgents[agentKey(parsed)])
+    }
+
+    override suspend fun interceptWebViewRequests(url: String, urlPattern: String, timeoutMs: Long): List<InterceptedRequest> =
+        interceptWebViewRequests(url, InterceptionConfig(timeoutMs = timeoutMs, urlPattern = Regex(urlPattern)))
+
+    override suspend fun interceptWebViewRequests(url: String, config: InterceptionConfig): List<InterceptedRequest> {
+        val browser = js ?: throw UnsupportedOperationException("WebView request interception is not available")
+        return withContext(Dispatchers.IO) {
+            withBrowser(url) { browser.intercept(url, config, session(url)) }
+        }
+    }
+
+    override suspend fun captureWebViewUrls(url: String, urlPattern: Regex, timeoutMs: Long): List<String> {
+        val browser = js ?: throw UnsupportedOperationException("WebView URL capture is not available")
+        return withContext(Dispatchers.IO) {
+            withBrowser(url) {
+                browser.intercept(url, InterceptionConfig(timeoutMs = timeoutMs, urlPattern = urlPattern), session(url))
+                    .map { it.url }
+            }
+        }
+    }
+
+    override fun getConfig(source: MangaSource): MangaSourceConfig = object : MangaSourceConfig {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T> get(key: ConfigKey<T>): T {
+            val raw = configs[source.name]?.get(key.key) ?: return key.defaultValue
+            return when (key.defaultValue) {
+                is Boolean -> (raw.toBooleanStrictOrNull() ?: key.defaultValue) as T
+                else -> raw as T
+            }
+        }
+    }
 
     override fun getDefaultUserAgent(): String = UA
 
-    override fun redrawImageResponse(response: Response, redraw: (Bitmap) -> Bitmap): Response =
-        throw UnsupportedOperationException("Image descrambling is not available")
+    override fun redrawImageResponse(response: Response, redraw: (Bitmap) -> Bitmap): Response {
+        val bytes = response.body?.bytes() ?: throw IOException("empty image response")
+        val source = ImageIO.read(bytes.inputStream()) ?: throw IOException("unsupported image format")
+        val redrawn = (redraw(AwtBitmap(source)) as AwtBitmap).image
+        val out = ByteArrayOutputStream()
+        ImageIO.write(redrawn, "png", out)
+        return response.newBuilder()
+            .body(out.toByteArray().toResponseBody("image/png".toMediaType()))
+            .header("Content-Type", "image/png")
+            .build()
+    }
 
     override fun createBitmap(width: Int, height: Int): Bitmap =
-        throw UnsupportedOperationException("Bitmap is not available")
+        AwtBitmap(BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB))
+}
 
-    private object DefaultConfig : MangaSourceConfig {
-        override fun <T> get(key: ConfigKey<T>): T = key.defaultValue
+internal class AwtBitmap(val image: BufferedImage) : Bitmap {
+    override val width get() = image.width
+    override val height get() = image.height
+
+    override fun drawBitmap(sourceBitmap: Bitmap, src: Rect, dst: Rect) {
+        val g = image.createGraphics()
+        g.drawImage(
+            (sourceBitmap as AwtBitmap).image,
+            dst.left, dst.top, dst.right, dst.bottom,
+            src.left, src.top, src.right, src.bottom,
+            null,
+        )
+        g.dispose()
     }
 }

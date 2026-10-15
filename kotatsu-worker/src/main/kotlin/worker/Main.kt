@@ -44,12 +44,15 @@ fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
         }.getOrNull()
     }.sortedBy { it.name.lowercase() }
 
+data class ConfigReq(val source: String, val values: Map<String, String> = emptyMap())
+
 fun main() {
     val key = System.getenv("WORKER_KEY")?.takeIf { it.isNotBlank() } ?: error("WORKER_KEY env is required")
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8484
     val solverUrl = System.getenv("FLARESOLVERR_URL")?.takeIf { it.isNotBlank() }
     val solverTimeout = System.getenv("FLARESOLVERR_TIMEOUT_MS")?.toLongOrNull() ?: 60_000
-    val ctx = JvmLoaderContext(solverUrl?.let { FlareSolverr(it, solverTimeout) })
+    val browserUrl = System.getenv("BROWSER_WORKER_URL")?.takeIf { it.isNotBlank() }
+    val ctx = JvmLoaderContext(solverUrl?.let { FlareSolverr(it, solverTimeout) }, browserUrl?.let { BrowserJs(it) })
     val api = Api(ctx, key)
     val open = setOf("/healthz", "/image")
     val sources = listSources(ctx)
@@ -67,10 +70,19 @@ fun main() {
                     "parsers" to sources.size,
                     "version" to System.getProperty("worker.lib", "dev"),
                     "solver" to ctx.solverEnabled,
+                    "js" to ctx.jsEnabled,
                 ),
             )
         }
         .get("/sources") { c -> c.json(sources) }
+        .post("/config") { c ->
+            val req = c.bodyAsClass(ConfigReq::class.java)
+            val src = runCatching { MangaParserSource.valueOf(req.source) }.getOrElse {
+                throw io.javalin.http.NotFoundResponse("unknown source")
+            }
+            ctx.setConfig(src, req.values)
+            c.status(204)
+        }
         .get("/search", api::search)
         .get("/chapters", api::chapters)
         .get("/pages", api::pages)
