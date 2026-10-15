@@ -133,13 +133,14 @@ func (u *webUI) chapterBulkRenameApply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[id] = true
-		var vol float64
+		var vol *float64
 		if v := strings.TrimSpace(vols[i]); v != "" {
-			vol, err = strconv.ParseFloat(v, 64)
-			if err != nil || vol < 0 {
+			parsed, err := strconv.ParseFloat(v, 64)
+			if err != nil || parsed < 0 {
 				u.fail(w, fmt.Errorf("row %d has an invalid volume", i+1))
 				return
 			}
+			vol = &parsed
 		}
 		items = append(items, library.ChapterRename{ChapterID: id, Title: names[i], Volume: vol})
 	}

@@ -622,9 +622,10 @@ func TestBulkRenameChapters(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	vp := func(f float64) *float64 { return &f }
 	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
-		{ChapterID: chs[0].ID, Title: "Battlefield", Volume: 9},
-		{ChapterID: chs[1].ID, Title: "", Volume: 9},
+		{ChapterID: chs[0].ID, Title: "Battlefield", Volume: vp(9)},
+		{ChapterID: chs[1].ID, Title: "", Volume: vp(9)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +640,7 @@ func TestBulkRenameChapters(t *testing.T) {
 
 	// Volume 0 clears the association; a foreign chapter aborts everything.
 	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
-		{ChapterID: chs[0].ID, Title: "Battlefield", Volume: 0},
+		{ChapterID: chs[0].ID, Title: "Battlefield", Volume: vp(0)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -649,7 +650,7 @@ func TestBulkRenameChapters(t *testing.T) {
 	}
 	before := chs[0].Title
 	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
-		{ChapterID: chs[0].ID, Title: "Changed", Volume: 1},
+		{ChapterID: chs[0].ID, Title: "Changed", Volume: vp(1)},
 		{ChapterID: 999999, Title: "X"},
 	}); err == nil {
 		t.Fatal("foreign chapter should fail the whole batch")
@@ -658,5 +659,95 @@ func TestBulkRenameChapters(t *testing.T) {
 	chs, _ = repo.ListChapters(ctx, title.ID)
 	if chs[0].Title != before {
 		t.Fatal("failed batch must not apply partially")
+	}
+}
+
+func TestUpsertChapterVolumeAndUID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://x.test/m", DisplayTitle: "M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := func(label, url string, vol float64, uid string) chapters.Chapter {
+		return chapters.Chapter{Chapter: providers.Chapter{
+			URL: url, Title: "Ch " + label, Label: label, NumMain: 1, Volume: vol, UID: uid,
+		}}
+	}
+	row := func(label string) (vol float64, custom int, uid string) {
+		err := db.QueryRowContext(ctx, `SELECT volume_num, volume_custom, source_uid
+			FROM chapters WHERE title_id = ? AND label = ?`, title.ID, label).Scan(&vol, &custom, &uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		ch("1", "https://x.test/c1", 2, "kot-77"),
+		ch("2", "https://x.test/c2", 0, ""),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vol, _, uid := row("1")
+	if vol != 2 || uid != "kot-77" {
+		t.Fatalf("scraped volume/uid = %v %q", vol, uid)
+	}
+	_, _, uid2 := row("2")
+	if uid2 == "" || uid2 == uid {
+		t.Fatalf("fallback uid = %q", uid2)
+	}
+
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{ch("1", "https://x.test/c1", 0, "kot-77")}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, _, _ := row("1"); vol != 2 {
+		t.Fatalf("volume zeroed by volumeless rescrape: %v", vol)
+	}
+
+	chs, err := repo.ListChapters(ctx, title.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nine := 9.0
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{{ChapterID: chs[0].ID, Title: "Ch 1", Volume: &nine}}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, custom, _ := row("1"); vol != 9 || custom != 1 {
+		t.Fatalf("manual volume = %v custom = %d", vol, custom)
+	}
+
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{ch("1", "https://x.test/c1", 4, "kot-77")}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, _, _ := row("1"); vol != 9 {
+		t.Fatalf("manual volume clobbered by rescrape: %v", vol)
+	}
+
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{{ChapterID: chs[0].ID, Title: "Ch 1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, custom, _ := row("1"); vol != 9 || custom != 1 {
+		t.Fatalf("volumeless rename wiped volume: %v custom %d", vol, custom)
+	}
+	zero := 0.0
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{{ChapterID: chs[0].ID, Title: "Ch 1", Volume: &zero}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{ch("1", "https://x.test/c1", 4, "kot-77")}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, custom, _ := row("1"); vol != 0 || custom != 1 {
+		t.Fatalf("explicit clear overridden by rescrape: %v custom %d", vol, custom)
 	}
 }

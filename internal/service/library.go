@@ -806,6 +806,7 @@ func serviceChapter(chapter library.Chapter) chapters.Chapter {
 		SuffixType: chapter.SuffixType,
 		SuffixNum:  chapter.SuffixNum,
 		Label:      chapter.Label,
+		Volume:     chapter.VolumeNum,
 	}}
 }
 

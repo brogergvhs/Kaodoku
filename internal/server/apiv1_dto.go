@@ -80,6 +80,7 @@ type chapterProgressDTO struct {
 	Title           string     `json:"title"`
 	DisplayName     string     `json:"display_name"`
 	DisplayVolume   string     `json:"display_volume,omitempty"`
+	VolumeNum       float64    `json:"volume_num,omitempty"`
 	NumberMain      int        `json:"number_main"`
 	Downloaded      bool       `json:"downloaded"`
 	Bytes           int64      `json:"bytes"`
@@ -98,7 +99,7 @@ func toChapterProgressDTO(c library.ChapterReadStatus) chapterProgressDTO {
 	d := chapters.DisplayName(c.Label, c.Title)
 	return chapterProgressDTO{
 		ID: c.ID, TitleID: c.TitleID, Label: c.Label, Title: c.Title, NumberMain: c.NumberMain,
-		DisplayName: d.Name, DisplayVolume: d.Volume,
+		DisplayName: d.Name, DisplayVolume: d.Volume, VolumeNum: c.VolumeNum,
 		Downloaded: c.Downloaded, Bytes: c.Bytes, Pages: c.Pages, TotalPages: c.TotalPages,
 		ReadPages: c.ReadPages, LastPage: c.LastPage, Completed: c.Completed, Manual: c.Manual,
 		FirstUnreadPage: c.FirstUnreadPage, LastReadAt: c.LastReadAt, CompletedAt: c.CompletedAt,

@@ -14,7 +14,7 @@ func scraperServer(t *testing.T) *Scraper {
 		case "/chapters":
 			_, _ = w.Write([]byte(`{"resolved_url":"https://m/x2","chapters":[
 				{"url":"c1","number":"1","title":"One","volume":1,"branch":"Français","uploaded_at":""},
-				{"url":"c1en","number":"1","title":"One EN","volume":1,"branch":"English","uploaded_at":""},
+				{"id":42,"url":"c1en","number":"1","title":"One EN","volume":1,"branch":"English","uploaded_at":""},
 				{"url":"c2","number":"2.5","title":"Half","volume":1,"branch":"English","uploaded_at":""},
 				{"url":"c3","number":"","title":"Oneshot","volume":0,"branch":"English","uploaded_at":""}]}`))
 		case "/pages":
@@ -45,6 +45,9 @@ func TestScraperChapters(t *testing.T) {
 	}
 	if chs[0].Label != "1" || chs[0].Title != "One EN" || chs[0].URL != "https://m/x2\tc1en" {
 		t.Fatalf("ch[0] = %+v", chs[0])
+	}
+	if chs[0].Volume != 1 || chs[0].UID != "42" {
+		t.Fatalf("ch[0] volume/uid = %v %q", chs[0].Volume, chs[0].UID)
 	}
 	if chs[1].Label != "2.5" || chs[1].NumMain != 2 || chs[1].SuffixNum != 5 {
 		t.Fatalf("ch[1] = %+v", chs[1])

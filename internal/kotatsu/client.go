@@ -49,6 +49,7 @@ type SearchResult struct {
 }
 
 type Chapter struct {
+	ID         int64  `json:"id"`
 	URL        string `json:"url"`
 	Number     string `json:"number"`
 	Title      string `json:"title"`

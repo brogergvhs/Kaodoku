@@ -380,6 +380,12 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err = ensureColumn(ctx, tx, "chapters", "volume_num", "REAL NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("migrate chapters.volume_num: %w", err)
 	}
+	if err = ensureColumn(ctx, tx, "chapters", "volume_custom", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate chapters.volume_custom: %w", err)
+	}
+	if err = ensureColumn(ctx, tx, "chapters", "source_uid", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate chapters.source_uid: %w", err)
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE chapters SET scraped_title = title
 		WHERE scraped_title = '' AND title != '' AND title_custom = 0`); err != nil {
 		return fmt.Errorf("backfill chapters.scraped_title: %w", err)

@@ -59,6 +59,10 @@ func (s *Scraper) GetChaptersResolved(ctx context.Context, url string) ([]provid
 		if !ok {
 			continue
 		}
+		uid := ""
+		if ch.ID != 0 {
+			uid = strconv.FormatInt(ch.ID, 10)
+		}
 		next := providers.Chapter{
 			URL:        res.ResolvedURL + urlSep + ch.URL,
 			Title:      ch.Title,
@@ -66,6 +70,8 @@ func (s *Scraper) GetChaptersResolved(ctx context.Context, url string) ([]provid
 			SuffixType: suffixType,
 			SuffixNum:  suffixNum,
 			Label:      label,
+			Volume:     float64(ch.Volume),
+			UID:        uid,
 		}
 		if k, seen := byLabel[label]; seen {
 			if english(ch.Branch) && !english(k.branch) {

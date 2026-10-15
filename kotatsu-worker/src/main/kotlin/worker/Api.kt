@@ -27,7 +27,7 @@ import javax.crypto.spec.SecretKeySpec
 
 data class SearchResult(val url: String, val title: String, val cover: String?, val alt_titles: List<String>)
 data class ChapterInfo(
-    val url: String, val number: String, val title: String,
+    val id: Long, val url: String, val number: String, val title: String,
     val volume: Int, val branch: String, val uploaded_at: String,
 )
 data class ChaptersResult(val resolved_url: String, val chapters: List<ChapterInfo>)
@@ -75,7 +75,7 @@ class Api(private val ctx: JvmLoaderContext, private val key: String) {
         val manga = resolve(p, url)
         mangaCache["${p.source.name}|${manga.publicUrl}"] = manga
         c.json(ChaptersResult(manga.publicUrl, manga.chapters.orEmpty().map {
-            ChapterInfo(it.url, it.numberString() ?: "", it.title ?: "", it.volume,
+            ChapterInfo(it.id, it.url, it.numberString() ?: "", it.title ?: "", it.volume,
                 it.branch ?: "", if (it.uploadDate > 0) Instant.ofEpochMilli(it.uploadDate).toString() else "")
         }))
     }

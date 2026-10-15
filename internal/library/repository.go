@@ -2,7 +2,9 @@ package library
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -266,7 +268,7 @@ func (r *Repository) ResetChapterTitle(ctx context.Context, chapterID int64) err
 type ChapterRename struct {
 	ChapterID int64
 	Title     string
-	Volume    float64
+	Volume    *float64
 }
 
 // BulkRenameChapters applies manual names and volume assignments in one
@@ -283,7 +285,9 @@ func (r *Repository) BulkRenameChapters(ctx context.Context, titleID int64, item
 	}()
 	stmt, err := tx.PrepareContext(ctx, `UPDATE chapters SET title = ?,
 		title_custom = CASE WHEN ? = scraped_title THEN 0 ELSE 1 END,
-		volume_num = ?, updated_at = CURRENT_TIMESTAMP
+		volume_num = CASE WHEN ? THEN ? ELSE volume_num END,
+		volume_custom = CASE WHEN ? THEN 1 ELSE volume_custom END,
+		updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND title_id = ?`)
 	if err != nil {
 		return fmt.Errorf("prepare bulk rename: %w", err)
@@ -291,7 +295,11 @@ func (r *Repository) BulkRenameChapters(ctx context.Context, titleID int64, item
 	defer stmt.Close()
 	for _, item := range items {
 		title := strings.TrimSpace(item.Title)
-		res, execErr := stmt.ExecContext(ctx, title, title, item.Volume, item.ChapterID, titleID)
+		hasVol, vol := 0, 0.0
+		if item.Volume != nil {
+			hasVol, vol = 1, *item.Volume
+		}
+		res, execErr := stmt.ExecContext(ctx, title, title, hasVol, vol, hasVol, item.ChapterID, titleID)
 		if execErr != nil {
 			err = fmt.Errorf("rename chapter %d: %w", item.ChapterID, execErr)
 			return err
@@ -542,8 +550,10 @@ func (r *Repository) UpsertChapters(
 			number_main,
 			suffix_type,
 			suffix_num,
+			volume_num,
+			source_uid,
 			updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(title_id, label) DO UPDATE SET
 			-- A manual rename survives refreshes; the scraped name is kept
 			-- current alongside it so a reset restores the latest one.
@@ -553,6 +563,11 @@ func (r *Repository) UpsertChapters(
 			number_main = excluded.number_main,
 			suffix_type = excluded.suffix_type,
 			suffix_num = excluded.suffix_num,
+			-- Manual volume assignments win; a scrape that lost its volume
+			-- info must not zero out one it reported before.
+			volume_num = CASE WHEN chapters.volume_custom = 1 OR excluded.volume_num = 0
+				THEN chapters.volume_num ELSE excluded.volume_num END,
+			source_uid = excluded.source_uid,
 			updated_at = CURRENT_TIMESTAMP
 	`)
 	if err != nil {
@@ -569,6 +584,11 @@ func (r *Repository) UpsertChapters(
 			continue
 		}
 		seenURL[ch.URL] = true
+		uid := ch.UID
+		if uid == "" {
+			sum := sha256.Sum256([]byte(ch.URL))
+			uid = hex.EncodeToString(sum[:8])
+		}
 		if _, err = stmt.ExecContext(
 			ctx,
 			titleID,
@@ -579,6 +599,8 @@ func (r *Repository) UpsertChapters(
 			ch.NumMain,
 			ch.SuffixType,
 			ch.SuffixNum,
+			ch.Volume,
+			uid,
 		); err != nil {
 			return 0, fmt.Errorf("upsert chapter %q: %w", ch.Label, err)
 		}
@@ -1365,7 +1387,7 @@ func (r *Repository) ChaptersReadSince(ctx context.Context, since string) ([]Cha
 func (r *Repository) listReadChapters(ctx context.Context, where string, args ...any) ([]ChapterReadStatus, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT c.id, c.title_id, c.label, c.title, c.url, c.number_main, c.suffix_type, c.suffix_num,
-			c.discovered_at, c.updated_at,
+			c.volume_num, c.discovered_at, c.updated_at,
 			COALESCE(d.status, ''), COALESCE(d.output_file, ''), COALESCE(d.bytes, 0), COALESCE(d.pages, 0),
 			COALESCE(rp.last_page, 0), COALESCE(rp.read_pages, 0), COALESCE(NULLIF(rp.total_pages, 0), d.pages, 0),
 			COALESCE(rp.completed, 0), COALESCE(rp.manual, 0), rp.last_read_at, rp.completed_at
@@ -1387,7 +1409,7 @@ func (r *Repository) listReadChapters(ctx context.Context, where string, args ..
 		var completed, manual int
 		var lastReadAt, completedAt sql.NullString
 		if err := rows.Scan(&cs.ID, &cs.TitleID, &cs.Label, &cs.Title, &cs.URL, &cs.NumberMain,
-			&cs.SuffixType, &cs.SuffixNum, &discoveredAt, &updatedAt,
+			&cs.SuffixType, &cs.SuffixNum, &cs.VolumeNum, &discoveredAt, &updatedAt,
 			&status, &cs.OutputFile, &cs.Bytes, &cs.Pages,
 			&cs.LastPage, &cs.ReadPages, &cs.TotalPages, &completed, &manual, &lastReadAt, &completedAt); err != nil {
 			return nil, fmt.Errorf("scan read chapter: %w", err)
@@ -1471,6 +1493,7 @@ func chapterSelectQuery() string {
 			c.number_main,
 			c.suffix_type,
 			c.suffix_num,
+			c.volume_num,
 			c.discovered_at,
 			c.updated_at
 		FROM chapters c
@@ -1648,6 +1671,7 @@ func scanChapter(row database.Scanner) (Chapter, error) {
 		&chapter.NumberMain,
 		&chapter.SuffixType,
 		&chapter.SuffixNum,
+		&chapter.VolumeNum,
 		&discoveredAt,
 		&updatedAt,
 	); err != nil {

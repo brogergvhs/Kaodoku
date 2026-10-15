@@ -120,6 +120,9 @@ func (s *DownloadService) comicInfoEntry(ch chapters.Chapter, pages int) map[str
 	}
 	ci.Title = ch.Title
 	ci.Number = ch.Label
+	if v := ch.Volume; v > 0 && v == float64(int(v)) {
+		ci.Volume = int(v)
+	}
 	ci.PageCount = pages
 	body, err := util.MarshalComicInfo(ci)
 	if err != nil {

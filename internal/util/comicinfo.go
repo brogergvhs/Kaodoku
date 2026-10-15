@@ -16,6 +16,7 @@ type ComicInfo struct {
 	Series    string   `xml:"Series,omitempty"`
 	Number    string   `xml:"Number,omitempty"`
 	Count     int      `xml:"Count,omitempty"`
+	Volume    int      `xml:"Volume,omitempty"`
 	Summary   string   `xml:"Summary,omitempty"`
 	Year      int      `xml:"Year,omitempty"`
 	Writer    string   `xml:"Writer,omitempty"`

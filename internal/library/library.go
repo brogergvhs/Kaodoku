@@ -63,6 +63,7 @@ type Chapter struct {
 	NumberMain   int
 	SuffixType   string
 	SuffixNum    int
+	VolumeNum    float64
 	DiscoveredAt time.Time
 	UpdatedAt    time.Time
 }
