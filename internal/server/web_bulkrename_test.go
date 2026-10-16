@@ -32,7 +32,7 @@ garbage line
 		t.Fatalf("row 1 = %+v", rows[1])
 	}
 	// Numeric match: "040" finds label "40"; empty name and no volume valid.
-	if rows[2].ChapterID != 11 || rows[2].Name != "" || rows[2].Volume != "" {
+	if rows[2].ChapterID != 11 || rows[2].Name != "" || rows[2].Volume != "" || rows[2].Label != "40" {
 		t.Fatalf("row 2 = %+v", rows[2])
 	}
 	// Unknown number: row kept with no chapter picked, inline error set.

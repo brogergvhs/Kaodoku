@@ -130,10 +130,11 @@ type activityView struct {
 	Screen        int64
 }
 type sourceRowView struct {
-	Source sources.Source
-	Active bool
-	Poll   bool
-	Titles int // library titles using this source
+	Source     sources.Source
+	Active     bool
+	Poll       bool
+	Titles     int // library titles using this source
+	FetchFails int // titles whose last chapter refresh failed
 }
 type sourceProbeView struct {
 	TitleID  int64
@@ -373,14 +374,17 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/sources/{id}/edit", u.srcEdit)
 	mux.HandleFunc("POST /ui/sources/{id}/edit", u.srcEditSave)
 	mux.HandleFunc("GET /ui/sources/{id}/row", u.srcRow)
+	mux.HandleFunc("GET /ui/sources/{id}/title-errors", u.srcTitleErrors)
 	mux.HandleFunc("POST /ui/sources/{id}/enabled", u.srcEnabled)
 	mux.HandleFunc("POST /ui/sources/{id}/delete", u.srcDelete)
 	mux.HandleFunc("POST /ui/sources/sync", u.srcSync)
+	mux.HandleFunc("GET /ui/sources/table", u.sourcesTable)
 	mux.HandleFunc("POST /ui/sources/test", u.srcTest)
 	mux.HandleFunc("POST /ui/sources/custom", u.srcAddCustom)
 	mux.HandleFunc("GET /ui/sources/kotatsu", u.kotatsuModal)
 	mux.HandleFunc("GET /ui/sources/kotatsu/list", u.kotatsuBrowse)
 	mux.HandleFunc("GET /ui/sources/kotatsu/table", u.kotatsuTable)
+	mux.HandleFunc("GET /ui/sources/kotatsu/section", u.kotatsuSection)
 	mux.HandleFunc("POST /ui/sources/kotatsu/import", u.kotatsuImport)
 	mux.HandleFunc("GET /ui/library/table", u.libraryTable)
 	mux.HandleFunc("GET /ui/jobs/table", u.jobsTable)
@@ -2701,7 +2705,7 @@ func (u *webUI) sourcesPage(w http.ResponseWriter, r *http.Request) {
 		Sources:        main,
 		KotatsuSources: kot,
 		Scrapers:       registry.Names(),
-		Kotatsu:        u.kotatsuStatus(r.Context()),
+		KotatsuEnabled: u.svc.KotatsuClient(r.Context()) != nil,
 	})
 }
 
@@ -2709,7 +2713,7 @@ type sourcesPageView struct {
 	Sources        []sourceRowView
 	KotatsuSources []sourceRowView
 	Scrapers       []string
-	Kotatsu        kotatsuStatusView
+	KotatsuEnabled bool
 }
 
 type backupsView struct {
@@ -3453,7 +3457,7 @@ func (u *webUI) srcVerify(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: true, Poll: true, Titles: u.sourceTitleCount(r.Context(), id)})
+	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: true, Poll: true, Titles: u.sourceTitleCount(r.Context(), id), FetchFails: u.sourceFetchFailCount(r.Context(), id)})
 }
 
 func (u *webUI) srcEnabled(w http.ResponseWriter, r *http.Request) {
@@ -3488,9 +3492,10 @@ func (u *webUI) sourceRows(ctx context.Context, srcs []sources.Source) []sourceR
 		}
 	}
 	counts, _ := u.svc.SourceTitleCounts(ctx)
+	fails, _ := u.svc.SourceFetchFailureCounts(ctx)
 	rows := make([]sourceRowView, len(srcs))
 	for i, s := range srcs {
-		rows[i] = sourceRowView{Source: s, Active: verifying[s.ID], Titles: counts[s.ID]}
+		rows[i] = sourceRowView{Source: s, Active: verifying[s.ID], Titles: counts[s.ID], FetchFails: fails[s.ID]}
 	}
 	return rows
 }
@@ -3514,12 +3519,34 @@ func (u *webUI) srcRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active, _, _ := u.jobStateFor(r.Context(), jobs.TypeVerifySource, service.JobPayload{SourceID: id})
-	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: active, Poll: active, Titles: u.sourceTitleCount(r.Context(), id)})
+	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: active, Poll: active, Titles: u.sourceTitleCount(r.Context(), id), FetchFails: u.sourceFetchFailCount(r.Context(), id)})
 }
 
 func (u *webUI) sourceTitleCount(ctx context.Context, id string) int {
 	counts, _ := u.svc.SourceTitleCounts(ctx)
 	return counts[id]
+}
+
+func (u *webUI) sourceFetchFailCount(ctx context.Context, id string) int {
+	fails, _ := u.svc.SourceFetchFailureCounts(ctx)
+	return fails[id]
+}
+
+// srcTitleErrors lists this source's titles whose last refresh failed.
+func (u *webUI) srcTitleErrors(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	titles, err := u.svc.ListTitles(r.Context())
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	var failing []library.Title
+	for _, t := range titles {
+		if t.SourceID == id && t.FetchError != "" {
+			failing = append(failing, t)
+		}
+	}
+	u.frag(w, "sourceTitleErrors", failing)
 }
 
 // sourceEditView carries the scraper choices next to the profile fields.
@@ -3629,6 +3656,10 @@ func (u *webUI) srcSync(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
+	u.sourcesTable(w, r)
+}
+
+func (u *webUI) sourcesTable(w http.ResponseWriter, r *http.Request) {
 	srcs, _ := u.svc.ListSources(r.Context())
 	main, _ := splitKotatsuSources(u.sourceRows(r.Context(), filterNSFWSources(r.Context(), srcs)))
 	u.frag(w, "sourcesTable", main)

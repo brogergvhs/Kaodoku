@@ -221,6 +221,22 @@ func (u *webUI) kotatsuImport(w http.ResponseWriter, r *http.Request) {
 	u.frag(w, "kotatsuModalClose", nil)
 }
 
+type kotatsuSectionView struct {
+	Status kotatsuStatusView
+	Rows   []sourceRowView
+}
+
+// kotatsuSection post-loads the kotatsu panel so the health probe never
+// blocks the /sources page render.
+func (u *webUI) kotatsuSection(w http.ResponseWriter, r *http.Request) {
+	rows, err := u.kotatsuRows(r.Context())
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.frag(w, "kotatsuSection", kotatsuSectionView{Status: u.kotatsuStatus(r.Context()), Rows: rows})
+}
+
 func (u *webUI) kotatsuTable(w http.ResponseWriter, r *http.Request) {
 	rows, err := u.kotatsuRows(r.Context())
 	if err != nil {

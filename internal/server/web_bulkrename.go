@@ -19,6 +19,7 @@ var bulkLineRe = regexp.MustCompile(`^\s*([0-9]+(?:\.[0-9]+)?)\s*:\s*"(.*)"\s*(?
 // problem, shown inline under the row.
 type bulkRenameRow struct {
 	ChapterID int64
+	Label     string
 	Number    string
 	Name      string
 	Volume    string
@@ -38,8 +39,10 @@ type bulkRenameView struct {
 func parseBulkRename(text string, chapters []library.ChapterStatus) []bulkRenameRow {
 	byLabel := make(map[string]int64, len(chapters))
 	byNumber := make(map[float64]int64, len(chapters))
+	labels := make(map[int64]string, len(chapters))
 	for _, ch := range chapters {
 		byLabel[ch.Label] = ch.ID
+		labels[ch.ID] = ch.Label
 		if n, err := strconv.ParseFloat(strings.TrimSpace(ch.Label), 64); err == nil {
 			if _, dup := byNumber[n]; !dup {
 				byNumber[n] = ch.ID
@@ -70,6 +73,7 @@ func parseBulkRename(text string, chapters []library.ChapterStatus) []bulkRename
 		if row.ChapterID == 0 {
 			row.Error = fmt.Sprintf("No chapter %s in this title — pick one", m[1])
 		}
+		row.Label = labels[row.ChapterID]
 		rows = append(rows, row)
 	}
 	return rows

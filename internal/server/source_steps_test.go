@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 )
 
@@ -118,6 +119,31 @@ func TestKotatsuTablePollsOnceWhileVerifying(t *testing.T) {
 	}
 }
 
+// The main table resolves page-load "verifying" rows the same way the
+// kotatsu table does: one table-level poller, no per-row polling.
+func TestSourcesTablePollsOnceWhileVerifying(t *testing.T) {
+	t.Parallel()
+	u := &webUI{}
+	u.tmpl = template.Must(template.New("").Funcs(u.funcs()).ParseFS(templateFS, "templates/*.html"))
+
+	rows := []sourceRowView{
+		{Source: sources.Source{Profile: sources.Profile{ID: "a", Enabled: true}}},
+		{Source: sources.Source{Profile: sources.Profile{ID: "b", Enabled: true}}, Active: true},
+	}
+	html := string(u.renderToHTML("sourcesTable", rows))
+	if n := strings.Count(html, "/ui/sources/table"); n != 1 {
+		t.Fatalf("got %d table pollers, want exactly 1: %s", n, html)
+	}
+	if strings.Contains(html, "/row") {
+		t.Fatalf("rows must not poll individually: %s", html)
+	}
+
+	rows[1].Active = false
+	if idle := string(u.renderToHTML("sourcesTable", rows)); strings.Contains(idle, "/ui/sources/table") {
+		t.Fatalf("idle table should not poll: %s", idle)
+	}
+}
+
 func TestSourceRowShowsTitleCount(t *testing.T) {
 	t.Parallel()
 	u := &webUI{}
@@ -132,5 +158,28 @@ func TestSourceRowShowsTitleCount(t *testing.T) {
 	}
 	if h := string(u.renderToHTML("sourceRow", sourceRowView{Source: src})); strings.Contains(h, "titles") {
 		t.Fatalf("unused source should show a dash, not a count: %s", h)
+	}
+}
+
+func TestSourceRowShowsFetchIssues(t *testing.T) {
+	t.Parallel()
+	u := &webUI{}
+	u.tmpl = template.Must(template.New("").Funcs(u.funcs()).ParseFS(templateFS, "templates/*.html"))
+
+	src := sources.Source{Profile: sources.Profile{ID: "x", Enabled: true}}
+	h := string(u.renderToHTML("sourceRow", sourceRowView{Source: src, FetchFails: 2}))
+	if !strings.Contains(h, "2 title issues") || !strings.Contains(h, "/ui/sources/x/title-errors") {
+		t.Fatalf("row should show the issue badge and lazy-load the details: %s", h)
+	}
+	if h := string(u.renderToHTML("sourceRow", sourceRowView{Source: src})); strings.Contains(h, "title issues") || strings.Contains(h, "title-errors") {
+		t.Fatalf("clean source should show no issue badge: %s", h)
+	}
+
+	list := string(u.renderToHTML("sourceTitleErrors", []library.Title{{ID: 7, DisplayTitle: "T", FetchError: `<script>alert(1)</script>`}}))
+	if strings.Contains(list, "<script>") || !strings.Contains(list, "&lt;script&gt;") {
+		t.Fatalf("fetch error must be escaped: %s", list)
+	}
+	if !strings.Contains(list, "/library/7") {
+		t.Fatalf("failing title should link to its library page: %s", list)
 	}
 }

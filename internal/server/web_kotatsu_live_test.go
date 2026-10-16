@@ -58,8 +58,14 @@ func TestKotatsuBrowseImportLive(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sources", nil))
+	if body := rec.Body.String(); !strings.Contains(body, "/ui/sources/kotatsu/section") || strings.Contains(body, "Add Kotatsu source") {
+		t.Fatalf("sources page should post-load the kotatsu section, not probe synchronously")
+	}
+
+	rec = httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui/sources/kotatsu/section", nil))
 	if body := rec.Body.String(); !strings.Contains(body, "Add Kotatsu source") || strings.Contains(body, "kotatsu-browse") {
-		t.Fatalf("sources page should show only the add button, no browse block")
+		t.Fatalf("kotatsu section should show only the add button, no browse block: %s", body)
 	}
 
 	rec = httptest.NewRecorder()

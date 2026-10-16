@@ -703,12 +703,11 @@
 </div>
 {{template "sourcesTable" .Sources}}
 
-{{if or .Kotatsu.Enabled .KotatsuSources}}
-<div class="mt-10">
+{{if or .KotatsuEnabled .KotatsuSources}}
+<div id="kotatsu-section" class="mt-10" hx-get="/ui/sources/kotatsu/section" hx-trigger="load" hx-swap="outerHTML" hx-sync="this:drop">
   <div class="flex items-center justify-between gap-2 mb-4">
     <h2 class="text-lg font-semibold">Kotatsu sources</h2>
-    {{if .Kotatsu.Reachable}}<button class="btn btn-sm btn-primary" hx-get="/ui/sources/kotatsu" hx-target="body" hx-swap="beforeend" hx-disabled-elt="this">{{template "iconPlus"}}Add Kotatsu source</button>
-    {{else if .Kotatsu.Enabled}}<span class="badge badge-error badge-soft" {{with .Kotatsu.Error}}title="{{.}}"{{end}}>unreachable</span>{{end}}
+    <span class="loading loading-spinner loading-sm"></span>
   </div>
   {{template "kotatsuSourcesTable" .KotatsuSources}}
 </div>
