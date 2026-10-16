@@ -25,8 +25,12 @@ import org.koitharu.kotatsu.parsers.webview.InterceptionConfig
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import javax.imageio.IIOImage
 import javax.imageio.ImageIO
+import javax.imageio.ImageWriteParam
+import javax.imageio.stream.MemoryCacheImageOutputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
 private const val UA =
@@ -227,20 +231,53 @@ class JvmLoaderContext(
 
     override fun getDefaultUserAgent(): String = UA
 
+    private val redrawPermits = Semaphore(2)
+
+    // no local keeps the decoded source alive past redraw(), collectable before encode
     override fun redrawImageResponse(response: Response, redraw: (Bitmap) -> Bitmap): Response {
-        val bytes = response.body?.bytes() ?: throw IOException("empty image response")
-        val source = ImageIO.read(bytes.inputStream()) ?: throw IOException("unsupported image format")
-        val redrawn = (redraw(AwtBitmap(source)) as AwtBitmap).image
+        redrawPermits.acquire()
+        try {
+            var hasAlpha = false
+            val redrawn = (redraw(AwtBitmap(
+                (response.body?.byteStream()?.use { ImageIO.read(it) }
+                    ?: throw IOException("unsupported image format"))
+                    .also { hasAlpha = it.colorModel.hasAlpha() }
+            )) as AwtBitmap).image
+            val usePng = hasAlpha || redrawn.colorModel.hasAlpha()
+            val bytes = if (usePng) encodePng(redrawn) else encodeJpeg(redrawn)
+            val type = if (usePng) "image/png" else "image/jpeg"
+            return response.newBuilder()
+                .body(bytes.toResponseBody(type.toMediaType()))
+                .header("Content-Type", type)
+                .build()
+        } finally {
+            redrawPermits.release()
+        }
+    }
+
+    private fun encodePng(img: BufferedImage): ByteArray {
         val out = ByteArrayOutputStream()
-        ImageIO.write(redrawn, "png", out)
-        return response.newBuilder()
-            .body(out.toByteArray().toResponseBody("image/png".toMediaType()))
-            .header("Content-Type", "image/png")
-            .build()
+        ImageIO.write(img, "png", out)
+        return out.toByteArray()
+    }
+
+    private fun encodeJpeg(img: BufferedImage): ByteArray {
+        val out = ByteArrayOutputStream(256 * 1024)
+        val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
+        val param = writer.defaultWriteParam.apply {
+            compressionMode = ImageWriteParam.MODE_EXPLICIT
+            compressionQuality = 0.9f
+        }
+        MemoryCacheImageOutputStream(out).use { ios ->
+            writer.output = ios
+            writer.write(null, IIOImage(img, null, null), param)
+        }
+        writer.dispose()
+        return out.toByteArray()
     }
 
     override fun createBitmap(width: Int, height: Int): Bitmap =
-        AwtBitmap(BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB))
+        AwtBitmap(BufferedImage(width, height, BufferedImage.TYPE_3BYTE_BGR))
 }
 
 internal class AwtBitmap(val image: BufferedImage) : Bitmap {

@@ -8,6 +8,7 @@ import io.javalin.http.Context
 import io.javalin.http.NotFoundResponse
 import io.javalin.http.UnauthorizedResponse
 import kotlinx.coroutines.runBlocking
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import org.koitharu.kotatsu.parsers.InternalParsersApi
 import org.koitharu.kotatsu.parsers.MangaParser
@@ -18,6 +19,7 @@ import org.koitharu.kotatsu.parsers.model.MangaParserSource
 import org.koitharu.kotatsu.parsers.model.MangaSource
 import org.koitharu.kotatsu.parsers.model.SortOrder
 import org.koitharu.kotatsu.parsers.util.generateUid
+import org.koitharu.kotatsu.parsers.util.toRelativeUrl
 import java.net.URLEncoder
 import java.util.Collections
 import java.security.MessageDigest
@@ -32,7 +34,11 @@ data class ChapterInfo(
 )
 data class ChaptersResult(val resolved_url: String, val chapters: List<ChapterInfo>)
 
-class Api(private val ctx: JvmLoaderContext, private val key: String) {
+class Api(
+    private val ctx: JvmLoaderContext,
+    private val key: String,
+    private val hostIndex: Map<String, MangaParserSource> = emptyMap(),
+) {
     private val mangaCache = Collections.synchronizedMap(
         object : LinkedHashMap<String, Manga>(16, 0.75f, true) {
             override fun removeEldestEntry(e: MutableMap.MutableEntry<String, Manga>?) = size > 64
@@ -57,10 +63,31 @@ class Api(private val ctx: JvmLoaderContext, private val key: String) {
         c.json(list.take(20).map { SearchResult(it.publicUrl, it.title, it.coverUrl, it.altTitles.toList()) })
     }
 
+    private fun ownsHost(p: MangaParser, host: String) =
+        p.domain.removePrefix("www.") == host ||
+            p.configKeyDomain.presetValues.any { it.removePrefix("www.") == host }
+
+    // resolves via the host-owning parser, skipping LinkResolver's all-parser scan
+    private suspend fun resolveDirect(p: MangaParser, publicUrl: String): Manga? {
+        val link = publicUrl.toHttpUrlOrNull() ?: return null
+        val host = link.host.removePrefix("www.")
+        val owner = if (ownsHost(p, host)) p
+        else hostIndex[host]?.let { ctx.parser(it) } ?: return null
+        runCatching { owner.resolveLink(ctx.newLinkResolver(link), link) }.getOrNull()?.let { return it }
+        val rel = publicUrl.toRelativeUrl(link.host)
+        val seed = Manga(
+            id = owner.generateUid(rel), title = "", altTitles = emptySet(), url = rel,
+            publicUrl = publicUrl, rating = -1f, contentRating = null, coverUrl = null,
+            tags = emptySet(), state = null, authors = emptySet(), source = owner.source,
+        )
+        return runCatching { owner.getDetails(seed) }.getOrNull()?.takeIf { !it.chapters.isNullOrEmpty() }
+    }
+
     private fun resolve(p: MangaParser, publicUrl: String): Manga =
         mangaCache.getOrPut("${p.source.name}|$publicUrl") {
             runBlocking {
-                val resolved = ctx.newLinkResolver(publicUrl).getManga()
+                val resolved = resolveDirect(p, publicUrl)
+                    ?: ctx.newLinkResolver(publicUrl).getManga()
                     ?: throw NotFoundResponse("manga not found on source")
                 val manga = if (resolved.source == p.source) resolved
                 else resolved.copy(source = p.source, chapters = null)

@@ -22,12 +22,21 @@ data class SourceInfo(
 
 private val nsfwHint = Regex("hentai|porn|adult|doujin|yaoi", RegexOption.IGNORE_CASE)
 
-fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
-    MangaParserSource.entries.mapNotNull { s ->
+class SourceCatalog(val sources: List<SourceInfo>, val hostIndex: Map<String, MangaParserSource>)
+
+fun loadCatalog(ctx: JvmLoaderContext): SourceCatalog {
+    val index = HashMap<String, MangaParserSource>(4096)
+    val sources = MangaParserSource.entries.mapNotNull { s ->
         runCatching {
             val parser = ctx.newParserInstance(s)
             val keys = ArrayList<ConfigKey<*>>()
             parser.onCreateConfig(keys)
+            val domains = parser.configKeyDomain.presetValues.toList()
+            for (d in domains) {
+                val host = d.removePrefix("www.")
+                val cur = index[host]
+                if (cur == null || (cur.isBroken && !s.isBroken)) index[host] = s
+            }
             SourceInfo(
                 id = s.name,
                 name = s.title,
@@ -38,11 +47,13 @@ fun listSources(ctx: JvmLoaderContext): List<SourceInfo> =
                 broken = s.isBroken,
                 cloudflare = keys.any { it.key == "intercept_cloudflare" },
                 searchable = parser.filterCapabilities.isSearchSupported,
-                domains = parser.configKeyDomain.presetValues.toList(),
+                domains = domains,
                 base_url = "https://${parser.domain}",
             )
-        }.getOrNull()
+        }.onFailure { log.warn("source {} failed to load: {}", s.name, it.toString()) }.getOrNull()
     }.sortedBy { it.name.lowercase() }
+    return SourceCatalog(sources, index)
+}
 
 data class ConfigReq(val source: String, val values: Map<String, String> = emptyMap())
 
@@ -53,9 +64,10 @@ fun main() {
     val solverTimeout = System.getenv("FLARESOLVERR_TIMEOUT_MS")?.toLongOrNull() ?: 60_000
     val browserUrl = System.getenv("BROWSER_WORKER_URL")?.takeIf { it.isNotBlank() }
     val ctx = JvmLoaderContext(solverUrl?.let { FlareSolverr(it, solverTimeout) }, browserUrl?.let { BrowserJs(it) })
-    val api = Api(ctx, key)
+    val catalog = loadCatalog(ctx)
+    val sources = catalog.sources
+    val api = Api(ctx, key, catalog.hostIndex)
     val open = setOf("/healthz", "/image")
-    val sources = listSources(ctx)
 
     Javalin.create()
         .exception(HttpResponseException::class.java, ::handleError)

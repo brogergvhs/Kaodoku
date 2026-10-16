@@ -323,6 +323,37 @@ class Phase1Test {
     }
 
     @Test
+    fun opaqueSourceRedrawsAsJpeg() {
+        val ctx = JvmLoaderContext()
+        val src = java.awt.image.BufferedImage(2, 1, java.awt.image.BufferedImage.TYPE_INT_RGB)
+        src.setRGB(0, 0, 0xFF0000)
+        src.setRGB(1, 0, 0x0000FF)
+        val png = java.io.ByteArrayOutputStream().also { javax.imageio.ImageIO.write(src, "png", it) }.toByteArray()
+        val resp = okhttp3.Response.Builder()
+            .request(okhttp3.Request.Builder().url("https://x/img.png").build())
+            .protocol(okhttp3.Protocol.HTTP_1_1).code(200).message("OK")
+            .body(png.toResponseBody("image/png".toMediaType()))
+            .build()
+
+        val redrawn = ctx.redrawImageResponse(resp) { source ->
+            val out = ctx.createBitmap(2, 1)
+            out.drawBitmap(source, org.koitharu.kotatsu.parsers.bitmap.Rect(0, 0, 2, 1), org.koitharu.kotatsu.parsers.bitmap.Rect(0, 0, 2, 1))
+            out
+        }
+        assertEquals("image/jpeg", redrawn.header("Content-Type"))
+        val img = javax.imageio.ImageIO.read(redrawn.body!!.byteStream())
+        assertEquals(2, img.width)
+        assertFalse(img.colorModel.hasAlpha())
+    }
+
+    @Test
+    fun hostIndexMapsKnownDomains() {
+        val catalog = loadCatalog(JvmLoaderContext())
+        assertTrue(catalog.sources.isNotEmpty())
+        assertEquals(MangaParserSource.MANGADEX, catalog.hostIndex["mangadex.org"])
+    }
+
+    @Test
     fun setConfigOverridesDomainAndEvictsParser() {
         val ctx = JvmLoaderContext()
         val src = MangaParserSource.CUUTRUYEN
