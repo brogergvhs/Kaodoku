@@ -16,6 +16,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/providers"
 	"github.com/brogergvhs/kaodoku/internal/sources"
@@ -356,8 +357,32 @@ func (s *LibraryService) GetTitle(ctx context.Context, id int64) (library.Title,
 	return s.repo.GetTitle(ctx, id)
 }
 
-// RefreshTitle refreshes discovered chapters for one title.
+// RefreshTitle refreshes discovered chapters for one title and records the
+// outcome on the title row, so users can see which titles fail to fetch.
 func (s *LibraryService) RefreshTitle(
+	ctx context.Context,
+	cfg *config.Config,
+	logSvc ui.Log,
+	title library.Title,
+) (RefreshResult, error) {
+	res, err := s.refreshTitle(ctx, cfg, logSvc, title)
+	if title.ID <= 0 || ctx.Err() != nil || errors.Is(err, errSourceDisabled) {
+		return res, err
+	}
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+		if len(msg) > 500 {
+			msg = msg[:500] + "…"
+		}
+	}
+	if serr := s.repo.SetFetchError(context.WithoutCancel(ctx), title.ID, msg); serr != nil {
+		logSvc.Debugf("record fetch error for %q: %v\n", title.DisplayTitle, serr)
+	}
+	return res, err
+}
+
+func (s *LibraryService) refreshTitle(
 	ctx context.Context,
 	cfg *config.Config,
 	logSvc ui.Log,
@@ -708,6 +733,7 @@ func (s *LibraryService) downloadServiceForTitle(
 			return nil, err
 		}
 		if ok {
+			pushKotatsuDomain(ctx, cfg, logSvc, src)
 			next := ConfigForSource(*cfg, src, SourceConfigOptions{})
 			next.LanguageMode = title.LanguageMode
 			return NewSourceDownloadService(&next, logSvc, progress, src.Scraper)
@@ -718,6 +744,19 @@ func (s *LibraryService) downloadServiceForTitle(
 		svc.SetComicInfo(s.comicInfoTemplate(ctx, title))
 	}
 	return svc, err
+}
+
+// pushKotatsuDomain re-applies a user domain override before a scrape; the
+// worker keeps config in memory only, so a restart would otherwise revert it.
+func pushKotatsuDomain(ctx context.Context, cfg *config.Config, logSvc ui.Log, src sources.Source) {
+	id, ok := strings.CutPrefix(src.Scraper, kotatsu.ScraperPrefix)
+	if !ok || len(src.Domains) == 0 || !cfg.KotatsuWorker.Enabled {
+		return
+	}
+	kc := kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey)
+	if err := kc.SetConfig(ctx, id, map[string]string{"domain": src.Domains[0]}); err != nil && logSvc != nil {
+		logSvc.Debugf("push kotatsu domain for %s: %v\n", src.ID, err)
+	}
 }
 
 // SetMangaLookup wires catalog metadata access for ComicInfo templates.

@@ -2039,6 +2039,12 @@ func (s *JobService) SourceTitleCounts(ctx context.Context) (map[string]int, err
 	return s.src.repo.TitleCounts(ctx)
 }
 
+// SourceFetchFailureCounts counts titles per source whose last chapter
+// refresh failed.
+func (s *JobService) SourceFetchFailureCounts(ctx context.Context) (map[string]int, error) {
+	return s.src.repo.FetchFailureCounts(ctx)
+}
+
 // GetSource returns one source profile.
 func (s *JobService) GetSource(ctx context.Context, id string) (sources.Source, error) {
 	return s.src.GetSource(ctx, id)
@@ -2225,8 +2231,6 @@ func (s *JobService) SetSourceMethods(ctx context.Context, sourceID, chapterFetc
 	if err := s.src.SetFetchMethods(ctx, sourceID, chapterFetch, imageFetch); err != nil {
 		return err
 	}
-	// Re-check chapters with the new methods; duplicates from a paired
-	// ImportLocalSource call are absorbed by enqueue dedup.
 	return s.enqueueRefreshForSource(ctx, sourceID)
 }
 
@@ -2260,6 +2264,8 @@ func (s *JobService) KotatsuSources(ctx context.Context) ([]kotatsu.Source, erro
 	return list, nil
 }
 
+// pushKotatsuConfigs restores user domain overrides into the worker's
+// in-memory config.
 func (s *JobService) pushKotatsuConfigs(kc *kotatsu.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -2273,7 +2279,7 @@ func (s *JobService) pushKotatsuConfigs(kc *kotatsu.Client) {
 			continue
 		}
 		if err := kc.SetConfig(ctx, id, map[string]string{"domain": src.Domains[0]}); err != nil {
-			return
+			log.Printf("push kotatsu domain for %s: %v", src.ID, err)
 		}
 	}
 }
@@ -2301,7 +2307,7 @@ func (s *JobService) ImportKotatsuSource(ctx context.Context, src kotatsu.Source
 		sample = src.BaseURL
 	}
 	if err := s.src.ImportLocal(ctx, sources.Profile{
-		ID: id, Name: src.Name, Domains: src.Domains, BaseURL: src.BaseURL,
+		ID: id, Name: src.Name, BaseURL: src.BaseURL,
 		SampleMangaURL: sample,
 		Scraper:        id, NSFW: src.NSFW, Languages: langs, Enabled: true, Version: version,
 	}); err != nil {
@@ -2653,11 +2659,7 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 			if err != nil {
 				return err
 			}
-			_, err = s.lib.RefreshTitle(ctx, cfg, logSvc, title)
-			if markErr := s.markTitleSourceHealth(ctx, title, err, false); markErr != nil {
-				return errors.Join(err, markErr)
-			}
-			if err != nil {
+			if _, err = s.lib.RefreshTitle(ctx, cfg, logSvc, title); err != nil {
 				return err
 			}
 			if payload.DownloadAfterRefresh {
@@ -2684,20 +2686,11 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 				return err
 			}
 			if title.DiscoveredCount == 0 {
-				_, err := s.lib.RefreshTitle(ctx, cfg, logSvc, title)
-				if markErr := s.markTitleSourceHealth(ctx, title, err, false); markErr != nil {
-					return errors.Join(err, markErr)
-				}
-				if err != nil {
+				if _, err := s.lib.RefreshTitle(ctx, cfg, logSvc, title); err != nil {
 					return err
 				}
 			}
-			results, err := s.lib.DownloadMissing(ctx, cfg, logSvc, payload.TitleID, progress)
-			if err != nil || len(results) > 0 {
-				if markErr := s.markTitleSourceHealth(ctx, title, err, len(results) > 0); markErr != nil {
-					return errors.Join(err, markErr)
-				}
-			}
+			_, err = s.lib.DownloadMissing(ctx, cfg, logSvc, payload.TitleID, progress)
 			return err
 		}
 		return s.expandTitleJob(ctx, jobs.TypeDownloadMissing, job.ID)
@@ -2731,30 +2724,6 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 	default:
 		return fmt.Errorf("unknown job type %q", job.Type)
 	}
-}
-
-func (s *JobService) markTitleSourceHealth(ctx context.Context, title library.Title, runErr error, partial bool) error {
-	if strings.TrimSpace(title.SourceID) == "" || errors.Is(runErr, errSourceDisabled) {
-		return nil
-	}
-	if runErr != nil {
-		status := fetchFailureStatus(runErr)
-		if partial && status == sources.StatusBroken {
-			status = sources.StatusDegraded
-		}
-		return s.src.repo.UpdateHealth(ctx, title.SourceID, status,
-			fmt.Sprintf("while updating %q: %v", title.DisplayTitle, runErr))
-	}
-	src, err := s.src.GetSource(ctx, title.SourceID)
-	if err != nil {
-		return err
-	}
-	for _, step := range src.VerifySteps {
-		if step.Status == sources.StepFailed {
-			return nil
-		}
-	}
-	return s.src.repo.UpdateHealth(ctx, title.SourceID, sources.StatusHealthy, "")
 }
 
 func (s *JobService) expandTitleJob(ctx context.Context, typ string, parentID int64) error {

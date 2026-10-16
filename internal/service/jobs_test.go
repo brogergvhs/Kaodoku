@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -246,7 +245,7 @@ func TestSourceChangeQueuesRefreshForActiveTitles(t *testing.T) {
 	assertRefreshDownloadsAfter(t, ctx, svc, title.ID, true)
 }
 
-func TestTitleJobUpdatesSourceHealth(t *testing.T) {
+func TestTitleFetchErrorStaysOnTitle(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -265,30 +264,34 @@ func TestTitleJobUpdatesSourceHealth(t *testing.T) {
 		t.Fatalf("AddTitle() error = %v", err)
 	}
 
-	if err := svc.markTitleSourceHealth(ctx, title, nil, false); err != nil {
-		t.Fatalf("mark healthy: %v", err)
+	if err := svc.lib.repo.SetFetchError(ctx, title.ID, "fetch chapters: cloudflare blocked"); err != nil {
+		t.Fatalf("SetFetchError() error = %v", err)
 	}
+	got, err := svc.lib.GetTitle(ctx, title.ID)
+	if err != nil {
+		t.Fatalf("GetTitle() error = %v", err)
+	}
+	if !strings.Contains(got.FetchError, "cloudflare blocked") {
+		t.Fatalf("title fetch error = %q", got.FetchError)
+	}
+	counts, err := svc.SourceFetchFailureCounts(ctx)
+	if err != nil || counts["demo"] != 1 {
+		t.Fatalf("fetch failure counts = %v, %v", counts, err)
+	}
+	// title failures must not demote the source, only verify jobs write health
 	src, err := svc.src.GetSource(ctx, "demo")
 	if err != nil {
 		t.Fatalf("Get(source) error = %v", err)
 	}
-	// A title update must not claim the source was verified.
-	if src.Status != sources.StatusHealthy || src.LastError != "" || src.LastCheckedAt != "" {
-		t.Fatalf("healthy source = %#v", src)
+	if src.Status != "unknown" || src.LastError != "" || src.LastCheckedAt != "" {
+		t.Fatalf("source health written by title failure: %#v", src)
 	}
 
-	if err := svc.markTitleSourceHealth(ctx, title, errors.New("cloudflare blocked"), false); err != nil {
-		t.Fatalf("mark failed: %v", err)
+	if err := svc.lib.repo.SetFetchError(ctx, title.ID, ""); err != nil {
+		t.Fatalf("clear SetFetchError() error = %v", err)
 	}
-	src, err = svc.src.GetSource(ctx, "demo")
-	if err != nil {
-		t.Fatalf("Get(source) error = %v", err)
-	}
-	// The error must name the title, since it did not come from a verify run.
-	if src.Status != sources.StatusRequiresCF ||
-		!strings.Contains(src.LastError, "cloudflare blocked") ||
-		!strings.Contains(src.LastError, title.DisplayTitle) {
-		t.Fatalf("failed source = %#v", src)
+	if counts, err = svc.SourceFetchFailureCounts(ctx); err != nil || len(counts) != 0 {
+		t.Fatalf("cleared fetch failure counts = %v, %v", counts, err)
 	}
 }
 

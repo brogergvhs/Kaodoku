@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -50,17 +49,5 @@ func TestSourceForTitleDisabledSourceStopsRefresh(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("disabled source must not resolve to any scraper")
-	}
-
-	wrapped := fmt.Errorf("refresh %q: %w", "Some Title", err)
-	if err := js.markTitleSourceHealth(ctx, title, wrapped, false); err != nil {
-		t.Fatalf("markTitleSourceHealth() error = %v", err)
-	}
-	got, err := repo.Get(ctx, "kotatsu:testsrc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != "unknown" || got.LastError != "" {
-		t.Fatalf("disabled source health written: status %q, last_error %q", got.Status, got.LastError)
 	}
 }
