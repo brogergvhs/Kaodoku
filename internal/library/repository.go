@@ -359,6 +359,12 @@ func (r *Repository) SetLanguageGap(ctx context.Context, titleID int64, gap int)
 	return err
 }
 
+// SetFetchError records a title's last chapter-refresh failure; empty clears it.
+func (r *Repository) SetFetchError(ctx context.Context, titleID int64, msg string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE titles SET fetch_error = ? WHERE id = ?`, msg, titleID)
+	return err
+}
+
 // ToggleFavourite flips the acting user's favourite mark for a title and
 // returns the new state.
 func (r *Repository) ToggleFavourite(ctx context.Context, titleID int64) (bool, error) {
@@ -1527,6 +1533,7 @@ func (r *Repository) titleSelectQuery() string {
 			COALESCE(agg.pages, 0) AS pages,
 			t.language_mode,
 			t.language_gap,
+			t.fetch_error,
 			t.created_at,
 			t.updated_at,
 			COALESCE(m.cover_image, ''),
@@ -1603,6 +1610,7 @@ func scanTitle(row database.Scanner) (Title, error) {
 		&title.Pages,
 		&title.LanguageMode,
 		&title.LanguageGap,
+		&title.FetchError,
 		&createdAt,
 		&updatedAt,
 		&title.CoverImage,

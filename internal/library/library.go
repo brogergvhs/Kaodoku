@@ -34,6 +34,7 @@ type Title struct {
 	Favourite       bool     // acting user's favourite mark
 	LanguageMode    string   // '' ask, 'preferred', 'all', 'off'
 	LanguageGap     int64    // chapters existing only outside preferred languages
+	FetchError      string   // last chapter-refresh failure, '' when healthy
 	VolumeCount     int64
 	VolumeReadCount int64
 	VolumeBytes     int64

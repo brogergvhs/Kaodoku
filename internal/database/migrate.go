@@ -398,6 +398,10 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	hadFetchError, _, err := txHasColumn(ctx, tx, "titles", "fetch_error")
+	if err != nil {
+		return err
+	}
 	for _, col := range []struct{ table, name, def string }{
 		{"jobs", "parent_id", "INTEGER"},
 		{"catalog_manga", "is_adult", "INTEGER NOT NULL DEFAULT 0"},
@@ -440,6 +444,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"api_tokens", "last_seen_at", "TEXT NOT NULL DEFAULT ''"},
 		{"api_tokens", "device_id", "TEXT NOT NULL DEFAULT ''"},
 		{"chapter_read_progress", "manual", "INTEGER NOT NULL DEFAULT 0"}, // 1 = bulk/AniList mark, not page-by-page reading
+		{"titles", "fetch_error", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err = ensureColumn(ctx, tx, col.table, col.name, col.def); err != nil {
 			return fmt.Errorf("migrate %s.%s: %w", col.table, col.name, err)
@@ -460,6 +465,12 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 				GROUP BY user_id, chapter_id HAVING COUNT(DISTINCT read_at) >= 2
 			)`); err != nil {
 			return fmt.Errorf("backfill read/marked flag: %w", err)
+		}
+	}
+	// one-shot: clear kotatsu import-snapshot domains, stored domains now mean user overrides
+	if !hadFetchError {
+		if _, err = tx.ExecContext(ctx, `UPDATE sources SET domains_json = '[]' WHERE scraper LIKE 'kotatsu:%'`); err != nil {
+			return fmt.Errorf("clear kotatsu snapshot domains: %w", err)
 		}
 	}
 	if err = tx.Commit(); err != nil {
