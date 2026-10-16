@@ -46,6 +46,24 @@ func TestDownloadCBZ(t *testing.T) {
 	}
 }
 
+func TestDownloadCBZSendsWorkerKey(t *testing.T) {
+	t.Setenv("KAODOKU_BROWSER_DOWNLOADER_API_KEY", "sekrit")
+	var got string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Worker-Key")
+		_, _ = w.Write(testZip(t))
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL, time.Second, server.Client()).DownloadCBZ(context.Background(), Request{}, filepath.Join(t.TempDir(), "x.cbz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "sekrit" {
+		t.Fatalf("X-Worker-Key = %q", got)
+	}
+}
+
 func TestDownloadCBZStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "blocked", http.StatusBadGateway)

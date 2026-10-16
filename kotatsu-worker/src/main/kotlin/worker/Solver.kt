@@ -53,6 +53,7 @@ class BrowserSession(cookies: List<Cookie>, val userAgent: String?) {
 
 class BrowserJs(endpoint: String) {
     private val url = (endpoint.trimEnd('/') + "/evaluate").toHttpUrl()
+    private val key = System.getenv("BROWSER_WORKER_KEY")?.takeIf { it.isNotBlank() }
     private val json = jacksonObjectMapper()
     private val client = OkHttpClient.Builder()
         .callTimeout(180_000, TimeUnit.MILLISECONDS)
@@ -73,6 +74,7 @@ class BrowserJs(endpoint: String) {
         )
         val req = Request.Builder().url(url.newBuilder().encodedPath("/intercept").build())
             .post(payload.toRequestBody("application/json".toMediaType()))
+            .apply { key?.let { header("X-Worker-Key", it) } }
             .build()
         val call = client.newBuilder()
             .callTimeout(config.timeoutMs + 150_000, TimeUnit.MILLISECONDS)
@@ -106,6 +108,7 @@ class BrowserJs(endpoint: String) {
         )
         val req = Request.Builder().url(url)
             .post(payload.toRequestBody("application/json".toMediaType()))
+            .apply { key?.let { header("X-Worker-Key", it) } }
             .build()
         client.newCall(req).execute().use { resp ->
             val body = resp.body?.byteStream() ?: throw IOException("browser worker: empty response")

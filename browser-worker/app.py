@@ -1,10 +1,12 @@
 import base64
 import html
 import io
+import ipaddress
 import json
 import os
 import posixpath
 import re
+import socket
 import threading
 import time
 import zipfile
@@ -63,6 +65,22 @@ def safe_ext(url, mime):
     if mime == "image/avif":
         return "avif"
     return "jpg"
+
+
+# rejects non-http(s) schemes and hosts resolving to non-public addresses
+def check_public_url(url):
+    parts = urlparse(url)
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(f"unsupported scheme in {url!r}")
+    host = parts.hostname or ""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise ValueError(f"cannot resolve {host!r}: {exc}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            raise ValueError(f"host {host!r} resolves to non-public address {ip}")
 
 
 def driver_options():
@@ -471,9 +489,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ("/download", "/html", "/evaluate", "/intercept"):
             self.send_error(404)
             return
+        key = env("BROWSER_WORKER_KEY", "")
+        if key and self.headers.get("X-Worker-Key") != key:
+            self.send_error(401)
+            return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length))
+            target = payload.get("page_url") or payload.get("chapter_url") or ""
+            if target and target != "about:blank":
+                check_public_url(target)
             if self.path == "/intercept":
                 started = time.time()
                 page_url = payload["page_url"]
@@ -526,6 +551,15 @@ class Handler(BaseHTTPRequestHandler):
                 raise RuntimeError("no browser-loaded images captured")
             cbz = make_cbz(images)
         except BrokenPipeError:
+            return
+        except ValueError as exc:
+            print(f"{self.path} rejected: {exc}", flush=True)
+            data = json.dumps({"error": str(exc)}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
         except Exception as exc:
             print(f"{self.path} failed: {exc}", flush=True)
