@@ -47,13 +47,15 @@ func (s *Scraper) GetChaptersResolved(ctx context.Context, url string) ([]provid
 			break
 		}
 	}
-	for i, ch := range res.Chapters {
+	perBranch := map[string]int{}
+	for _, ch := range res.Chapters {
 		number := ch.Number
 		if number == "" {
 			if numbered {
 				continue
 			}
-			number = strconv.Itoa(i + 1)
+			perBranch[ch.Branch]++
+			number = strconv.Itoa(perBranch[ch.Branch])
 		}
 		main, suffixType, suffixNum, label, ok := providers.ParseChapterNumber(number)
 		if !ok {

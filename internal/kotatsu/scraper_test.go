@@ -74,6 +74,32 @@ func TestScraperNumbersGalleryChapters(t *testing.T) {
 	}
 }
 
+func TestScraperNumbersUnnumberedPerBranch(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"resolved_url":"https://m/x","chapters":[
+			{"url":"f1","number":"","title":"Un","volume":0,"branch":"Français","uploaded_at":""},
+			{"url":"f2","number":"","title":"Deux","volume":0,"branch":"Français","uploaded_at":""},
+			{"url":"e1","number":"","title":"One","volume":0,"branch":"English","uploaded_at":""},
+			{"url":"e2","number":"","title":"Two","volume":0,"branch":"English","uploaded_at":""}]}`))
+	}))
+	defer srv.Close()
+
+	chs, _, err := NewScraper(New(srv.URL, "k"), "SRC").GetChaptersResolved(context.Background(), "https://m/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chs) != 2 {
+		t.Fatalf("branches must collapse, got %+v", chs)
+	}
+	if chs[0].Label != "1" || chs[0].URL != "https://m/x\te1" {
+		t.Fatalf("ch[0] must be the English branch: %+v", chs[0])
+	}
+	if chs[1].Label != "2" || chs[1].URL != "https://m/x\te2" {
+		t.Fatalf("ch[1] must be the English branch: %+v", chs[1])
+	}
+}
+
 func TestScraperImages(t *testing.T) {
 	t.Parallel()
 	s := scraperServer(t)
