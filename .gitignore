@@ -29,6 +29,7 @@ go.work.sum
 docker-compose.yml
 
 # other
+__pycache__/
 .cache/
 downloaded_files/
 node_modules/
