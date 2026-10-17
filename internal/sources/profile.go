@@ -117,6 +117,10 @@ func normalizeProfile(p Profile) (Profile, error) {
 	if p.ID == "" {
 		return Profile{}, fmt.Errorf("source id is required")
 	}
+	switch p.ID {
+	case "all", "linked", "unlinked", "imported":
+		return Profile{}, fmt.Errorf("source id %q is reserved", p.ID)
+	}
 	if _, err := url.ParseRequestURI(p.BaseURL); err != nil {
 		return Profile{}, fmt.Errorf("invalid base_url for %s: %w", p.ID, err)
 	}

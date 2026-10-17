@@ -210,6 +210,24 @@ func (r *Repository) ListTitleSources(ctx context.Context, titleID int64) ([]Lin
 	return out, rows.Err()
 }
 
+// TitleIDsForSource returns ids of titles linked to a source via title_sources.
+func (r *Repository) TitleIDsForSource(ctx context.Context, sourceID string) (map[int64]bool, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT title_id FROM title_sources WHERE source_id = ?`, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("list source titles: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan source title: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 // UnlinkSource removes a linked source; if it was the active one, another
 // linked source is promoted, or the title reverts to having no source.
 // UpdateDownloadFile rewrites a completed download's stored path after a

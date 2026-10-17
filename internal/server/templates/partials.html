@@ -148,7 +148,7 @@
   <td class="w-6"><span class="caret text-base-content/50">{{template "iconChevron"}}</span></td>
   <td class="min-w-0"><span class="font-medium">{{.Source.Name}}</span><div class="truncate max-w-40 text-xs text-base-content/50">{{range .Source.Domains}}{{.}} {{end}}</div></td>
   <td>{{if .Active}}<span class="loading loading-spinner loading-xs"></span> <span class="text-sm">verifying</span>{{else if not .Source.Enabled}}<span class="badge badge-ghost badge-sm">disabled</span>{{else}}<span {{with .Source.LastError}}title="{{.}}"{{end}}>{{template "sourceStatusBadge" .Source.Status}}</span>{{end}}{{if .FetchFails}} <span class="badge badge-warning badge-soft badge-sm" title="expand the row for details">{{.FetchFails}} title {{if eq .FetchFails 1}}issue{{else}}issues{{end}}</span>{{end}}</td>
-  <td class="max-sm:hidden">{{if .Titles}}{{.Titles}}<div class="text-xs text-base-content/50">{{if eq .Titles 1}}title{{else}}titles{{end}}</div>{{else}}<span class="text-base-content/40">—</span>{{end}}</td>
+  <td class="max-sm:hidden">{{if .Titles}}<a class="link link-hover" href="/library?source={{.Source.ID}}">{{.Titles}}</a><div class="text-xs text-base-content/50">{{if eq .Titles 1}}title{{else}}titles{{end}}</div>{{else}}<span class="text-base-content/40">—</span>{{end}}</td>
   <td class="max-sm:hidden">{{.Source.ChaptersFound}}<div class="text-xs text-base-content/50">{{.Source.SampleImagesFound}} imgs</div></td>
   <td class="text-sm max-sm:hidden">{{orDash .Source.ChapterFetch}} / {{orDash .Source.ImageFetch}}</td>
   <td class="text-right">

@@ -93,12 +93,13 @@ type libraryView struct {
 	CollectionIDs      string
 	CollectionID       int64
 	CollectionSmartKey string
+	SourceOptions      []sources.Source
 }
 type libraryControls struct {
 	Q           string
 	Monitor     string
 	Fav         string
-	Source      string
+	Sources     []string 
 	Progress    string
 	Content     string // chapters/volumes presence
 	Sort        string
@@ -106,7 +107,18 @@ type libraryControls struct {
 	View        string
 	IncludeTags []string
 	ExcludeTags []string
+	SourceLinks map[int64]bool
 }
+
+// SourceSet reports which source tokens are selected, for the filter template.
+func (c libraryControls) SourceSet() map[string]bool {
+	set := make(map[string]bool, len(c.Sources))
+	for _, s := range c.Sources {
+		set[s] = true
+	}
+	return set
+}
+
 type healthView struct {
 	Services []service.ServiceHealth
 	Interval string // HTMX poll interval, e.g. "60s"
@@ -783,6 +795,7 @@ func (u *webUI) libraryPage(w http.ResponseWriter, r *http.Request) {
 	}
 	view.TagOptions = visibleTagOptions(r.Context(), view.TagOptions)
 	view.Controls = libraryControlsFrom(screenDefaults(values, view.Screen))
+	view.SourceOptions = u.librarySourceOptions(r.Context())
 	title := "Library"
 	if view.Screen != nil {
 		title = view.Screen.Name
@@ -962,6 +975,7 @@ func (u *webUI) collectionMembersPage(w http.ResponseWriter, r *http.Request) {
 		CollectionIDs:      values.Get("ids"),
 		CollectionID:       collectionID,
 		CollectionSmartKey: values.Get("smart"),
+		SourceOptions:      u.librarySourceOptions(ctx),
 	}
 	u.page(w, r, "library", name, view)
 }
@@ -1611,6 +1625,19 @@ func (u *webUI) buildLibraryTable(ctx context.Context, values url.Values) librar
 		}
 	}
 	controls := libraryControlsFrom(screenDefaults(values, screen))
+	for _, s := range controls.Sources {
+		if s == "linked" || s == "unlinked" || s == "imported" {
+			continue
+		}
+		links, _ := u.svc.SourceTitleIDs(ctx, s)
+		if controls.SourceLinks == nil {
+			controls.SourceLinks = links
+		} else {
+			for id := range links {
+				controls.SourceLinks[id] = true
+			}
+		}
+	}
 	titles, _ := u.svc.ListTitles(ctx)
 	titles = filterRestrictedTitles(ctx, titles)
 	if ids := values.Get("ids"); ids != "" {
@@ -1696,13 +1723,38 @@ func (u *webUI) buildLibraryTable(ctx context.Context, values url.Values) librar
 	return t
 }
 
+func (u *webUI) librarySourceOptions(ctx context.Context) []sources.Source {
+	srcs, _ := u.svc.ListSources(ctx)
+	srcs = filterNSFWSources(ctx, srcs)
+	counts, _ := u.svc.SourceTitleCounts(ctx)
+	out := srcs[:0]
+	for _, s := range srcs {
+		if counts[s.ID] > 0 {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// selectedSources trims the source tokens, dropping blanks and a stray "all".
+func selectedSources(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		if s = strings.TrimSpace(s); s != "" && s != "all" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func libraryControlsFrom(values url.Values) libraryControls {
 	c := libraryControls{
 		Q:           strings.TrimSpace(values.Get("q")),
 		Monitor:     values.Get("monitor"),
 		Fav:         values.Get("fav"),
 		Content:     values.Get("content"),
-		Source:      values.Get("source"),
+		Sources:     selectedSources(values["source"]),
 		Progress:    values.Get("progress"),
 		Sort:        values.Get("sort"),
 		Dir:         values.Get("dir"),
@@ -1723,9 +1775,6 @@ func libraryControlsFrom(values url.Values) libraryControls {
 	case "chapters", "no-chapters", "volumes", "no-volumes":
 	default:
 		c.Content = "all"
-	}
-	if c.Source == "" {
-		c.Source = "all"
 	}
 	if c.Progress == "" {
 		c.Progress = "all"
@@ -1766,12 +1815,12 @@ func screenDefaults(values url.Values, screen *library.Screen) url.Values {
 
 func libraryTableParams(values url.Values) url.Values {
 	out := url.Values{}
-	for _, key := range []string{"q", "monitor", "fav", "source", "progress", "content", "sort", "dir", "view", "screen", "ids"} {
+	for _, key := range []string{"q", "monitor", "fav", "progress", "content", "sort", "dir", "view", "screen", "ids"} {
 		if value := strings.TrimSpace(values.Get(key)); value != "" {
 			out.Set(key, value)
 		}
 	}
-	for _, key := range []string{"include_tags", "exclude_tags"} {
+	for _, key := range []string{"source", "include_tags", "exclude_tags"} {
 		for _, value := range values[key] {
 			if value = strings.TrimSpace(value); value != "" {
 				out.Add(key, value)
@@ -1788,6 +1837,32 @@ func tagList(raw []string) []string {
 		out = append(out, splitCommaList(v)...)
 	}
 	return out
+}
+
+// matchesAnySource reports whether a title satisfies any selected source token
+// (categorical linked/unlinked/imported, a concrete source id, or a linked one).
+func matchesAnySource(title library.Title, c libraryControls) bool {
+	for _, s := range c.Sources {
+		switch s {
+		case "linked":
+			if strings.HasPrefix(title.SourceURL, "http") {
+				return true
+			}
+		case "unlinked":
+			if !strings.HasPrefix(title.SourceURL, "http") {
+				return true
+			}
+		case "imported":
+			if strings.HasPrefix(title.SourceURL, "local:") {
+				return true
+			}
+		default:
+			if title.SourceID == s || c.SourceLinks[title.ID] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func filterTitles(titles []library.Title, c libraryControls) []library.Title {
@@ -1816,19 +1891,8 @@ func filterTitles(titles []library.Title, c libraryControls) []library.Title {
 		if c.Fav == "only" && !title.Favourite {
 			continue
 		}
-		switch c.Source {
-		case "linked":
-			if !strings.HasPrefix(title.SourceURL, "http") {
-				continue
-			}
-		case "unlinked":
-			if strings.HasPrefix(title.SourceURL, "http") {
-				continue
-			}
-		case "imported":
-			if !strings.HasPrefix(title.SourceURL, "local:") {
-				continue
-			}
+		if len(c.Sources) > 0 && !matchesAnySource(title, c) {
+			continue
 		}
 		switch c.Progress {
 		case "missing":

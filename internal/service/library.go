@@ -209,6 +209,10 @@ func (s *LibraryService) ListTitleSources(ctx context.Context, titleID int64) ([
 	return s.repo.ListTitleSources(ctx, titleID)
 }
 
+func (s *LibraryService) TitleIDsForSource(ctx context.Context, sourceID string) (map[int64]bool, error) {
+	return s.repo.TitleIDsForSource(ctx, sourceID)
+}
+
 // UnlinkSource removes a linked source from a title.
 func (s *LibraryService) UnlinkSource(ctx context.Context, titleID int64, url string) error {
 	return s.repo.UnlinkSource(ctx, titleID, url)

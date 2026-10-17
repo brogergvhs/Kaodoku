@@ -137,6 +137,15 @@ profiles:
 	}
 }
 
+func TestReservedProfileIDRejected(t *testing.T) {
+	t.Parallel()
+
+	p := TemplateProfile("linked")
+	if _, err := normalizeProfile(p); err == nil {
+		t.Fatal("normalizeProfile accepted reserved id")
+	}
+}
+
 func TestBuiltInProfiles(t *testing.T) {
 	t.Parallel()
 

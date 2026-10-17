@@ -200,7 +200,9 @@ document.addEventListener("change", function (e) {
   var summary = details.querySelector("[data-tag-count]");
   if (!summary) return;
   var count = details.querySelectorAll("[data-tag-list] input:checked").length;
-  summary.textContent = count ? count + " selected" : "None selected";
+  summary.textContent = count
+    ? count + " selected"
+    : summary.dataset.emptyLabel || "None selected";
 });
 
 function updateLibraryBulk() {

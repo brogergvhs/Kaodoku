@@ -729,6 +729,10 @@ func (s *JobService) ListTitleSources(ctx context.Context, id int64) ([]library.
 	return s.lib.ListTitleSources(ctx, id)
 }
 
+func (s *JobService) SourceTitleIDs(ctx context.Context, sourceID string) (map[int64]bool, error) {
+	return s.lib.TitleIDsForSource(ctx, sourceID)
+}
+
 // UnlinkTitleSource removes a linked source from a title.
 func (s *JobService) UnlinkTitleSource(ctx context.Context, id int64, url string) error {
 	return s.lib.UnlinkSource(ctx, id, url)

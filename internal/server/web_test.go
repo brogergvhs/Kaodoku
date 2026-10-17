@@ -1,10 +1,14 @@
 package server
 
 import (
+	"bytes"
+	"html/template"
+	"strings"
 	"testing"
 
 	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
+	"github.com/brogergvhs/kaodoku/internal/sources"
 )
 
 func TestTitleActivityFromTargetedTitleJob(t *testing.T) {
@@ -59,6 +63,57 @@ func TestSelectedTitleIDs(t *testing.T) {
 	}
 	if _, err := selectedTitleIDs([]string{"x"}); err == nil {
 		t.Fatal("bad id accepted")
+	}
+}
+
+func TestFilterTitlesBySourceID(t *testing.T) {
+	t.Parallel()
+
+	titles := []library.Title{
+		{ID: 1, SourceID: "mangadex", SourceURL: "https://mangadex.org/x"},
+		{ID: 2, SourceID: "other", SourceURL: "https://other.to/y"},
+		{ID: 3, SourceURL: "local:import"},
+	}
+	got := filterTitles(append([]library.Title(nil), titles...), libraryControls{
+		Sources: []string{"mangadex"}, SourceLinks: map[int64]bool{3: true},
+		Monitor: "all", Fav: "all", Content: "all", Progress: "all",
+	})
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
+		t.Fatalf("source filter kept %#v", got)
+	}
+	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
+		Sources: []string{"linked"}, Monitor: "all", Fav: "all", Content: "all", Progress: "all",
+	})
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
+		t.Fatalf("linked filter kept %#v", got)
+	}
+	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
+		Monitor: "all", Fav: "all", Content: "all", Progress: "all",
+	})
+	if len(got) != 3 {
+		t.Fatalf("all filter kept %#v", got)
+	}
+	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
+		Sources: []string{"mangadex", "other"}, Monitor: "all", Fav: "all", Content: "all", Progress: "all",
+	})
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
+		t.Fatalf("multi-source filter kept %#v", got)
+	}
+}
+
+func TestLibraryPageSourceOptionsRender(t *testing.T) {
+	u := &webUI{}
+	u.tmpl = template.Must(template.New("").Funcs(u.funcs()).ParseFS(templateFS, "templates/*.html"))
+	view := libraryView{
+		Controls:      libraryControls{Sources: []string{"mangadex"}, Monitor: "all", Fav: "all", Content: "all", Progress: "all"},
+		SourceOptions: []sources.Source{{Profile: sources.Profile{ID: "mangadex", Name: "MangaDex"}}},
+	}
+	var buf bytes.Buffer
+	if err := u.tmpl.ExecuteTemplate(&buf, "library", view); err != nil {
+		t.Fatalf("render library: %v", err)
+	}
+	if !strings.Contains(buf.String(), `name="source" value="mangadex" checked`) {
+		t.Error("source option not rendered checked")
 	}
 }
 
