@@ -581,6 +581,15 @@ func (r *Repository) UpsertChapters(
 	}
 	defer stmt.Close()
 
+	displace, err := tx.PrepareContext(ctx, `
+		UPDATE chapters SET url = 'stale:' || id, updated_at = CURRENT_TIMESTAMP
+		WHERE title_id = ? AND url = ? AND label <> ?
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare chapter displace: %w", err)
+	}
+	defer displace.Close()
+
 	// Chapters also have UNIQUE(title_id, url); a second label for the same
 	// URL would abort the whole transaction, so keep the first one.
 	seenURL := map[string]bool{}
@@ -594,6 +603,9 @@ func (r *Repository) UpsertChapters(
 		if uid == "" {
 			sum := sha256.Sum256([]byte(ch.URL))
 			uid = hex.EncodeToString(sum[:8])
+		}
+		if _, err = displace.ExecContext(ctx, titleID, ch.URL, ch.Label); err != nil {
+			return 0, fmt.Errorf("displace chapter url %q: %w", ch.URL, err)
 		}
 		if _, err = stmt.ExecContext(
 			ctx,

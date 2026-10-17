@@ -751,3 +751,46 @@ func TestUpsertChapterVolumeAndUID(t *testing.T) {
 		t.Fatalf("explicit clear overridden by rescrape: %v custom %d", vol, custom)
 	}
 }
+
+func TestUpsertChaptersSurvivesLabelShift(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://x.test/m", DisplayTitle: "M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := func(label, url string) chapters.Chapter {
+		return chapters.Chapter{Chapter: providers.Chapter{URL: url, Title: "Ch " + label, Label: label, NumMain: 1}}
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		ch("1", "https://x.test/a"), ch("2", "https://x.test/b"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Labels shift down by one while URLs stay: label 1 now owns url b.
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		ch("1", "https://x.test/b"), ch("2", "https://x.test/c"),
+	}); err != nil {
+		t.Fatalf("label-shift upsert: %v", err)
+	}
+	url := func(label string) string {
+		var u string
+		if err := db.QueryRowContext(ctx, `SELECT url FROM chapters WHERE title_id = ? AND label = ?`, title.ID, label).Scan(&u); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	if url("1") != "https://x.test/b" || url("2") != "https://x.test/c" {
+		t.Fatalf("urls after shift: 1=%q 2=%q", url("1"), url("2"))
+	}
+}
