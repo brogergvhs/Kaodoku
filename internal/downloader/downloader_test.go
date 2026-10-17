@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -236,4 +237,36 @@ func (f *fakeBrowser) Fetch(_ context.Context, target string) (string, error) {
 		f.client.Jar.SetCookies(imageHost, []*http.Cookie{{Name: "cf_clearance", Value: "ok", Path: "/"}})
 	}
 	return "", nil
+}
+
+func TestSniffImageExt(t *testing.T) {
+	t.Parallel()
+
+	webp := append([]byte("RIFF\x00\x00\x00\x00WEBPVP8 "), make([]byte, 16)...)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 16)...)
+	jpg := append([]byte("\xff\xd8\xff\xe0"), make([]byte, 16)...)
+
+	for _, tc := range []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{"webp", webp, ".webp"},
+		{"png", png, ".png"},
+		{"jpeg stays .jpg", jpg, ".jpg"},
+		{"unknown", []byte("not an image at all"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "page")
+			if err := os.WriteFile(file, tc.body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := sniffImageExt(file); got != tc.want {
+				t.Errorf("sniffImageExt() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := sniffImageExt(filepath.Join(t.TempDir(), "missing")); got != "" {
+		t.Errorf("missing file = %q, want \"\"", got)
+	}
 }

@@ -26,9 +26,11 @@ import (
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
+	"github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/providers/registry"
 	"github.com/brogergvhs/kaodoku/internal/service"
@@ -91,12 +93,13 @@ type libraryView struct {
 	CollectionIDs      string
 	CollectionID       int64
 	CollectionSmartKey string
+	SourceOptions      []sources.Source
 }
 type libraryControls struct {
 	Q           string
 	Monitor     string
 	Fav         string
-	Source      string
+	Sources     []string 
 	Progress    string
 	Content     string // chapters/volumes presence
 	Sort        string
@@ -104,7 +107,18 @@ type libraryControls struct {
 	View        string
 	IncludeTags []string
 	ExcludeTags []string
+	SourceLinks map[int64]bool
 }
+
+// SourceSet reports which source tokens are selected, for the filter template.
+func (c libraryControls) SourceSet() map[string]bool {
+	set := make(map[string]bool, len(c.Sources))
+	for _, s := range c.Sources {
+		set[s] = true
+	}
+	return set
+}
+
 type healthView struct {
 	Services []service.ServiceHealth
 	Interval string // HTMX poll interval, e.g. "60s"
@@ -128,8 +142,11 @@ type activityView struct {
 	Screen        int64
 }
 type sourceRowView struct {
-	Source sources.Source
-	Active bool
+	Source     sources.Source
+	Active     bool
+	Poll       bool
+	Titles     int // library titles using this source
+	FetchFails int // titles whose last chapter refresh failed
 }
 type sourceProbeView struct {
 	TitleID  int64
@@ -307,6 +324,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/library/bulk", u.libraryBulk)
 	mux.HandleFunc("POST /ui/library/{id}/refresh", u.libAction(jobs.TypeRefreshTitle, "refreshing"))
 	mux.HandleFunc("POST /ui/library/{id}/download", u.libAction(jobs.TypeDownloadMissing, "downloading"))
+	mux.HandleFunc("POST /ui/library/{id}/crops", u.libAction(jobs.TypeDetectCrops, "detecting crops"))
 	mux.HandleFunc("POST /ui/library/{id}/scan", u.libAction(jobs.TypeScanDownloads, "scanning"))
 	mux.HandleFunc("GET /ui/library/{id}/activity", u.libActivity)
 	mux.HandleFunc("POST /ui/library/{id}/monitored", u.libMonitored)
@@ -350,6 +368,11 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/library/{id}/chapters/{chapterID}/remove", u.chapterRemove)
 	mux.HandleFunc("GET /ui/library/{id}/chapters/{chapterID}/rename-dialog", u.chapterRenameDialog)
 	mux.HandleFunc("POST /ui/library/{id}/chapters/{chapterID}/rename", u.chapterRename)
+	mux.HandleFunc("POST /ui/library/{id}/chapters/{chapterID}/reset-name", u.chapterResetName)
+	mux.HandleFunc("POST /ui/library/{id}/chapters/reset-names", u.chapterResetNames)
+	mux.HandleFunc("GET /ui/library/{id}/chapters/bulk-rename", u.chapterBulkRenameForm)
+	mux.HandleFunc("POST /ui/library/{id}/chapters/bulk-rename/preview", u.chapterBulkRenamePreview)
+	mux.HandleFunc("POST /ui/library/{id}/chapters/bulk-rename", u.chapterBulkRenameApply)
 	mux.HandleFunc("POST /ui/library/{id}/chapters/range", u.chapterRangeRead)
 	mux.HandleFunc("POST /ui/library/{id}/chapters/delete-range", u.chapterDeleteRange)
 	mux.HandleFunc("POST /ui/library/{id}/link", u.linkSource)
@@ -363,11 +386,18 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/sources/{id}/edit", u.srcEdit)
 	mux.HandleFunc("POST /ui/sources/{id}/edit", u.srcEditSave)
 	mux.HandleFunc("GET /ui/sources/{id}/row", u.srcRow)
+	mux.HandleFunc("GET /ui/sources/{id}/title-errors", u.srcTitleErrors)
 	mux.HandleFunc("POST /ui/sources/{id}/enabled", u.srcEnabled)
 	mux.HandleFunc("POST /ui/sources/{id}/delete", u.srcDelete)
 	mux.HandleFunc("POST /ui/sources/sync", u.srcSync)
+	mux.HandleFunc("GET /ui/sources/table", u.sourcesTable)
 	mux.HandleFunc("POST /ui/sources/test", u.srcTest)
 	mux.HandleFunc("POST /ui/sources/custom", u.srcAddCustom)
+	mux.HandleFunc("GET /ui/sources/kotatsu", u.kotatsuModal)
+	mux.HandleFunc("GET /ui/sources/kotatsu/list", u.kotatsuBrowse)
+	mux.HandleFunc("GET /ui/sources/kotatsu/table", u.kotatsuTable)
+	mux.HandleFunc("GET /ui/sources/kotatsu/section", u.kotatsuSection)
+	mux.HandleFunc("POST /ui/sources/kotatsu/import", u.kotatsuImport)
 	mux.HandleFunc("GET /ui/library/table", u.libraryTable)
 	mux.HandleFunc("GET /ui/jobs/table", u.jobsTable)
 	mux.HandleFunc("POST /ui/jobs/start", u.jobStart)
@@ -765,6 +795,7 @@ func (u *webUI) libraryPage(w http.ResponseWriter, r *http.Request) {
 	}
 	view.TagOptions = visibleTagOptions(r.Context(), view.TagOptions)
 	view.Controls = libraryControlsFrom(screenDefaults(values, view.Screen))
+	view.SourceOptions = u.librarySourceOptions(r.Context())
 	title := "Library"
 	if view.Screen != nil {
 		title = view.Screen.Name
@@ -944,6 +975,7 @@ func (u *webUI) collectionMembersPage(w http.ResponseWriter, r *http.Request) {
 		CollectionIDs:      values.Get("ids"),
 		CollectionID:       collectionID,
 		CollectionSmartKey: values.Get("smart"),
+		SourceOptions:      u.librarySourceOptions(ctx),
 	}
 	u.page(w, r, "library", name, view)
 }
@@ -1593,6 +1625,19 @@ func (u *webUI) buildLibraryTable(ctx context.Context, values url.Values) librar
 		}
 	}
 	controls := libraryControlsFrom(screenDefaults(values, screen))
+	for _, s := range controls.Sources {
+		if s == "linked" || s == "unlinked" || s == "imported" {
+			continue
+		}
+		links, _ := u.svc.SourceTitleIDs(ctx, s)
+		if controls.SourceLinks == nil {
+			controls.SourceLinks = links
+		} else {
+			for id := range links {
+				controls.SourceLinks[id] = true
+			}
+		}
+	}
 	titles, _ := u.svc.ListTitles(ctx)
 	titles = filterRestrictedTitles(ctx, titles)
 	if ids := values.Get("ids"); ids != "" {
@@ -1678,13 +1723,38 @@ func (u *webUI) buildLibraryTable(ctx context.Context, values url.Values) librar
 	return t
 }
 
+func (u *webUI) librarySourceOptions(ctx context.Context) []sources.Source {
+	srcs, _ := u.svc.ListSources(ctx)
+	srcs = filterNSFWSources(ctx, srcs)
+	counts, _ := u.svc.SourceTitleCounts(ctx)
+	out := srcs[:0]
+	for _, s := range srcs {
+		if counts[s.ID] > 0 {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// selectedSources trims the source tokens, dropping blanks and a stray "all".
+func selectedSources(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		if s = strings.TrimSpace(s); s != "" && s != "all" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func libraryControlsFrom(values url.Values) libraryControls {
 	c := libraryControls{
 		Q:           strings.TrimSpace(values.Get("q")),
 		Monitor:     values.Get("monitor"),
 		Fav:         values.Get("fav"),
 		Content:     values.Get("content"),
-		Source:      values.Get("source"),
+		Sources:     selectedSources(values["source"]),
 		Progress:    values.Get("progress"),
 		Sort:        values.Get("sort"),
 		Dir:         values.Get("dir"),
@@ -1705,9 +1775,6 @@ func libraryControlsFrom(values url.Values) libraryControls {
 	case "chapters", "no-chapters", "volumes", "no-volumes":
 	default:
 		c.Content = "all"
-	}
-	if c.Source == "" {
-		c.Source = "all"
 	}
 	if c.Progress == "" {
 		c.Progress = "all"
@@ -1748,12 +1815,12 @@ func screenDefaults(values url.Values, screen *library.Screen) url.Values {
 
 func libraryTableParams(values url.Values) url.Values {
 	out := url.Values{}
-	for _, key := range []string{"q", "monitor", "fav", "source", "progress", "content", "sort", "dir", "view", "screen", "ids"} {
+	for _, key := range []string{"q", "monitor", "fav", "progress", "content", "sort", "dir", "view", "screen", "ids"} {
 		if value := strings.TrimSpace(values.Get(key)); value != "" {
 			out.Set(key, value)
 		}
 	}
-	for _, key := range []string{"include_tags", "exclude_tags"} {
+	for _, key := range []string{"source", "include_tags", "exclude_tags"} {
 		for _, value := range values[key] {
 			if value = strings.TrimSpace(value); value != "" {
 				out.Add(key, value)
@@ -1770,6 +1837,32 @@ func tagList(raw []string) []string {
 		out = append(out, splitCommaList(v)...)
 	}
 	return out
+}
+
+// matchesAnySource reports whether a title satisfies any selected source token
+// (categorical linked/unlinked/imported, a concrete source id, or a linked one).
+func matchesAnySource(title library.Title, c libraryControls) bool {
+	for _, s := range c.Sources {
+		switch s {
+		case "linked":
+			if strings.HasPrefix(title.SourceURL, "http") {
+				return true
+			}
+		case "unlinked":
+			if !strings.HasPrefix(title.SourceURL, "http") {
+				return true
+			}
+		case "imported":
+			if strings.HasPrefix(title.SourceURL, "local:") {
+				return true
+			}
+		default:
+			if title.SourceID == s || c.SourceLinks[title.ID] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func filterTitles(titles []library.Title, c libraryControls) []library.Title {
@@ -1798,19 +1891,8 @@ func filterTitles(titles []library.Title, c libraryControls) []library.Title {
 		if c.Fav == "only" && !title.Favourite {
 			continue
 		}
-		switch c.Source {
-		case "linked":
-			if !strings.HasPrefix(title.SourceURL, "http") {
-				continue
-			}
-		case "unlinked":
-			if strings.HasPrefix(title.SourceURL, "http") {
-				continue
-			}
-		case "imported":
-			if !strings.HasPrefix(title.SourceURL, "local:") {
-				continue
-			}
+		if len(c.Sources) > 0 && !matchesAnySource(title, c) {
+			continue
 		}
 		switch c.Progress {
 		case "missing":
@@ -1867,6 +1949,7 @@ var globalJobTypes = []string{
 	jobs.TypeRefreshTitle,
 	jobs.TypeScanDownloads,
 	jobs.TypeDownloadMissing,
+	jobs.TypeDetectCrops,
 	jobs.TypeCatalogRefresh,
 	jobs.TypeSyncAniList,
 	jobs.TypeBackupUserData,
@@ -2449,6 +2532,39 @@ func (u *webUI) chapterRename(w http.ResponseWriter, r *http.Request) {
 	u.writeChaptersTable(w, r, titleID)
 }
 
+// chapterResetName restores one manually renamed chapter's scraped name.
+func (u *webUI) chapterResetName(w http.ResponseWriter, r *http.Request) {
+	titleID, chapterID, ok := u.chapterOwned(w, r)
+	if !ok {
+		return
+	}
+	if err := u.svc.ResetChapterTitle(r.Context(), chapterID); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.writeChaptersTable(w, r, titleID)
+}
+
+// chapterResetNames restores scraped names for the whole title (blank range)
+// or an inclusive chapter range.
+func (u *webUI) chapterResetNames(w http.ResponseWriter, r *http.Request) {
+	titleID, err := pathID(r)
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	if !titleAllowed(r.Context(), u.svc, titleID) {
+		http.NotFound(w, r)
+		return
+	}
+	_ = r.ParseForm()
+	if _, err := u.svc.ResetChapterTitles(r.Context(), titleID, r.FormValue("from"), r.FormValue("to")); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.writeChaptersTable(w, r, titleID)
+}
+
 // chapterDeleteRange deletes downloaded chapters in a whole-number range.
 func (u *webUI) chapterDeleteRange(w http.ResponseWriter, r *http.Request) {
 	titleID, err := pathID(r)
@@ -2648,12 +2764,20 @@ func (u *webUI) sourcesPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	srcs = filterNSFWSources(r.Context(), srcs)
-	u.page(w, r, "sources", "Sources", sourcesPageView{Sources: srcs, Scrapers: registry.Names()})
+	main, kot := splitKotatsuSources(u.sourceRows(r.Context(), srcs))
+	u.page(w, r, "sources", "Sources", sourcesPageView{
+		Sources:        main,
+		KotatsuSources: kot,
+		Scrapers:       registry.Names(),
+		KotatsuEnabled: u.svc.KotatsuClient(r.Context()) != nil,
+	})
 }
 
 type sourcesPageView struct {
-	Sources  []sources.Source
-	Scrapers []string
+	Sources        []sourceRowView
+	KotatsuSources []sourceRowView
+	Scrapers       []string
+	KotatsuEnabled bool
 }
 
 type backupsView struct {
@@ -3397,7 +3521,7 @@ func (u *webUI) srcVerify(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: true})
+	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: true, Poll: true, Titles: u.sourceTitleCount(r.Context(), id), FetchFails: u.sourceFetchFailCount(r.Context(), id)})
 }
 
 func (u *webUI) srcEnabled(w http.ResponseWriter, r *http.Request) {
@@ -3415,12 +3539,40 @@ func (u *webUI) srcDelete(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	srcs, err := u.svc.ListSources(r.Context())
-	if err != nil {
-		u.fail(w, err)
-		return
+	w.WriteHeader(http.StatusOK)
+}
+
+// sourceRows marks rows with a queued/running verify job so they render the
+// verifying spinner.
+func (u *webUI) sourceRows(ctx context.Context, srcs []sources.Source) []sourceRowView {
+	verifying := map[string]bool{}
+	for _, j := range u.jobs(ctx) {
+		if j.Type != jobs.TypeVerifySource || (j.Status != "queued" && j.Status != "running") {
+			continue
+		}
+		var p service.JobPayload
+		if json.Unmarshal([]byte(j.Payload), &p) == nil {
+			verifying[p.SourceID] = true
+		}
 	}
-	u.frag(w, "sourcesTable", srcs)
+	counts, _ := u.svc.SourceTitleCounts(ctx)
+	fails, _ := u.svc.SourceFetchFailureCounts(ctx)
+	rows := make([]sourceRowView, len(srcs))
+	for i, s := range srcs {
+		rows[i] = sourceRowView{Source: s, Active: verifying[s.ID], Titles: counts[s.ID], FetchFails: fails[s.ID]}
+	}
+	return rows
+}
+
+func splitKotatsuSources(rows []sourceRowView) (main, kot []sourceRowView) {
+	for _, row := range rows {
+		if strings.HasPrefix(row.Source.Scraper, kotatsu.ScraperPrefix) {
+			kot = append(kot, row)
+		} else {
+			main = append(main, row)
+		}
+	}
+	return main, kot
 }
 
 func (u *webUI) srcRow(w http.ResponseWriter, r *http.Request) {
@@ -3431,13 +3583,41 @@ func (u *webUI) srcRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active, _, _ := u.jobStateFor(r.Context(), jobs.TypeVerifySource, service.JobPayload{SourceID: id})
-	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: active})
+	u.frag(w, "sourceRow", sourceRowView{Source: src, Active: active, Poll: active, Titles: u.sourceTitleCount(r.Context(), id), FetchFails: u.sourceFetchFailCount(r.Context(), id)})
+}
+
+func (u *webUI) sourceTitleCount(ctx context.Context, id string) int {
+	counts, _ := u.svc.SourceTitleCounts(ctx)
+	return counts[id]
+}
+
+func (u *webUI) sourceFetchFailCount(ctx context.Context, id string) int {
+	fails, _ := u.svc.SourceFetchFailureCounts(ctx)
+	return fails[id]
+}
+
+// srcTitleErrors lists this source's titles whose last refresh failed.
+func (u *webUI) srcTitleErrors(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	titles, err := u.svc.ListTitles(r.Context())
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	var failing []library.Title
+	for _, t := range titles {
+		if t.SourceID == id && t.FetchError != "" {
+			failing = append(failing, t)
+		}
+	}
+	u.frag(w, "sourceTitleErrors", failing)
 }
 
 // sourceEditView carries the scraper choices next to the profile fields.
 type sourceEditView struct {
 	sources.Source
 	Scrapers []string
+	Kotatsu  bool
 }
 
 func (u *webUI) srcEdit(w http.ResponseWriter, r *http.Request) {
@@ -3446,7 +3626,15 @@ func (u *webUI) srcEdit(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	u.frag(w, "sourceEdit", sourceEditView{Source: src, Scrapers: registry.Names()})
+	names := registry.Names()
+
+	if !slices.Contains(names, src.Scraper) && src.Scraper != "" {
+		names = append([]string{src.Scraper}, names...)
+	}
+	u.frag(w, "sourceEdit", sourceEditView{
+		Source: src, Scrapers: names,
+		Kotatsu: strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix),
+	})
 }
 
 func (u *webUI) srcEditSave(w http.ResponseWriter, r *http.Request) {
@@ -3461,11 +3649,17 @@ func (u *webUI) srcEditSave(w http.ResponseWriter, r *http.Request) {
 	p.Name = strings.TrimSpace(r.FormValue("name"))
 	p.BaseURL = strings.TrimSpace(r.FormValue("base_url"))
 	p.SampleMangaURL = strings.TrimSpace(r.FormValue("manga_url"))
-	p.SearchURL = strings.TrimSpace(r.FormValue("search_url"))
 	p.Domains = splitList(r.FormValue("domains"))
-	p.AllowedExtensions = splitList(r.FormValue("extensions"))
 	p.Scraper = strings.TrimSpace(r.FormValue("scraper"))
-	p.Languages = splitList(r.FormValue("languages"))
+	if r.Form.Has("search_url") {
+		p.SearchURL = strings.TrimSpace(r.FormValue("search_url"))
+	}
+	if r.Form.Has("extensions") {
+		p.AllowedExtensions = splitList(r.FormValue("extensions"))
+	}
+	if r.Form.Has("languages") {
+		p.Languages = splitList(r.FormValue("languages"))
+	}
 	p.SingleManga = formChecked(r, "single_manga")
 	p.Chapterless = formChecked(r, "chapterless")
 	p.NSFW = formChecked(r, "nsfw")
@@ -3475,9 +3669,25 @@ func (u *webUI) srcEditSave(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	if err := u.svc.SetSourceMethods(r.Context(), id, r.FormValue("chapter_fetch"), r.FormValue("image_fetch")); err != nil {
+	// The sync upsert deliberately preserves the stored enabled flag, so the
+	// checkbox needs its own write.
+	if err := u.svc.SetSourceEnabled(r.Context(), id, p.Enabled); err != nil {
 		u.fail(w, err)
 		return
+	}
+	if parserID, ok := strings.CutPrefix(p.Scraper, kotatsu.ScraperPrefix); ok && len(p.Domains) > 0 {
+		if kc := u.svc.KotatsuClient(r.Context()); kc != nil {
+			if err := kc.SetConfig(r.Context(), parserID, map[string]string{"domain": p.Domains[0]}); err != nil {
+				u.fail(w, fmt.Errorf("saved, but the worker rejected the domain: %w", err))
+				return
+			}
+		}
+	}
+	if r.Form.Has("chapter_fetch") || r.Form.Has("image_fetch") {
+		if err := u.svc.SetSourceMethods(r.Context(), id, r.FormValue("chapter_fetch"), r.FormValue("image_fetch")); err != nil {
+			u.fail(w, err)
+			return
+		}
 	}
 	u.kick()
 	w.Header().Set("HX-Refresh", "true")
@@ -3510,8 +3720,13 @@ func (u *webUI) srcSync(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
+	u.sourcesTable(w, r)
+}
+
+func (u *webUI) sourcesTable(w http.ResponseWriter, r *http.Request) {
 	srcs, _ := u.svc.ListSources(r.Context())
-	u.frag(w, "sourcesTable", srcs)
+	main, _ := splitKotatsuSources(u.sourceRows(r.Context(), filterNSFWSources(r.Context(), srcs)))
+	u.frag(w, "sourcesTable", main)
 }
 
 func (u *webUI) srcTest(w http.ResponseWriter, r *http.Request) {
@@ -3847,6 +4062,8 @@ func titleVerb(typ string) string {
 		return "scanning"
 	case jobs.TypeAttachVolumes:
 		return "attaching volumes"
+	case jobs.TypeDetectCrops:
+		return "detecting crops"
 	}
 	return ""
 }
@@ -3917,6 +4134,8 @@ func pathID(r *http.Request) (int64, error) {
 func (u *webUI) funcs() template.FuncMap {
 	return template.FuncMap{
 		"assetVer": func() string { return u.assetVer },
+		"chname":   chapters.DisplayName,
+		"desc":     util.PlainDescription,
 		"jobLabel": jobLabel,
 		"tokenExpired": func(expiresAt string) bool {
 			t, err := database.ParseTime(expiresAt)
@@ -4029,8 +4248,7 @@ func (u *webUI) funcs() template.FuncMap {
 		"releaseStatus": func(s string) string {
 			return strings.ToLower(strings.ReplaceAll(s, "_", " "))
 		},
-		"pct":       func(done, total int64) int64 { return percent(done, total) },
-		"sourceRow": func(s sources.Source) sourceRowView { return sourceRowView{Source: s} },
+		"pct": func(done, total int64) int64 { return percent(done, total) },
 		"missingTotal": func(ts []library.Title) int64 {
 			var n int64
 			for _, t := range ts {
@@ -4157,6 +4375,8 @@ func jobLabel(typ string) string {
 		return "Match sources"
 	case jobs.TypeBackupUserData:
 		return "Back up user data"
+	case jobs.TypeDetectCrops:
+		return "Detect page crops"
 	}
 	return typ
 }

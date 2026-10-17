@@ -165,6 +165,9 @@ func requiredPerm(r *http.Request) string {
 		return auth.PermReaderUse
 	case strings.Contains(p, "/chapters/") && (strings.HasSuffix(p, "/remove") || strings.HasSuffix(p, "/rename")):
 		return auth.PermLibraryManage // delete from disk / edit chapter metadata
+	case strings.Contains(p, "/chapters/bulk-rename") || strings.HasSuffix(p, "/chapters/reset-names") ||
+		(strings.Contains(p, "/chapters/") && strings.HasSuffix(p, "/reset-name")):
+		return auth.PermLibraryManage // name/volume edits mirror /rename
 	case strings.HasSuffix(p, "/chapters/delete-range"):
 		return auth.PermLibraryManage
 	case r.Method == http.MethodGet || r.Method == http.MethodHead:

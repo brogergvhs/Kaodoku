@@ -91,6 +91,7 @@ final class AppState {
   private static let readerWarmthKey = "reader_warmth"
   private static let readerDimKey = "reader_dim"
   private static let readerWhiteOnlyKey = "reader_white_only"
+  private static let readerTrimKey = "reader_trim_borders"
 
   var savedServers: [SavedServer] =
     (UserDefaults.standard.data(forKey: savedServersKey))
@@ -155,6 +156,23 @@ final class AppState {
   /// keep their hues.
   var readerWhiteOnly = UserDefaults.standard.bool(forKey: readerWhiteOnlyKey) {
     didSet { UserDefaults.standard.set(readerWhiteOnly, forKey: Self.readerWhiteOnlyKey) }
+  }
+
+  /// Cut server-detected page borders in the paged reader.
+  var readerTrimBorders = UserDefaults.standard.bool(forKey: readerTrimKey) {
+    didSet { UserDefaults.standard.set(readerTrimBorders, forKey: Self.readerTrimKey) }
+  }
+
+  var readerTrimStrength =
+    (UserDefaults.standard.object(forKey: "reader_trim_strength") as? Double) ?? 1
+  {
+    didSet { UserDefaults.standard.set(readerTrimStrength, forKey: "reader_trim_strength") }
+  }
+
+  var readerTrimMargin =
+    (UserDefaults.standard.object(forKey: "reader_trim_margin") as? Double) ?? 0.01
+  {
+    didSet { UserDefaults.standard.set(readerTrimMargin, forKey: "reader_trim_margin") }
   }
 
   var readerComfort: ComfortParams {

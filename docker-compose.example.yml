@@ -52,9 +52,17 @@ services:
       KAODOKU_BROWSER_DOWNLOADER_ENABLED: "true"
       KAODOKU_BROWSER_DOWNLOADER_ENDPOINT: http://browser-worker:8192
       KAODOKU_BROWSER_DOWNLOADER_TIMEOUT_SECONDS: "180"
+      # Must match browser-worker's BROWSER_WORKER_KEY when that is set:
+      # KAODOKU_BROWSER_DOWNLOADER_API_KEY: change-me
       KAODOKU_BROWSER_SOLVER_ENABLED: "true"
       KAODOKU_BROWSER_SOLVER_ENDPOINT: http://flaresolverr:8191/v1
       KAODOKU_BROWSER_SOLVER_TIMEOUT_SECONDS: "60"
+      #
+      # Optional: extra sources via the kotatsu-worker service below. The API
+      # key must match the worker's WORKER_KEY.
+      # KAODOKU_KOTATSU_WORKER_ENABLED: "true"
+      # KAODOKU_KOTATSU_WORKER_ENDPOINT: http://kotatsu-worker:8484
+      # KAODOKU_KOTATSU_WORKER_API_KEY: change-me
     volumes:
       - kaodoku-config:/config
       - kaodoku-data:/data
@@ -86,8 +94,9 @@ services:
     environment:
       SELENIUM_REMOTE_URL: http://selenium:4444/wd/hub
       BROWSER_WORKER_ADDR: 0.0.0.0:8192
-    ports:
-      - "127.0.0.1:8192:8192"
+      # When set, POST requests require a matching X-Worker-Key header; keep
+      # it in sync with the callers' keys below.
+      # BROWSER_WORKER_KEY: change-me
     depends_on:
       selenium:
         condition: service_started
@@ -96,6 +105,28 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # Optional: kotatsu-worker provides ~1300 extra manga sources via
+  # kotatsu-parsers. Point kaodoku's kotatsu_worker.endpoint at it.
+  kotatsu-worker:
+    build: ./kotatsu-worker
+    restart: unless-stopped
+    mem_limit: 384m
+    environment:
+      WORKER_KEY: change-me
+      # Optional: lets the worker clear Cloudflare challenges. 
+      # Must share the worker's egress IP, so run it next to this service.
+      FLARESOLVERR_URL: http://flaresolverr:8191
+      # Optional: lets parsers that need JavaScript run it in the Selenium
+      # browser-worker (same egress-IP caveat as FlareSolverr). The key must
+      # match browser-worker's BROWSER_WORKER_KEY when that is set.
+      BROWSER_WORKER_URL: http://browser-worker:8192
+      # BROWSER_WORKER_KEY: change-me
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8484/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
 
 # tools:
 #   image: alpine:latest

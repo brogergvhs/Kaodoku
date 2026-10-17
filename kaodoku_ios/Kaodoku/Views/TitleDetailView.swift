@@ -352,8 +352,10 @@ struct TitleDetailView: View {
           { fraction in
             Task { @MainActor in store.setProgress(fraction) }
           }
+          let display = ch.displayName ?? ch.title
           try await app.store.save(file: tmp, chapterID: ch.id, titleId: titleID,
                                    titleName: p.title.displayTitle, label: name,
+                                   name: display.isEmpty ? nil : display,
                                    readPages: ch.readPages, completed: ch.completed, volume: volumes)
         } catch {
           note = error.localizedDescription
@@ -769,10 +771,11 @@ struct ChapterRow: View {
           Text("\(chapter.totalPages) pages · \(humanBytes(chapter.bytes))")
             .font(.caption).foregroundStyle(.secondary)
         } else {
-          Text("Chapter \(chapter.label)")
+          let name = chapter.displayName ?? chapter.title
+          Text(name.isEmpty ? "Chapter \(chapter.label)" : "\(chapter.label): \(name)")
             .foregroundStyle(chapter.downloaded || local ? .primary : .secondary)
-          if !chapter.title.isEmpty {
-            Text(chapter.title).font(.caption).foregroundStyle(.secondary)
+          if let vol = chapter.displayVolume, !vol.isEmpty {
+            Text(vol).font(.caption).foregroundStyle(.secondary)
           }
         }
       }

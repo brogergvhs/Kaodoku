@@ -26,8 +26,15 @@ go.work.sum
 
 # env file
 .env
+docker-compose.yml
 
 # other
+__pycache__/
 .cache/
 downloaded_files/
 node_modules/
+
+# kotatsu-worker (Gradle) build artifacts
+kotatsu-worker/.gradle/
+kotatsu-worker/.kotlin/
+kotatsu-worker/build/

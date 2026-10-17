@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/browserfetch"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/config"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
 )
@@ -171,6 +173,15 @@ func (s *sourceService) VerifySource(ctx context.Context, cfg *config.Config, lo
 	checkErr := s.verify(ctx, cfg, logSvc, src, &result)
 	if checkErr != nil {
 		result.Error = checkErr.Error()
+		// A dead worker says nothing about the parser: keep the last good
+		// verify pipeline and only flag the source degraded.
+		if workerUnavailable(checkErr) {
+			result.Status = sources.StatusDegraded
+			if err := s.repo.UpdateHealth(ctx, src.ID, sources.StatusDegraded, result.Error); err != nil {
+				return result, err
+			}
+			return result, checkErr
+		}
 	}
 	if err := s.repo.UpdateCheck(ctx, src.ID, sources.CheckResult{
 		Status: result.Status, LastError: result.Error,
@@ -198,11 +209,13 @@ func (s *sourceService) verify(ctx context.Context, cfg *config.Config, logSvc u
 	searchStep, pickStep, mangaURL := s.verifySearch(ctx, cfg, logSvc, src)
 
 	attempts := []bool{false}
-	if cfg.BrowserSolver.Enabled || src.ChapterFetch == sources.FetchSolver || src.RequiresBrowserSolver {
-		attempts = append(attempts, true)
-	}
-	if src.ChapterFetch == sources.FetchSolver {
-		attempts = []bool{true}
+	if !strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix) {
+		if cfg.BrowserSolver.Enabled || src.ChapterFetch == sources.FetchSolver || src.RequiresBrowserSolver {
+			attempts = append(attempts, true)
+		}
+		if src.ChapterFetch == sources.FetchSolver {
+			attempts = []bool{true}
+		}
 	}
 	var chapStep, imgStep sources.VerifyStep
 	var lastErr error
@@ -231,7 +244,7 @@ func (s *sourceService) verifySearch(ctx context.Context, cfg *config.Config, lo
 	search = sources.VerifyStep{Name: "search", Status: sources.StepSkipped}
 	pick = sources.VerifyStep{Name: "pick manga", Status: sources.StepSkipped, Detail: "using sample manga"}
 	mangaURL = src.SampleMangaURL
-	if src.SingleManga || strings.TrimSpace(src.SearchURL) == "" {
+	if src.SingleManga || (strings.TrimSpace(src.SearchURL) == "" && !strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix)) {
 		search.Detail = "source has no search"
 		return search, pick, mangaURL
 	}
@@ -239,6 +252,10 @@ func (s *sourceService) verifySearch(ctx context.Context, cfg *config.Config, lo
 	query := sampleTitleQuery(src)
 	searchURL := strings.ReplaceAll(src.SearchURL, "{query}", url.QueryEscape(query))
 	search.Detail = fmt.Sprintf("%q", query)
+
+	if strings.HasPrefix(src.Scraper, kotatsu.ScraperPrefix) {
+		query, search.Detail = "", "popular list"
+	}
 
 	// A scraper with a native search API (e.g. comickz, whose results page is
 	// JS-rendered) answers directly — no HTML parsing.
@@ -248,13 +265,13 @@ func (s *sourceService) verifySearch(ctx context.Context, cfg *config.Config, lo
 			if err != nil {
 				search.Log = fmt.Sprintf("search API: %v", err)
 			} else {
-				search.Log = fmt.Sprintf("search API returned no results for %q", query)
+				search.Log = fmt.Sprintf("search API returned no results for %s", search.Detail)
 			}
 			pick.Detail = "falling back to sample manga"
 			return search, pick, mangaURL
 		}
 		search.Status = sources.StepOK
-		search.Detail = fmt.Sprintf("%d results for %q", len(urls), query)
+		search.Detail = fmt.Sprintf("%d results for %s", len(urls), search.Detail)
 		mangaURL = urls[rand.Intn(len(urls))]
 		pick.Status = sources.StepOK
 		pick.Detail = mangaURL
@@ -430,10 +447,28 @@ func sampleTitleQuery(src sources.Source) string {
 // fetchFailureStatus maps a fetch error to a health status: a Cloudflare wall
 // is distinct from a generically broken source.
 func fetchFailureStatus(err error) string {
+	var ke *kotatsu.APIError
+	if errors.As(err, &ke) {
+		switch {
+		case ke.IsCloudflare():
+			return sources.StatusRequiresCF
+		case ke.Code == "rate_limited" || ke.Code == "unauthorized":
+			return sources.StatusDegraded
+		default:
+			return sources.StatusBroken
+		}
+	}
 	if strings.Contains(strings.ToLower(err.Error()), "cloudflare") {
 		return sources.StatusRequiresCF
 	}
+	if workerUnavailable(err) {
+		return sources.StatusDegraded
+	}
 	return sources.StatusBroken
+}
+
+func workerUnavailable(err error) bool {
+	return strings.Contains(err.Error(), "kotatsu worker")
 }
 
 func imageExtensions(images []string) []string {

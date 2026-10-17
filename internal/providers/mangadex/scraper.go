@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +73,7 @@ func (s *Scraper) GetChaptersByLanguage(ctx context.Context, pageURL string, pre
 				ID         string `json:"id"`
 				Attributes struct {
 					Chapter            string `json:"chapter"`
+					Volume             string `json:"volume"`
 					Title              string `json:"title"`
 					Pages              int    `json:"pages"`
 					ExternalURL        string `json:"externalUrl"`
@@ -109,6 +111,7 @@ func (s *Scraper) GetChaptersByLanguage(ctx context.Context, pageURL string, pre
 			if t := strings.TrimSpace(a.Title); t != "" {
 				title += " - " + t
 			}
+			vol, _ := strconv.ParseFloat(a.Volume, 64)
 			best[label] = pick{rank: langRank, chapter: providers.Chapter{
 				URL:        "https://mangadex.org/chapter/" + c.ID,
 				Title:      title,
@@ -116,6 +119,8 @@ func (s *Scraper) GetChaptersByLanguage(ctx context.Context, pageURL string, pre
 				SuffixType: suffixType,
 				SuffixNum:  suffixNum,
 				Label:      label,
+				Volume:     vol,
+				UID:        c.ID,
 			}}
 		}
 		if offset+feedPage >= resp.Total {
@@ -131,7 +136,7 @@ func (s *Scraper) GetChaptersByLanguage(ctx context.Context, pageURL string, pre
 	if err != nil && s.log != nil {
 		s.log.Debugf("MangaDex aggregate failed for %s: %v\n", id, err)
 	}
-	for label, chapterID := range all {
+	for label, agg := range all {
 		if _, ok := best[label]; ok {
 			continue
 		}
@@ -148,12 +153,14 @@ func (s *Scraper) GetChaptersByLanguage(ctx context.Context, pageURL string, pre
 			}
 		}
 		best[label] = pick{chapter: providers.Chapter{
-			URL:        "https://mangadex.org/chapter/" + chapterID,
+			URL:        "https://mangadex.org/chapter/" + agg.id,
 			Title:      "Chapter " + parsedLabel,
 			NumMain:    main,
 			SuffixType: suffixType,
 			SuffixNum:  suffixNum,
 			Label:      parsedLabel,
+			Volume:     agg.volume,
+			UID:        agg.id,
 		}}
 	}
 	if includeAll {
@@ -172,7 +179,12 @@ func (s *Scraper) GetChaptersByLanguage(ctx context.Context, pageURL string, pre
 }
 
 // aggregateChapters maps every chapter label (any language) to one chapter id.
-func (s *Scraper) aggregateChapters(ctx context.Context, id string) (map[string]string, error) {
+type aggregateChapter struct {
+	id     string
+	volume float64
+}
+
+func (s *Scraper) aggregateChapters(ctx context.Context, id string) (map[string]aggregateChapter, error) {
 	var resp struct {
 		Volumes map[string]struct {
 			Chapters map[string]struct {
@@ -183,8 +195,9 @@ func (s *Scraper) aggregateChapters(ctx context.Context, id string) (map[string]
 	if err := util.GetJSON(ctx, s.client, apiBase+"/manga/"+id+"/aggregate", &resp); err != nil {
 		return nil, err
 	}
-	out := map[string]string{}
-	for _, v := range resp.Volumes {
+	out := map[string]aggregateChapter{}
+	for volKey, v := range resp.Volumes {
+		vol, _ := strconv.ParseFloat(volKey, 64)
 		for num, c := range v.Chapters {
 			label := "Oneshot"
 			if num != "" && num != "none" {
@@ -195,7 +208,7 @@ func (s *Scraper) aggregateChapters(ctx context.Context, id string) (map[string]
 				}
 			}
 			if _, dup := out[label]; !dup {
-				out[label] = c.ID
+				out[label] = aggregateChapter{id: c.ID, volume: vol}
 			}
 		}
 	}

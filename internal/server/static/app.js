@@ -122,6 +122,62 @@ document.body.addEventListener("htmx:afterSwap", function () {
   });
 });
 
+// Kotatsu picker: selections live in a Set on the modal element so they
+// survive filter/search swaps of #kotatsu-browse; hidden inputs in
+// #kotatsu-selected carry the full set into the import request.
+function kotatsuSel() {
+  var modal = document.getElementById("kotatsu-add-modal");
+  if (!modal) return null;
+  return (modal._sel = modal._sel || new Set());
+}
+function kotatsuSync() {
+  var sel = kotatsuSel();
+  var browse = document.getElementById("kotatsu-browse");
+  if (!sel || !browse) return;
+  browse.querySelectorAll("input[name='id']").forEach(function (c) {
+    if (c.disabled) {
+      sel.delete(c.value);
+      return;
+    }
+    c.checked = sel.has(c.value);
+  });
+  var holder = document.getElementById("kotatsu-selected");
+  if (holder) {
+    holder.innerHTML = "";
+    sel.forEach(function (id) {
+      var inp = document.createElement("input");
+      inp.type = "hidden";
+      inp.name = "id";
+      inp.value = id;
+      holder.appendChild(inp);
+    });
+  }
+  var n = sel.size;
+  var btn = document.getElementById("kotatsu-import-btn");
+  if (btn) {
+    btn.disabled = n === 0;
+    var label = btn.querySelector("#kotatsu-import-label") || btn;
+    label.textContent = n ? "Import " + n : "Import";
+  }
+  var clear = document.getElementById("kotatsu-clear");
+  if (clear) clear.hidden = n === 0;
+}
+document.addEventListener("change", function (e) {
+  if (!e.target.matches("#kotatsu-browse input[name='id']")) return;
+  var sel = kotatsuSel();
+  if (!sel) return;
+  if (e.target.checked) sel.add(e.target.value);
+  else sel.delete(e.target.value);
+  kotatsuSync();
+});
+document.addEventListener("click", function (e) {
+  if (!e.target.closest("#kotatsu-clear")) return;
+  var sel = kotatsuSel();
+  if (sel) sel.clear();
+  kotatsuSync();
+});
+document.body.addEventListener("htmx:afterSwap", kotatsuSync);
+
 // Tag picker: the filter input hides non-matching checkbox rows.
 document.addEventListener("input", function (e) {
   var filter = e.target.closest("[data-tag-filter]");
@@ -144,7 +200,9 @@ document.addEventListener("change", function (e) {
   var summary = details.querySelector("[data-tag-count]");
   if (!summary) return;
   var count = details.querySelectorAll("[data-tag-list] input:checked").length;
-  summary.textContent = count ? count + " selected" : "None selected";
+  summary.textContent = count
+    ? count + " selected"
+    : summary.dataset.emptyLabel || "None selected";
 });
 
 function updateLibraryBulk() {

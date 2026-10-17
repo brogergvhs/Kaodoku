@@ -21,7 +21,7 @@ func TestGetChaptersDedupesAndSkipsExternal(t *testing.T) {
 			t.Fatalf("unexpected %s", req.URL)
 		}
 		return response(`{"total":5,"data":[
-			{"id":"aaaaaaaa-0000-0000-0000-000000000001","attributes":{"chapter":"1","title":"Start","pages":20}},
+			{"id":"aaaaaaaa-0000-0000-0000-000000000001","attributes":{"chapter":"1","volume":"3","title":"Start","pages":20}},
 			{"id":"aaaaaaaa-0000-0000-0000-000000000002","attributes":{"chapter":"1","title":"Dup group","pages":18}},
 			{"id":"aaaaaaaa-0000-0000-0000-000000000003","attributes":{"chapter":"1.5","title":"","pages":8}},
 			{"id":"aaaaaaaa-0000-0000-0000-000000000004","attributes":{"chapter":"2","title":"Elsewhere","pages":0,"externalUrl":"https://x"}},
@@ -56,6 +56,12 @@ func TestGetChaptersDedupesAndSkipsExternal(t *testing.T) {
 	}
 	if chapters[1].URL != "https://mangadex.org/chapter/aaaaaaaa-0000-0000-0000-000000000001" {
 		t.Fatalf("URL = %q", chapters[1].URL)
+	}
+	if chapters[1].Volume != 3 || chapters[1].UID != "aaaaaaaa-0000-0000-0000-000000000001" {
+		t.Fatalf("volume/uid = %v %q", chapters[1].Volume, chapters[1].UID)
+	}
+	if all[3].Volume != 1 || all[3].UID != "cccccccc-0000-0000-0000-000000000007" {
+		t.Fatalf("aggregate volume/uid = %v %q", all[3].Volume, all[3].UID)
 	}
 }
 

@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,7 +245,7 @@ func TestSourceChangeQueuesRefreshForActiveTitles(t *testing.T) {
 	assertRefreshDownloadsAfter(t, ctx, svc, title.ID, true)
 }
 
-func TestTitleJobUpdatesSourceHealth(t *testing.T) {
+func TestTitleFetchErrorStaysOnTitle(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -264,26 +264,34 @@ func TestTitleJobUpdatesSourceHealth(t *testing.T) {
 		t.Fatalf("AddTitle() error = %v", err)
 	}
 
-	if err := svc.markTitleSourceHealth(ctx, title, nil); err != nil {
-		t.Fatalf("mark healthy: %v", err)
+	if err := svc.lib.repo.SetFetchError(ctx, title.ID, "fetch chapters: cloudflare blocked"); err != nil {
+		t.Fatalf("SetFetchError() error = %v", err)
 	}
+	got, err := svc.lib.GetTitle(ctx, title.ID)
+	if err != nil {
+		t.Fatalf("GetTitle() error = %v", err)
+	}
+	if !strings.Contains(got.FetchError, "cloudflare blocked") {
+		t.Fatalf("title fetch error = %q", got.FetchError)
+	}
+	counts, err := svc.SourceFetchFailureCounts(ctx)
+	if err != nil || counts["demo"] != 1 {
+		t.Fatalf("fetch failure counts = %v, %v", counts, err)
+	}
+	// title failures must not demote the source, only verify jobs write health
 	src, err := svc.src.GetSource(ctx, "demo")
 	if err != nil {
 		t.Fatalf("Get(source) error = %v", err)
 	}
-	if src.Status != sources.StatusHealthy || src.LastError != "" || src.LastCheckedAt == "" {
-		t.Fatalf("healthy source = %#v", src)
+	if src.Status != "unknown" || src.LastError != "" || src.LastCheckedAt != "" {
+		t.Fatalf("source health written by title failure: %#v", src)
 	}
 
-	if err := svc.markTitleSourceHealth(ctx, title, errors.New("cloudflare blocked")); err != nil {
-		t.Fatalf("mark failed: %v", err)
+	if err := svc.lib.repo.SetFetchError(ctx, title.ID, ""); err != nil {
+		t.Fatalf("clear SetFetchError() error = %v", err)
 	}
-	src, err = svc.src.GetSource(ctx, "demo")
-	if err != nil {
-		t.Fatalf("Get(source) error = %v", err)
-	}
-	if src.Status != sources.StatusRequiresCF || src.LastError != "cloudflare blocked" {
-		t.Fatalf("failed source = %#v", src)
+	if counts, err = svc.SourceFetchFailureCounts(ctx); err != nil || len(counts) != 0 {
+		t.Fatalf("cleared fetch failure counts = %v, %v", counts, err)
 	}
 }
 
@@ -342,7 +350,7 @@ func TestBackupUserDataJobCreatesBackup(t *testing.T) {
 	}
 }
 
-func TestAutoRefreshQueuesDownloadWhenMissingThresholdMet(t *testing.T) {
+func TestAutoRefreshQueuesDownloadWheneverChaptersAreMissing(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -353,15 +361,21 @@ func TestAutoRefreshQueuesDownloadWhenMissingThresholdMet(t *testing.T) {
 	defer closeDB()
 	many := addJobTitle(t, ctx, svc, "https://example.test/many", true, 2, 0)
 	one := addJobTitle(t, ctx, svc, "https://example.test/one", true, 1, 0)
+	// Finished titles are tracked unmonitored — linking a source must still
+	// download them.
+	finished := addJobTitle(t, ctx, svc, "https://example.test/finished", false, 3, 0)
+	complete := addJobTitle(t, ctx, svc, "https://example.test/complete", true, 2, 2)
 
-	if err := svc.enqueueDownloadAfterRefresh(ctx, many.ID); err != nil {
-		t.Fatalf("enqueueDownloadAfterRefresh(many) error = %v", err)
-	}
-	if err := svc.enqueueDownloadAfterRefresh(ctx, one.ID); err != nil {
-		t.Fatalf("enqueueDownloadAfterRefresh(one) error = %v", err)
+	for _, title := range []library.Title{many, one, finished, complete} {
+		if err := svc.enqueueDownloadAfterRefresh(ctx, title.ID); err != nil {
+			t.Fatalf("enqueueDownloadAfterRefresh(%s) error = %v", title.SourceURL, err)
+		}
 	}
 	assertTitleJob(t, ctx, svc, jobs.TypeDownloadMissing, many.ID)
-	assertNoTitleJob(t, ctx, svc, jobs.TypeDownloadMissing, one.ID)
+	assertTitleJob(t, ctx, svc, jobs.TypeDownloadMissing, one.ID)
+	assertTitleJob(t, ctx, svc, jobs.TypeDownloadMissing, finished.ID)
+	// Nothing missing: nothing to queue.
+	assertNoTitleJob(t, ctx, svc, jobs.TypeDownloadMissing, complete.ID)
 }
 
 func TestRemoveTitleCancelsTitleJobs(t *testing.T) {

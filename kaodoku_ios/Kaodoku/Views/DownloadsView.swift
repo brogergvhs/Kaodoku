@@ -345,7 +345,8 @@ struct LocalTitleView: View {
 
   private func chapterProgress(_ e: LocalStore.Entry) -> ChapterProgress {
     ChapterProgress(id: e.id, titleId: e.titleId, label: e.label,
-                    title: e.isVolume ? e.label : "", numberMain: 0,
+                    title: e.isVolume ? (e.name ?? e.label) : "",
+                    displayName: e.isVolume ? nil : e.name, numberMain: 0,
                     downloaded: true, bytes: e.size, pages: e.pages, totalPages: e.pages,
                     readPages: e.readPages, completed: e.isRead, manual: false,
                     firstUnreadPage: 0, lastReadAt: nil)

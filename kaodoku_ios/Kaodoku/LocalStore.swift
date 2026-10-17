@@ -34,12 +34,14 @@ final class LocalStore {
     var titleId: Int64
     var titleName: String
     var label: String
+    var name: String?
     var path: String
     var pages: Int
     var size: Int64
     var readPages: Int
     var completed: Bool
     var pageAspects: [Double]
+    var pageCrops: [[Double]]?
     var volume: Bool
 
     var isRead: Bool {
@@ -83,6 +85,7 @@ final class LocalStore {
     let pages: Int
     let size: Int64
     let pageAspects: [Double]
+    let pageCrops: [[Double]]?
     let thumbnail: Data?
   }
 
@@ -456,7 +459,7 @@ final class LocalStore {
   /// save moves a downloaded temp file into place; sanitized names that would
   /// collide across titles or chapters get an id suffix.
   func save(file src: URL, chapterID: Int64, titleId: Int64, titleName: String, label: String,
-            readPages: Int = 0, completed: Bool = false, volume: Bool = false) async throws
+            name: String? = nil, readPages: Int = 0, completed: Bool = false, volume: Bool = false) async throws
   {
     defer { try? FileManager.default.removeItem(at: src) }
     let prepared = try await Task.detached(priority: .utility) {
@@ -483,9 +486,9 @@ final class LocalStore {
     }
     chapters[key(chapterID, volume: volume)] = Entry(
       id: chapterID, titleId: titleId, titleName: titleName,
-      label: label, path: path, pages: prepared.pages, size: prepared.size,
+      label: label, name: name, path: path, pages: prepared.pages, size: prepared.size,
       readPages: readPages, completed: completed, pageAspects: prepared.pageAspects,
-      volume: volume
+      pageCrops: prepared.pageCrops, volume: volume
     )
     pending.removeValue(forKey: key(chapterID, volume: volume))
     persistIndex()
@@ -523,7 +526,21 @@ final class LocalStore {
       .flatMap { $0.jpegData(compressionQuality: 0.7) }
       : nil
     let size = (try? FileManager.default.attributesOfItem(atPath: src.path))?[.size] as? Int64 ?? 0
-    return PreparedArchive(pages: images.count, size: size, pageAspects: aspects, thumbnail: jpeg)
+    return PreparedArchive(pages: images.count, size: size, pageAspects: aspects,
+                           pageCrops: pageCrops(in: zip), thumbnail: jpeg)
+  }
+
+  /// pageCrops reads the server-written kaodoku-crops.json from the archive.
+  private nonisolated static func pageCrops(in zip: ZipArchive) -> [[Double]]? {
+    struct CropsFile: Decodable {
+      var v: Int
+      var pages: [[Double]]
+    }
+    guard let entry = zip.entries.first(where: { $0.name == "kaodoku-crops.json" }),
+          let data = zip.data(for: entry),
+          let file = try? JSONDecoder().decode(CropsFile.self, from: data),
+          (1 ... 2).contains(file.v) else { return nil } // v2 = tight boxes
+    return file.pages
   }
 
   private func dirName(titleId: Int64, titleName: String) -> String {
@@ -715,6 +732,23 @@ final class LocalStore {
 }
 
 extension UIImage {
+  nonisolated func cropped(normalized c: [Double], strength: Double = 1, margin: Double = 0) -> UIImage? {
+    guard c.count == 4, let cg = cgImage else { return nil }
+    let s = min(max(strength, 0), 1)
+    let left = max(0, c[0] * s - margin)
+    let top = max(0, c[1] * s - margin)
+    let right = max(0, (1 - c[0] - c[2]) * s - margin)
+    let bottom = max(0, (1 - c[1] - c[3]) * s - margin)
+    let w = CGFloat(cg.width), h = CGFloat(cg.height)
+    let rect = CGRect(x: left * w, y: top * h,
+                      width: max(0, 1 - left - right) * w,
+                      height: max(0, 1 - top - bottom) * h).integral
+    guard rect.width >= 8, rect.height >= 8,
+          rect.width < w || rect.height < h,
+          let cut = cg.cropping(to: rect) else { return nil }
+    return UIImage(cgImage: cut, scale: scale, orientation: imageOrientation)
+  }
+
   /// Decode only the pixels that can be displayed, with a GPU-safe long side.
   /// enhanced doubles the decode budget and adds a GPU clarity pass.
   nonisolated static func downsampled(_ data: Data, maxPixelSize: CGSize, enhanced: Bool = false) -> UIImage? {

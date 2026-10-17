@@ -16,6 +16,8 @@ type Chapter struct {
 	SuffixType string
 	SuffixNum  int
 	Label      string
+	Volume     float64
+	UID        string
 }
 
 // SortChapters orders chapters by main number, then suffix type and number.

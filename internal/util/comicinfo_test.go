@@ -16,13 +16,16 @@ func TestComicInfoRoundTrip(t *testing.T) {
 	}
 	body, err := MarshalComicInfo(ComicInfo{
 		Series: "Berserk & Co", Title: "Lost <Children>", Number: "7.5",
-		Summary: "dark", Writer: "Miura", Manga: "Yes", PageCount: 1,
+		Summary: "dark", Writer: "Miura", Manga: "Yes", PageCount: 1, Volume: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(body), "Berserk &amp; Co") || !strings.Contains(string(body), "Lost &lt;Children&gt;") {
 		t.Fatalf("escaping broken: %s", body)
+	}
+	if !strings.Contains(string(body), "<Volume>3</Volume>") {
+		t.Fatalf("volume missing: %s", body)
 	}
 
 	cbz := filepath.Join(dir, "ch.cbz")

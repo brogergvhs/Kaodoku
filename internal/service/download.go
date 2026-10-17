@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/downloader"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/providers"
 	"github.com/brogergvhs/kaodoku/internal/providers/generic"
 	"github.com/brogergvhs/kaodoku/internal/providers/registry"
@@ -118,6 +120,9 @@ func (s *DownloadService) comicInfoEntry(ch chapters.Chapter, pages int) map[str
 	}
 	ci.Title = ch.Title
 	ci.Number = ch.Label
+	if v := ch.Volume; v > 0 && v == float64(int(v)) {
+		ci.Volume = int(v)
+	}
 	ci.PageCount = pages
 	body, err := util.MarshalComicInfo(ci)
 	if err != nil {
@@ -160,7 +165,7 @@ func newDownloadServiceWithScraper(
 		CookieFile:           cfg.CookieFile,
 		State:                browserState,
 		RateLimit:            hostRateLimit(cfg),
-		BlockPrivateNetworks: true,
+		BlockPrivateNetworks: !strings.HasPrefix(scraperName, kotatsu.ScraperPrefix),
 		DebugLogger:          log,
 	})
 	if err != nil {
@@ -188,7 +193,11 @@ func newDownloadServiceWithScraper(
 		browser = solver
 		downloadBrowser = solver
 	}
-	scraper, err := registry.New(scraperName, client, log, cfg.AllowExt, cfg.CheckJS, browser)
+	var worker *kotatsu.Client
+	if cfg.KotatsuWorker.Enabled {
+		worker = kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey)
+	}
+	scraper, err := registry.New(scraperName, client, log, cfg.AllowExt, cfg.CheckJS, browser, worker)
 	if err != nil {
 		return nil, err
 	}
@@ -477,15 +486,21 @@ func (s *DownloadService) downloadChapter(
 
 	files, bytes, err := dl.DownloadImagesConcurrently(ctx, images, tmpFolder, ch.URL, max(1, s.cfg.ImageWorkers), handle)
 	if err != nil {
-		if s.cfg.BrowserDownload.Enabled {
+		if s.cfg.BrowserDownload.Enabled && !strings.Contains(ch.URL, "\t") {
 			return s.downloadChapterWithBrowser(ctx, ch, cbzOut, tmpFolder, err)
 		}
 		return ChapterDownloadResult{}, err
 	}
 
-	// PageCount reflects the pre-skip count when SkipBroken drops files; the
-	// target readers count pages from the archive itself.
-	if err := util.CreateCBZ(files, cbzOut, s.cfg.SkipBroken, s.comicInfoEntry(ch, len(files))); err != nil {
+	extra := s.comicInfoEntry(ch, len(files))
+	for name, body := range util.PageCropsEntry(files) {
+		if extra == nil {
+			extra = map[string][]byte{}
+		}
+		extra[name] = body
+	}
+
+	if err := util.CreateCBZ(files, cbzOut, s.cfg.SkipBroken, extra); err != nil {
 		return ChapterDownloadResult{}, fmt.Errorf("create cbz: %w", err)
 	}
 

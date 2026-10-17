@@ -88,6 +88,31 @@ func (r *Repository) Get(ctx context.Context, id int64) (Job, error) {
 	return job, nil
 }
 
+func (r *Repository) ActiveForTitle(ctx context.Context, typ string, titleID int64) ([]Job, error) {
+	rows, err := r.db.QueryContext(ctx, jobSelect()+` WHERE type = ?
+			AND status IN ('queued', 'running', 'failed')
+			AND (json_extract(payload_json, '$.title_id') IS NULL
+				OR json_extract(payload_json, '$.title_id') = ?)
+			ORDER BY id DESC`, typ, titleID)
+	if err != nil {
+		return nil, fmt.Errorf("list active jobs for title %d: %w", titleID, err)
+	}
+	defer rows.Close()
+
+	var out []Job
+	for rows.Next() {
+		job, err := scanJob(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan job: %w", err)
+		}
+		out = append(out, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active jobs: %w", err)
+	}
+	return out, nil
+}
+
 // List returns recent jobs.
 func (r *Repository) List(ctx context.Context) ([]Job, error) {
 	// The window covers recent history, but active jobs must never fall out

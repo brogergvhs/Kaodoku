@@ -73,7 +73,7 @@
       </td>
       <td class="align-middle whitespace-nowrap">
         {{if not .Enabled}}<span class="badge badge-ghost badge-sm">disabled</span>
-        {{else if .Healthy}}<span class="badge badge-success badge-soft badge-sm">healthy</span>
+        {{else if .Healthy}}<span class="badge badge-success badge-soft badge-sm">healthy{{with .Version}} · {{.}}{{end}}</span>
         {{else}}<span class="badge badge-error badge-soft badge-sm">unreachable</span>{{end}}
         {{if .Error}}<div class="text-xs text-base-content/50 max-w-md break-all">{{.Error}}</div>{{end}}
       </td>
@@ -272,13 +272,21 @@
       <option value="on" {{if eq .Controls.Monitor "on"}}selected{{end}}>Monitored</option>
       <option value="off" {{if eq .Controls.Monitor "off"}}selected{{end}}>Off</option>
     </select></label>
-  <label class="fieldset"><span class="fieldset-legend">Source</span>
-    <select name="source" class="select select-sm w-full">
-      <option value="all" {{if eq .Controls.Source "all"}}selected{{end}}>All</option>
-      <option value="linked" {{if eq .Controls.Source "linked"}}selected{{end}}>Linked</option>
-      <option value="unlinked" {{if eq .Controls.Source "unlinked"}}selected{{end}}>Unlinked</option>
-      <option value="imported" {{if eq .Controls.Source "imported"}}selected{{end}}>Imported</option>
-    </select></label>
+  {{$src := .Controls.SourceSet}}
+  <div class="fieldset"><span class="fieldset-legend">Source</span>
+    <details class="dropdown w-full">
+      <summary class="select select-sm w-full flex cursor-pointer items-center" data-tag-count data-empty-label="All">{{if $src}}{{len $src}} selected{{else}}All{{end}}</summary>
+      <div class="dropdown-content z-30 mt-1 w-full rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
+        <input class="input input-sm mb-2 w-full" placeholder="Filter sources…" data-tag-filter form="">
+        <div class="grid max-h-52 gap-y-1 overflow-y-auto" data-tag-list>
+          <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="linked" {{if index $src "linked"}}checked{{end}}><span>Linked</span></label>
+          <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="unlinked" {{if index $src "unlinked"}}checked{{end}}><span>Unlinked</span></label>
+          <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="imported" {{if index $src "imported"}}checked{{end}}><span>Imported</span></label>
+          {{if .SourceOptions}}<div class="my-1 border-t border-base-300" data-tag-divider></div>
+          {{range .SourceOptions}}<label class="flex min-w-0 cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="{{.ID}}" {{if index $src .ID}}checked{{end}}><span class="truncate">{{.Name}}</span></label>{{end}}{{end}}
+        </div>
+      </div>
+    </details></div>
   <label class="fieldset"><span class="fieldset-legend">Content</span>
     <select name="content" class="select select-sm w-full">
       <option value="all" {{if eq .Controls.Content "all"}}selected{{end}}>All</option>
@@ -454,6 +462,7 @@
             <li><button hx-post="/ui/library/{{.Title.ID}}/download" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "download_missing"}}disabled{{end}}>{{template "iconDownload"}}Download missing{{if gt .Title.FailedCount 0}} · {{.Title.FailedCount}} failed{{end}}</button></li>{{end}}
             {{if linked .Title.SourceURL}}<li><button hx-post="/ui/library/{{.Title.ID}}/refresh" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "refresh_title"}}disabled{{end}}>{{template "iconRefresh"}}Refresh chapters</button></li>{{end}}
             <li><button hx-post="/ui/library/{{.Title.ID}}/scan" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "scan_downloads"}}disabled{{end}}>{{template "iconScan"}}Scan files</button></li>
+            <li><button hx-post="/ui/library/{{.Title.ID}}/crops" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "detect_crops"}}disabled{{end}}>{{template "iconScan"}}Detect page crops</button></li>
             {{if .AniList.Connected}}<li><button hx-post="/ui/library/{{.Title.ID}}/anilist-sync" hx-swap="none">{{template "iconVerify"}}Sync AniList</button></li>{{end}}
             {{if linked .Title.SourceURL}}<li><button onclick="title_settings_modal.showModal()">{{template "iconSettings"}}Title settings</button></li>{{end}}
             <li><label>{{template "iconEdit"}}Upload cover
@@ -701,6 +710,16 @@
   <button class="btn btn-sm btn-primary" onclick="source_add_modal.showModal()">{{template "iconPlus"}}Add source</button>
 </div>
 {{template "sourcesTable" .Sources}}
+
+{{if or .KotatsuEnabled .KotatsuSources}}
+<div id="kotatsu-section" class="mt-10" hx-get="/ui/sources/kotatsu/section" hx-trigger="load" hx-swap="outerHTML" hx-sync="this:drop">
+  <div class="flex items-center justify-between gap-2 mb-4">
+    <h2 class="text-lg font-semibold">Kotatsu sources</h2>
+    <span class="loading loading-spinner loading-sm"></span>
+  </div>
+  {{template "kotatsuSourcesTable" .KotatsuSources}}
+</div>
+{{end}}
 
 <dialog id="source_add_modal" class="modal">
   <div class="modal-box max-w-xl">

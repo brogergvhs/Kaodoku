@@ -19,6 +19,7 @@ struct ReaderView: View {
     var total: Int
     var url: String
     var localURL: URL?
+    var crop: [Double]? // normalized [x, y, w, h] content box, paged trim
     var volume = false
     var transition = false // synthetic "end of chapter" cell
   }
@@ -236,7 +237,9 @@ struct ReaderView: View {
         await LocalStore.clearPageCache()
       }
     }
-    .sheet(isPresented: $showSettings) { ReaderSettingsSheet(titleID: titleID) }
+    .sheet(isPresented: $showSettings) {
+      ReaderSettingsSheet(titleID: titleID, cropsAvailable: cropsAvailable)
+    }
     .sheet(isPresented: $showChapters) {
       ReaderChapterSheet(rows: chapterRows,
                          currentID: pages.indices.contains(index) ? pages[index].chapterID : 0,
@@ -377,7 +380,7 @@ struct ReaderView: View {
   private func loadChapterRows() async {
     if let localChapters {
       chapterRows = localChapters.map {
-        ReaderChapterRow(id: $0.id, label: $0.label, read: $0.isRead, available: true)
+        ReaderChapterRow(id: $0.id, label: $0.label, name: $0.name, read: $0.isRead, available: true)
       }
       return
     }
@@ -385,7 +388,9 @@ struct ReaderView: View {
        let p: TitleReadProgress = try? await api.get("/api/v1/reader/titles/\(titleID)")
     {
       chapterRows = p.chapters.map {
-        ReaderChapterRow(id: $0.id, label: $0.label, read: $0.completed, available: $0.downloaded)
+        ReaderChapterRow(id: $0.id, label: $0.label,
+                         name: ($0.displayName ?? $0.title).isEmpty ? nil : ($0.displayName ?? $0.title),
+                         read: $0.completed, available: $0.downloaded)
       }
       return
     }
@@ -436,9 +441,10 @@ struct ReaderView: View {
                                 volume: volumeMode, transition: true))
           }
           for page in 1 ... e.pages {
+            let crop = e.pageCrops.flatMap { $0.indices.contains(page - 1) ? $0[page - 1] : nil }
             refs.append(PageRef(chapterID: e.id, label: e.label, page: page,
                                 total: e.pages, url: "", localURL: local,
-                                volume: volumeMode))
+                                crop: crop, volume: volumeMode))
           }
         }
         if let prev = refs.last {
@@ -496,7 +502,7 @@ struct ReaderView: View {
       }
       pages.append(contentsOf: ch.pages.map {
         PageRef(chapterID: ch.id, label: ch.label, page: $0.page, total: ch.pageCount,
-                url: $0.url, localURL: local, volume: volumes)
+                url: $0.url, localURL: local, crop: $0.crop, volume: volumes)
       })
       lastChapterID = ch.id
       added = true
@@ -527,14 +533,31 @@ struct ReaderView: View {
     app.store.recordMark(id: p.chapterID, volume: volumes, page: p.page, totalPages: p.total)
     app.scheduleFlush()
   }
+
+  private var cropsAvailable: Bool {
+    guard pages.indices.contains(index) else { return false }
+    let cid = pages[index].chapterID
+    return pages.contains { $0.chapterID == cid && $0.crop != nil }
+  }
 }
 
 /// ReaderChapterRow feeds the in-reader chapter list.
 struct ReaderChapterRow: Identifiable {
   var id: Int64
   var label: String
+  var name: String?
   var read: Bool
   var available: Bool
+
+  func displayTitle(volumes: Bool) -> String {
+    if volumes {
+      return "Vol \(label)"
+    }
+    if let name, !name.isEmpty {
+      return "\(label): \(name)"
+    }
+    return "Chapter \(label)"
+  }
 }
 
 struct ReaderChapterSheet: View {
@@ -554,7 +577,8 @@ struct ReaderChapterSheet: View {
               dismiss()
             } label: {
               HStack {
-                Text("\(volumes ? "Vol" : "Ch") \(row.label)")
+                Text(row.displayTitle(volumes: volumes))
+                  .lineLimit(1)
                   .foregroundStyle(row.available ? Color.primary : .secondary)
                 Spacer()
                 if row.id == currentID {
@@ -582,9 +606,16 @@ struct ReaderChapterSheet: View {
 struct ReaderSettingsSheet: View {
   @Environment(AppState.self) private var app
   let titleID: Int64
+  var cropsAvailable = true
+  @State private var cropsProcessing = false
+  @State private var trimStrength = 1.0
 
   private var stripActive: Bool {
     (app.readerMode(forTitle: titleID) ?? app.settings.readerMode ?? "paged") == "strip"
+  }
+
+  private var marginLabel: String {
+    String(format: "%g%%", app.readerTrimMargin * 100)
   }
 
   var body: some View {
@@ -626,6 +657,26 @@ struct ReaderSettingsSheet: View {
             get: { app.settings.readerSplitWide ?? false },
             set: { app.settings.readerSplitWide = $0; app.saveSettings() }
           ))
+          Toggle("Trim page borders", isOn: $app.readerTrimBorders)
+            .disabled(!cropsAvailable) // no crop data for this chapter yet
+          if !cropsAvailable, cropsProcessing {
+            Text("Page borders are being detected for this title — trimming will be available soon.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
+          if app.readerTrimBorders, cropsAvailable {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Trim strength").font(.caption).foregroundStyle(.secondary)
+              Slider(value: $trimStrength, in: 0 ... 1) { editing in
+                if !editing {
+                  app.readerTrimStrength = trimStrength
+                }
+              }
+            }
+            Stepper("Margin: \(marginLabel)", value: Binding(
+              get: { app.readerTrimMargin },
+              set: { app.readerTrimMargin = min(max($0, 0), 0.05) }
+            ), in: 0 ... 0.05, step: 0.005)
+          }
         }
         .disabled(stripActive) // paged-only controls
         Picker("Quality", selection: Binding(
@@ -661,6 +712,13 @@ struct ReaderSettingsSheet: View {
       }
       .navigationTitle("Reader")
       .navigationBarTitleDisplayMode(.inline)
+      .task {
+        trimStrength = app.readerTrimStrength
+        guard !cropsAvailable, let api = app.api,
+              let activity: TitleActivity = try? await api.get("/api/v1/library/\(titleID)/activity")
+        else { return }
+        cropsProcessing = activity.isActive("detect_crops", verb: "detecting crops")
+      }
     }
     .presentationDetents([.height(660)])
   }
@@ -676,22 +734,34 @@ struct ReaderPage: View {
   var onImage: ((CGFloat) -> Void)?
   @State private var zoom: CGFloat = 1
   @State private var images: [Int: UIImage] = [:]
-  @State private var loadedWidth: CGFloat = 0
+  @State private var loadedDecode = DecodeParams(width: 0, trim: false, strength: -1, margin: -1)
   @State private var failed = false
 
   private var transition: Bool {
     unit.first?.ref.transition == true
   }
 
+  private struct DecodeParams: Hashable {
+    let width: CGFloat
+    let trim: Bool
+    let strength: Double
+    let margin: Double
+  }
+
   private struct LoadKey: Hashable {
     let active: Bool
     let unit: [ReaderView.DisplayPage]
     let enhanced: Bool
-    let width: Int
+    let decode: DecodeParams
   }
 
   private var enhanced: Bool {
     app.settings.readerImageQuality == "enhanced"
+  }
+
+  private var decodeParams: DecodeParams {
+    DecodeParams(width: maxPixelSize.width, trim: app.readerTrimBorders,
+                 strength: app.readerTrimStrength, margin: app.readerTrimMargin)
   }
 
   var body: some View {
@@ -710,9 +780,9 @@ struct ReaderPage: View {
         images = [:]
         failed = false
       }
-      .task(id: LoadKey(active: active, unit: unit, enhanced: enhanced,
-                        width: Int(maxPixelSize.width)))
-      { await loadIfNeeded() }
+      .task(id: LoadKey(active: active, unit: unit, enhanced: enhanced, decode: decodeParams)) {
+        await loadIfNeeded()
+      }
   }
 
   @ViewBuilder private var content: some View {
@@ -750,22 +820,29 @@ struct ReaderPage: View {
 
   private func loadIfNeeded() async {
     guard active, !transition else { return }
-    let reload = !images.isEmpty && loadedWidth != maxPixelSize.width
+    let params = decodeParams
+    let reload = !images.isEmpty && loadedDecode != params
     guard reload || images.count < unit.count else { return }
     for (i, dp) in unit.enumerated() where reload || images[i] == nil {
-      guard let img = await load(dp) else {
+      guard let raw = await load(dp) else {
         if !Task.isCancelled {
           failed = true
         }
         return
       }
       guard !Task.isCancelled else { return }
+      var img = raw
+      if params.trim, let crop = dp.ref.crop,
+         let cut = raw.cropped(normalized: crop, strength: params.strength, margin: params.margin)
+      {
+        img = cut
+      }
       images[i] = img
       if i == 0 {
-        onImage?(img.size.width / max(img.size.height, 1))
+        onImage?(raw.size.width / max(raw.size.height, 1))
       }
     }
-    loadedWidth = maxPixelSize.width
+    loadedDecode = params
   }
 
   private func load(_ dp: ReaderView.DisplayPage) async -> UIImage? {

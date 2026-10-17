@@ -500,3 +500,297 @@ func TestMarkPageReadPreservesBulkMarked(t *testing.T) {
 		t.Errorf("re-opening a bulk-marked page flipped manual to %d, want 1", manual(ch2.ID))
 	}
 }
+
+func TestChapterRenameSurvivesRefreshAndResets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://example.test/m", DisplayTitle: "M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scraped := []chapters.Chapter{
+		{Chapter: providers.Chapter{URL: "https://example.test/c1", Title: "Scraped 1", Label: "1", NumMain: 1}},
+		{Chapter: providers.Chapter{URL: "https://example.test/c2", Title: "", Label: "2", NumMain: 2}},
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, scraped); err != nil {
+		t.Fatal(err)
+	}
+	chs, err := repo.ListChapters(ctx, title.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rename both; a later refresh must not clobber the manual names.
+	if err := repo.RenameChapter(ctx, chs[0].ID, "My Name"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RenameChapter(ctx, chs[1].ID, "Named By Hand"); err != nil {
+		t.Fatal(err)
+	}
+	scraped[0].Title = "Scraped 1 updated"
+	if _, err := repo.UpsertChapters(ctx, title.ID, scraped); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != "My Name" || !chs[0].TitleCustom {
+		t.Fatalf("after refresh: %q custom=%v, want manual name kept", chs[0].Title, chs[0].TitleCustom)
+	}
+
+	// Single reset restores the LATEST scraped name.
+	if err := repo.ResetChapterTitle(ctx, chs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != "Scraped 1 updated" || chs[0].TitleCustom {
+		t.Fatalf("after reset: %q custom=%v", chs[0].Title, chs[0].TitleCustom)
+	}
+
+	// Renaming back to the scraped name clears the override.
+	if err := repo.RenameChapter(ctx, chs[0].ID, "Scraped 1 updated"); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].TitleCustom {
+		t.Fatal("rename to scraped name should clear title_custom")
+	}
+
+	// Blank range resets everything still overridden.
+	n, err := repo.ResetChapterTitles(ctx, title.ID, "", "")
+	if err != nil || n != 1 {
+		t.Fatalf("ResetChapterTitles(all) = %d, %v; want 1", n, err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[1].Title != "" || chs[1].TitleCustom {
+		t.Fatalf("chapter 2 after bulk reset: %q custom=%v", chs[1].Title, chs[1].TitleCustom)
+	}
+
+	// Numeric range resets only the chapters inside it.
+	if err := repo.RenameChapter(ctx, chs[0].ID, "A"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RenameChapter(ctx, chs[1].ID, "B"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := repo.ResetChapterTitles(ctx, title.ID, "2", "2"); err != nil || n != 1 {
+		t.Fatalf("ResetChapterTitles(range) = %d, %v; want 1", n, err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != "A" || chs[1].Title != "" {
+		t.Fatalf("range reset touched wrong rows: %q / %q", chs[0].Title, chs[1].Title)
+	}
+}
+
+func TestBulkRenameChapters(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://example.test/b", DisplayTitle: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://example.test/other", DisplayTitle: "O"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		{Chapter: providers.Chapter{URL: "https://example.test/b1", Title: "Scraped", Label: "40", NumMain: 40}},
+		{Chapter: providers.Chapter{URL: "https://example.test/b2", Title: "", Label: "41", NumMain: 41}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	chs, err := repo.ListChapters(ctx, title.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vp := func(f float64) *float64 { return &f }
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
+		{ChapterID: chs[0].ID, Title: "Battlefield", Volume: vp(9)},
+		{ChapterID: chs[1].ID, Title: "", Volume: vp(9)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != "Battlefield" || !chs[0].TitleCustom || chs[0].VolumeNum != 9 {
+		t.Fatalf("row 0 = %q custom=%v vol=%v", chs[0].Title, chs[0].TitleCustom, chs[0].VolumeNum)
+	}
+	// Empty name over empty scraped title: no override, volume still set.
+	if chs[1].Title != "" || chs[1].TitleCustom || chs[1].VolumeNum != 9 {
+		t.Fatalf("row 1 = %q custom=%v vol=%v", chs[1].Title, chs[1].TitleCustom, chs[1].VolumeNum)
+	}
+
+	// Volume 0 clears the association; a foreign chapter aborts everything.
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
+		{ChapterID: chs[0].ID, Title: "Battlefield", Volume: vp(0)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].VolumeNum != 0 {
+		t.Fatalf("volume not cleared: %v", chs[0].VolumeNum)
+	}
+	before := chs[0].Title
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{
+		{ChapterID: chs[0].ID, Title: "Changed", Volume: vp(1)},
+		{ChapterID: 999999, Title: "X"},
+	}); err == nil {
+		t.Fatal("foreign chapter should fail the whole batch")
+	}
+	_ = other
+	chs, _ = repo.ListChapters(ctx, title.ID)
+	if chs[0].Title != before {
+		t.Fatal("failed batch must not apply partially")
+	}
+}
+
+func TestUpsertChapterVolumeAndUID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://x.test/m", DisplayTitle: "M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := func(label, url string, vol float64, uid string) chapters.Chapter {
+		return chapters.Chapter{Chapter: providers.Chapter{
+			URL: url, Title: "Ch " + label, Label: label, NumMain: 1, Volume: vol, UID: uid,
+		}}
+	}
+	row := func(label string) (vol float64, custom int, uid string) {
+		err := db.QueryRowContext(ctx, `SELECT volume_num, volume_custom, source_uid
+			FROM chapters WHERE title_id = ? AND label = ?`, title.ID, label).Scan(&vol, &custom, &uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		ch("1", "https://x.test/c1", 2, "kot-77"),
+		ch("2", "https://x.test/c2", 0, ""),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vol, _, uid := row("1")
+	if vol != 2 || uid != "kot-77" {
+		t.Fatalf("scraped volume/uid = %v %q", vol, uid)
+	}
+	_, _, uid2 := row("2")
+	if uid2 == "" || uid2 == uid {
+		t.Fatalf("fallback uid = %q", uid2)
+	}
+
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{ch("1", "https://x.test/c1", 0, "kot-77")}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, _, _ := row("1"); vol != 2 {
+		t.Fatalf("volume zeroed by volumeless rescrape: %v", vol)
+	}
+
+	chs, err := repo.ListChapters(ctx, title.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nine := 9.0
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{{ChapterID: chs[0].ID, Title: "Ch 1", Volume: &nine}}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, custom, _ := row("1"); vol != 9 || custom != 1 {
+		t.Fatalf("manual volume = %v custom = %d", vol, custom)
+	}
+
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{ch("1", "https://x.test/c1", 4, "kot-77")}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, _, _ := row("1"); vol != 9 {
+		t.Fatalf("manual volume clobbered by rescrape: %v", vol)
+	}
+
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{{ChapterID: chs[0].ID, Title: "Ch 1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, custom, _ := row("1"); vol != 9 || custom != 1 {
+		t.Fatalf("volumeless rename wiped volume: %v custom %d", vol, custom)
+	}
+	zero := 0.0
+	if err := repo.BulkRenameChapters(ctx, title.ID, []ChapterRename{{ChapterID: chs[0].ID, Title: "Ch 1", Volume: &zero}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{ch("1", "https://x.test/c1", 4, "kot-77")}); err != nil {
+		t.Fatal(err)
+	}
+	if vol, custom, _ := row("1"); vol != 0 || custom != 1 {
+		t.Fatalf("explicit clear overridden by rescrape: %v custom %d", vol, custom)
+	}
+}
+
+func TestUpsertChaptersSurvivesLabelShift(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://x.test/m", DisplayTitle: "M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := func(label, url string) chapters.Chapter {
+		return chapters.Chapter{Chapter: providers.Chapter{URL: url, Title: "Ch " + label, Label: label, NumMain: 1}}
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		ch("1", "https://x.test/a"), ch("2", "https://x.test/b"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Labels shift down by one while URLs stay: label 1 now owns url b.
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		ch("1", "https://x.test/b"), ch("2", "https://x.test/c"),
+	}); err != nil {
+		t.Fatalf("label-shift upsert: %v", err)
+	}
+	url := func(label string) string {
+		var u string
+		if err := db.QueryRowContext(ctx, `SELECT url FROM chapters WHERE title_id = ? AND label = ?`, title.ID, label).Scan(&u); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	if url("1") != "https://x.test/b" || url("2") != "https://x.test/c" {
+		t.Fatalf("urls after shift: 1=%q 2=%q", url("1"), url("2"))
+	}
+}

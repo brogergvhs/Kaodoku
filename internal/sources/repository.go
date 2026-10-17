@@ -157,6 +157,45 @@ func (r *Repository) List(ctx context.Context) ([]Source, error) {
 	return out, nil
 }
 
+func (r *Repository) TitleCounts(ctx context.Context) (map[string]int, error) {
+	return r.countsBySource(ctx, `
+		SELECT source_id, COUNT(*) FROM (
+			SELECT source_id, id AS title_id FROM titles WHERE COALESCE(source_id, '') <> ''
+			UNION
+			SELECT source_id, title_id FROM title_sources WHERE source_id <> ''
+		) GROUP BY source_id`)
+}
+
+// FetchFailureCounts counts titles per source whose last chapter refresh failed.
+func (r *Repository) FetchFailureCounts(ctx context.Context) (map[string]int, error) {
+	return r.countsBySource(ctx, `
+		SELECT source_id, COUNT(*) FROM titles
+		WHERE fetch_error <> '' AND COALESCE(source_id, '') <> ''
+		GROUP BY source_id`)
+}
+
+func (r *Repository) countsBySource(ctx context.Context, query string) (map[string]int, error) {
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("count source titles: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, fmt.Errorf("scan source title count: %w", err)
+		}
+		out[id] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate source title counts: %w", err)
+	}
+	return out, nil
+}
+
 // Get returns one source by id.
 func (r *Repository) Get(ctx context.Context, id string) (Source, error) {
 	id = strings.ToLower(strings.TrimSpace(id))
@@ -245,7 +284,6 @@ func (r *Repository) UpdateHealth(ctx context.Context, id, status, lastError str
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE sources SET
 			status = ?,
-			last_checked_at = CURRENT_TIMESTAMP,
 			last_error = ?,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?

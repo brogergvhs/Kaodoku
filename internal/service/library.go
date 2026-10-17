@@ -16,6 +16,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/providers"
 	"github.com/brogergvhs/kaodoku/internal/sources"
@@ -208,6 +209,10 @@ func (s *LibraryService) ListTitleSources(ctx context.Context, titleID int64) ([
 	return s.repo.ListTitleSources(ctx, titleID)
 }
 
+func (s *LibraryService) TitleIDsForSource(ctx context.Context, sourceID string) (map[int64]bool, error) {
+	return s.repo.TitleIDsForSource(ctx, sourceID)
+}
+
 // UnlinkSource removes a linked source from a title.
 func (s *LibraryService) UnlinkSource(ctx context.Context, titleID int64, url string) error {
 	return s.repo.UnlinkSource(ctx, titleID, url)
@@ -283,6 +288,22 @@ func (s *LibraryService) RenameChapter(ctx context.Context, chapterID int64, tit
 	return s.repo.RenameChapter(ctx, chapterID, title)
 }
 
+// ResetChapterTitle restores one manually renamed chapter's scraped name.
+func (s *LibraryService) ResetChapterTitle(ctx context.Context, chapterID int64) error {
+	return s.repo.ResetChapterTitle(ctx, chapterID)
+}
+
+// BulkRenameChapters applies manual names and volume assignments atomically.
+func (s *LibraryService) BulkRenameChapters(ctx context.Context, titleID int64, items []library.ChapterRename) error {
+	return s.repo.BulkRenameChapters(ctx, titleID, items)
+}
+
+// ResetChapterTitles restores scraped names for the whole title (blank range)
+// or an inclusive label/number range.
+func (s *LibraryService) ResetChapterTitles(ctx context.Context, titleID int64, from, to string) (int, error) {
+	return s.repo.ResetChapterTitles(ctx, titleID, from, to)
+}
+
 // TitleReadStatuses lists all discovered chapters with download + read state.
 func (s *LibraryService) TitleReadStatuses(ctx context.Context, titleID int64) ([]library.ChapterReadStatus, error) {
 	return s.repo.TitleReadStatuses(ctx, titleID)
@@ -340,8 +361,32 @@ func (s *LibraryService) GetTitle(ctx context.Context, id int64) (library.Title,
 	return s.repo.GetTitle(ctx, id)
 }
 
-// RefreshTitle refreshes discovered chapters for one title.
+// RefreshTitle refreshes discovered chapters for one title and records the
+// outcome on the title row, so users can see which titles fail to fetch.
 func (s *LibraryService) RefreshTitle(
+	ctx context.Context,
+	cfg *config.Config,
+	logSvc ui.Log,
+	title library.Title,
+) (RefreshResult, error) {
+	res, err := s.refreshTitle(ctx, cfg, logSvc, title)
+	if title.ID <= 0 || ctx.Err() != nil || errors.Is(err, errSourceDisabled) {
+		return res, err
+	}
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+		if len(msg) > 500 {
+			msg = msg[:500] + "…"
+		}
+	}
+	if serr := s.repo.SetFetchError(context.WithoutCancel(ctx), title.ID, msg); serr != nil {
+		logSvc.Debugf("record fetch error for %q: %v\n", title.DisplayTitle, serr)
+	}
+	return res, err
+}
+
+func (s *LibraryService) refreshTitle(
 	ctx context.Context,
 	cfg *config.Config,
 	logSvc ui.Log,
@@ -687,7 +732,12 @@ func (s *LibraryService) downloadServiceForTitle(
 	title library.Title,
 ) (*DownloadService, error) {
 	svc, err := func() (*DownloadService, error) {
-		if src, ok := s.sourceForTitle(ctx, title); ok {
+		src, ok, err := s.sourceForTitle(ctx, title)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			pushKotatsuDomain(ctx, cfg, logSvc, src)
 			next := ConfigForSource(*cfg, src, SourceConfigOptions{})
 			next.LanguageMode = title.LanguageMode
 			return NewSourceDownloadService(&next, logSvc, progress, src.Scraper)
@@ -698,6 +748,19 @@ func (s *LibraryService) downloadServiceForTitle(
 		svc.SetComicInfo(s.comicInfoTemplate(ctx, title))
 	}
 	return svc, err
+}
+
+// pushKotatsuDomain re-applies a user domain override before a scrape; the
+// worker keeps config in memory only, so a restart would otherwise revert it.
+func pushKotatsuDomain(ctx context.Context, cfg *config.Config, logSvc ui.Log, src sources.Source) {
+	id, ok := strings.CutPrefix(src.Scraper, kotatsu.ScraperPrefix)
+	if !ok || len(src.Domains) == 0 || !cfg.KotatsuWorker.Enabled {
+		return
+	}
+	kc := kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey)
+	if err := kc.SetConfig(ctx, id, map[string]string{"domain": src.Domains[0]}); err != nil && logSvc != nil {
+		logSvc.Debugf("push kotatsu domain for %s: %v\n", src.ID, err)
+	}
 }
 
 // SetMangaLookup wires catalog metadata access for ComicInfo templates.
@@ -727,17 +790,24 @@ func (s *LibraryService) comicInfoTemplate(ctx context.Context, title library.Ti
 	return &ci
 }
 
-func (s *LibraryService) sourceForTitle(ctx context.Context, title library.Title) (sources.Source, bool) {
+var errSourceDisabled = errors.New("disabled")
+
+func (s *LibraryService) sourceForTitle(ctx context.Context, title library.Title) (sources.Source, bool, error) {
 	if strings.TrimSpace(title.SourceID) != "" {
 		if list, err := s.listSources(ctx); err == nil {
 			for _, src := range list {
-				if src.ID == title.SourceID && src.Enabled {
-					return src, true
+				if src.ID != title.SourceID {
+					continue
 				}
+				if !src.Enabled {
+					return sources.Source{}, false, fmt.Errorf("source %s: %w", src.ID, errSourceDisabled)
+				}
+				return src, true, nil
 			}
 		}
 	}
-	return s.sourceForURL(ctx, title.SourceURL)
+	src, ok := s.sourceForURL(ctx, title.SourceURL)
+	return src, ok, nil
 }
 
 func (s *LibraryService) sourceForURL(ctx context.Context, target string) (sources.Source, bool) {
@@ -779,6 +849,7 @@ func serviceChapter(chapter library.Chapter) chapters.Chapter {
 		SuffixType: chapter.SuffixType,
 		SuffixNum:  chapter.SuffixNum,
 		Label:      chapter.Label,
+		Volume:     chapter.VolumeNum,
 	}}
 }
 

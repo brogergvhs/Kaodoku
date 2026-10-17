@@ -29,6 +29,7 @@ type Result struct {
 
 type Client struct {
 	endpoint string
+	apiKey   string
 	client   *http.Client
 }
 
@@ -42,7 +43,11 @@ func New(endpoint string, timeout time.Duration, client *http.Client) *Client {
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
-	return &Client{endpoint: strings.TrimRight(endpoint, "/"), client: client}
+	return &Client{
+		endpoint: strings.TrimRight(endpoint, "/"),
+		apiKey:   strings.TrimSpace(os.Getenv("KAODOKU_BROWSER_DOWNLOADER_API_KEY")),
+		client:   client,
+	}
 }
 
 // Health reports whether the browser worker is reachable.
@@ -72,6 +77,9 @@ func (c *Client) DownloadCBZ(ctx context.Context, req Request, output string) (R
 		return Result{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("X-Worker-Key", c.apiKey)
+	}
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {

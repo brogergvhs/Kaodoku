@@ -367,3 +367,57 @@ func TestListNeverDropsActiveJobs(t *testing.T) {
 	}
 	t.Fatalf("running job %d missing from List (%d rows)", running.ID, len(list))
 }
+
+func TestActiveForTitle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+
+	mine, err := repo.Enqueue(ctx, TypeRefreshTitle, `{"title_id":7}`, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A library-wide job omits title_id entirely, so it must still be seen.
+	global, err := repo.Enqueue(ctx, TypeRefreshTitle, `{}`, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Enqueue(ctx, TypeRefreshTitle, `{"title_id":8}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Enqueue(ctx, TypeScanDownloads, `{"title_id":7}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.ActiveForTitle(ctx, TypeRefreshTitle, 7)
+	if err != nil {
+		t.Fatalf("ActiveForTitle() error = %v", err)
+	}
+	ids := map[int64]bool{}
+	for _, j := range got {
+		ids[j.ID] = true
+	}
+	if len(got) != 2 || !ids[mine.ID] || !ids[global.ID] {
+		t.Fatalf("ActiveForTitle() = %v, want exactly jobs %d and %d", ids, mine.ID, global.ID)
+	}
+
+	if _, err := repo.Cancel(ctx, mine.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.ActiveForTitle(ctx, TypeRefreshTitle, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != global.ID {
+		t.Fatalf("after finishing, got %d jobs, want only the global one", len(got))
+	}
+}

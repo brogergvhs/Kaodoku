@@ -54,7 +54,7 @@ func TestGlobalJobsSkipUnlinkedTitles(t *testing.T) {
 	}
 }
 
-func TestLinkAutoDownloadOnlyOnFirstSource(t *testing.T) {
+func TestLinkAlwaysAutoDownloadsAfterRefresh(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	svc, closeDB, err := OpenJobs(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
@@ -79,10 +79,7 @@ func TestLinkAutoDownloadOnlyOnFirstSource(t *testing.T) {
 			got[p.TitleID] = p.DownloadAfterRefresh
 		}
 	}
-	if !got[11] {
-		t.Fatalf("first source link should download after refresh; payloads=%v", got)
-	}
-	if v, ok := got[12]; !ok || v {
-		t.Fatalf("re-link with existing chapters must refresh without auto-download; payloads=%v", got)
+	if !got[11] || !got[12] {
+		t.Fatalf("linking must always download after refresh; payloads=%v", got)
 	}
 }

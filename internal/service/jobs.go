@@ -22,9 +22,11 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
+	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
+	"github.com/brogergvhs/kaodoku/internal/util"
 )
 
 // JobService enqueues and runs jobs.
@@ -47,6 +49,9 @@ type JobService struct {
 	adultMu    sync.Mutex
 	adultTags  []string // vocabulary names flagged adult, briefly cached
 	adultExp   time.Time
+	kotMu      sync.Mutex
+	kotSources []kotatsu.Source
+	kotExp     time.Time
 }
 
 // cachedRecs is a user's recommendation pool, cached to spare AniList calls.
@@ -677,6 +682,21 @@ func (s *JobService) RenameChapter(ctx context.Context, chapterID int64, title s
 	return s.lib.RenameChapter(ctx, chapterID, title)
 }
 
+// ResetChapterTitle restores one manually renamed chapter's scraped name.
+func (s *JobService) ResetChapterTitle(ctx context.Context, chapterID int64) error {
+	return s.lib.ResetChapterTitle(ctx, chapterID)
+}
+
+// BulkRenameChapters applies manual names and volume assignments atomically.
+func (s *JobService) BulkRenameChapters(ctx context.Context, titleID int64, items []library.ChapterRename) error {
+	return s.lib.BulkRenameChapters(ctx, titleID, items)
+}
+
+// ResetChapterTitles restores scraped names for the whole title or a range.
+func (s *JobService) ResetChapterTitles(ctx context.Context, titleID int64, from, to string) (int, error) {
+	return s.lib.ResetChapterTitles(ctx, titleID, from, to)
+}
+
 // RemoveChapterDownloadsRange deletes every downloaded chapter whose whole
 // number falls in [from, to]; returns how many were removed.
 func (s *JobService) RemoveChapterDownloadsRange(ctx context.Context, titleID int64, from, to string) (int, error) {
@@ -707,6 +727,10 @@ func (s *JobService) RemoveChapterDownloadsRange(ctx context.Context, titleID in
 // ListTitleSources returns all sources linked to a title.
 func (s *JobService) ListTitleSources(ctx context.Context, id int64) ([]library.LinkedSource, error) {
 	return s.lib.ListTitleSources(ctx, id)
+}
+
+func (s *JobService) SourceTitleIDs(ctx context.Context, sourceID string) (map[int64]bool, error) {
+	return s.lib.TitleIDsForSource(ctx, sourceID)
 }
 
 // UnlinkTitleSource removes a linked source from a title.
@@ -2015,6 +2039,16 @@ func (s *JobService) ListSources(ctx context.Context) ([]sources.Source, error) 
 	return s.src.ListSources(ctx)
 }
 
+func (s *JobService) SourceTitleCounts(ctx context.Context) (map[string]int, error) {
+	return s.src.repo.TitleCounts(ctx)
+}
+
+// SourceFetchFailureCounts counts titles per source whose last chapter
+// refresh failed.
+func (s *JobService) SourceFetchFailureCounts(ctx context.Context) (map[string]int, error) {
+	return s.src.repo.FetchFailureCounts(ctx)
+}
+
 // GetSource returns one source profile.
 func (s *JobService) GetSource(ctx context.Context, id string) (sources.Source, error) {
 	return s.src.GetSource(ctx, id)
@@ -2045,7 +2079,13 @@ func (s *JobService) ExportSource(ctx context.Context, sourceID string) ([]byte,
 
 // VerifySource checks one source profile.
 func (s *JobService) VerifySource(ctx context.Context, cfg *config.Config, logSvc ui.Log, sourceID string) (SourceVerifyResult, error) {
-	return s.src.VerifySource(ctx, cfg, logSvc, sourceID)
+	result, err := s.src.VerifySource(ctx, cfg, logSvc, sourceID)
+	if err == nil {
+		if cerr := s.want.catalog.ClearMissesForSource(ctx, result.SourceID); cerr != nil {
+			logSvc.Warnf("Clearing match misses for %s failed: %v\n", result.SourceID, cerr)
+		}
+	}
+	return result, err
 }
 
 // VerifySourceURL probes a user-specified manga URL within a chosen source,
@@ -2131,40 +2171,63 @@ type ServiceHealth struct {
 	Endpoint string `json:"endpoint"`
 	Enabled  bool   `json:"enabled"`
 	Healthy  bool   `json:"healthy"`
+	Version  string `json:"version,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
 
-// ServicesHealth checks the configured FlareSolverr solver and browser
-// downloader, reporting each one's reachability.
+// ServicesHealth reports reachability of each configured helper service.
 func (s *JobService) ServicesHealth(ctx context.Context) []ServiceHealth {
 	cfg, _, err := s.RuntimeConfig(ctx)
 	if err != nil || cfg == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-
-	solver := ServiceHealth{Name: "FlareSolverr (page solver)", Endpoint: cfg.BrowserSolver.Endpoint, Enabled: cfg.BrowserSolver.Enabled}
-	if solver.Enabled {
-		client := browserfetch.NewFlareSolverr(cfg.BrowserSolver.Endpoint, time.Duration(cfg.BrowserSolver.TimeoutSeconds)*time.Second, nil)
-		if err := client.Health(ctx); err != nil {
-			solver.Error = err.Error()
-		} else {
-			solver.Healthy = true
+	check := func(name, endpoint string, enabled bool, probe func(context.Context) (string, error)) ServiceHealth {
+		h := ServiceHealth{Name: name, Endpoint: endpoint, Enabled: enabled}
+		if !enabled {
+			return h
 		}
-	}
-
-	browser := ServiceHealth{Name: "Browser downloader (Selenium)", Endpoint: cfg.BrowserDownload.Endpoint, Enabled: cfg.BrowserDownload.Enabled}
-	if browser.Enabled {
-		client := browserdownload.New(cfg.BrowserDownload.Endpoint, 8*time.Second, nil)
-		if err := client.Health(ctx); err != nil {
-			browser.Error = err.Error()
-		} else {
-			browser.Healthy = true
+		pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		version, err := probe(pctx)
+		if err != nil {
+			h.Error = err.Error()
+			return h
 		}
+		h.Healthy, h.Version = true, version
+		return h
 	}
-
-	return []ServiceHealth{solver, browser}
+	probes := []func() ServiceHealth{
+		func() ServiceHealth {
+			return check("FlareSolverr (page solver)", cfg.BrowserSolver.Endpoint, cfg.BrowserSolver.Enabled, func(c context.Context) (string, error) {
+				return "", browserfetch.NewFlareSolverr(cfg.BrowserSolver.Endpoint, time.Duration(cfg.BrowserSolver.TimeoutSeconds)*time.Second, nil).Health(c)
+			})
+		},
+		func() ServiceHealth {
+			return check("Browser downloader (Selenium)", cfg.BrowserDownload.Endpoint, cfg.BrowserDownload.Enabled, func(c context.Context) (string, error) {
+				return "", browserdownload.New(cfg.BrowserDownload.Endpoint, 8*time.Second, nil).Health(c)
+			})
+		},
+		func() ServiceHealth {
+			return check("Kotatsu worker (sources)", cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.Enabled, func(c context.Context) (string, error) {
+				h, err := kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey).Health(c)
+				if h.Solver {
+					return h.Version + " · solver", err
+				}
+				return h.Version, err
+			})
+		},
+	}
+	out := make([]ServiceHealth, len(probes))
+	var wg sync.WaitGroup
+	for i, p := range probes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = p()
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // SetSourceMethods overrides a source's chapter/image fetch methods.
@@ -2172,9 +2235,93 @@ func (s *JobService) SetSourceMethods(ctx context.Context, sourceID, chapterFetc
 	if err := s.src.SetFetchMethods(ctx, sourceID, chapterFetch, imageFetch); err != nil {
 		return err
 	}
-	// Re-check chapters with the new methods; duplicates from a paired
-	// ImportLocalSource call are absorbed by enqueue dedup.
 	return s.enqueueRefreshForSource(ctx, sourceID)
+}
+
+func (s *JobService) KotatsuClient(ctx context.Context) *kotatsu.Client {
+	cfg, _, err := s.RuntimeConfig(ctx)
+	if err != nil || !cfg.KotatsuWorker.Enabled {
+		return nil
+	}
+	return kotatsu.New(cfg.KotatsuWorker.Endpoint, cfg.KotatsuWorker.APIKey)
+}
+
+const kotatsuSourcesTTL = 5 * time.Minute
+
+func (s *JobService) KotatsuSources(ctx context.Context) ([]kotatsu.Source, error) {
+	kc := s.KotatsuClient(ctx)
+	if kc == nil {
+		return nil, fmt.Errorf("kotatsu worker is not enabled")
+	}
+	s.kotMu.Lock()
+	defer s.kotMu.Unlock()
+	if time.Now().Before(s.kotExp) {
+		return s.kotSources, nil
+	}
+	list, err := kc.Sources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.kotSources, s.kotExp = list, time.Now().Add(kotatsuSourcesTTL)
+
+	go s.pushKotatsuConfigs(kc)
+	return list, nil
+}
+
+// pushKotatsuConfigs restores user domain overrides into the worker's
+// in-memory config.
+func (s *JobService) pushKotatsuConfigs(kc *kotatsu.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	srcs, err := s.src.ListSources(ctx)
+	if err != nil {
+		return
+	}
+	for _, src := range srcs {
+		id, ok := strings.CutPrefix(src.Scraper, kotatsu.ScraperPrefix)
+		if !ok || len(src.Domains) == 0 {
+			continue
+		}
+		if err := kc.SetConfig(ctx, id, map[string]string{"domain": src.Domains[0]}); err != nil {
+			log.Printf("push kotatsu domain for %s: %v", src.ID, err)
+		}
+	}
+}
+
+func (s *JobService) KotatsuSample(ctx context.Context, src kotatsu.Source) string {
+	kc := s.KotatsuClient(ctx)
+	if kc == nil {
+		return src.BaseURL
+	}
+	sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if res, err := kc.Search(sctx, src.ID, ""); err == nil && len(res) > 0 {
+		return res[0].URL
+	}
+	return src.BaseURL
+}
+
+func (s *JobService) ImportKotatsuSource(ctx context.Context, src kotatsu.Source, version, sample string) error {
+	id := kotatsu.ScraperPrefix + src.ID
+	var langs []string
+	if src.Language != "" {
+		langs = []string{src.Language}
+	}
+	if strings.TrimSpace(sample) == "" {
+		sample = src.BaseURL
+	}
+	if err := s.src.ImportLocal(ctx, sources.Profile{
+		ID: id, Name: src.Name, BaseURL: src.BaseURL,
+		SampleMangaURL: sample,
+		Scraper:        id, NSFW: src.NSFW, Languages: langs, Enabled: true, Version: version,
+	}); err != nil {
+		return err
+	}
+	if err := s.src.SetEnabled(ctx, strings.ToLower(id), true); err != nil {
+		return err
+	}
+	_, err := s.EnqueueSource(ctx, strings.ToLower(id), time.Now())
+	return err
 }
 
 func (s *JobService) enqueueSourceSearchForTitle(ctx context.Context, title library.Title) error {
@@ -2191,9 +2338,7 @@ func (s *JobService) enqueueRefreshForTitle(ctx context.Context, title library.T
 	if !strings.HasPrefix(strings.TrimSpace(title.SourceURL), "http") {
 		return nil
 	}
-	// Linking always refreshes the chapter list
-	// first source of a title (nothing discovered yet) also kicks off the missing download
-	payload := JobPayload{TitleID: title.ID, DownloadAfterRefresh: title.DiscoveredCount == 0}
+	payload := JobPayload{TitleID: title.ID, DownloadAfterRefresh: true}
 	if _, err := s.enqueue(ctx, jobs.TypeRefreshTitle, payload, time.Now()); err != nil {
 		return fmt.Errorf("queue chapter refresh: %w", err)
 	}
@@ -2211,7 +2356,7 @@ func (s *JobService) enqueueRefreshForSource(ctx context.Context, sourceID strin
 	}
 	var errs []error
 	for _, title := range titles {
-		if title.SourceID != sourceID {
+		if title.SourceID != sourceID || !title.Monitored {
 			continue
 		}
 		errs = append(errs, s.enqueueRefreshForTitle(ctx, title))
@@ -2247,9 +2392,11 @@ func (s *JobService) EnqueueSourceVerification(ctx context.Context, runAfter tim
 	if err != nil {
 		return 0, err
 	}
+	counts := map[string]int{}
 	var errs []error
 	n := 0
 	for _, src := range srcs {
+		counts[src.Status]++
 		if !src.Enabled {
 			continue
 		}
@@ -2259,6 +2406,8 @@ func (s *JobService) EnqueueSourceVerification(ctx context.Context, runAfter tim
 		}
 		errs = append(errs, err)
 	}
+	log.Printf("source verification sweep: %d queued; current health: healthy %d, degraded %d, requires_cf %d, broken %d, unknown %d",
+		n, counts[sources.StatusHealthy], counts[sources.StatusDegraded], counts[sources.StatusRequiresCF], counts[sources.StatusBroken], counts["unknown"])
 	return n, errors.Join(errs...)
 }
 
@@ -2309,17 +2458,11 @@ func (s *JobService) coveringJob(ctx context.Context, typ string, payload JobPay
 	if payload.TitleID <= 0 || !titleScopedJob(typ) {
 		return jobs.Job{}, false, nil
 	}
-	all, err := s.jobs.List(ctx)
+	all, err := s.jobs.ActiveForTitle(ctx, typ, payload.TitleID)
 	if err != nil {
 		return jobs.Job{}, false, err
 	}
 	for _, job := range all {
-		if job.Type != typ {
-			continue
-		}
-		if !activeJobStatus(job.Status) {
-			continue
-		}
 		var existing JobPayload
 		if json.Unmarshal([]byte(job.Payload), &existing) != nil {
 			continue
@@ -2520,11 +2663,7 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 			if err != nil {
 				return err
 			}
-			_, err = s.lib.RefreshTitle(ctx, cfg, logSvc, title)
-			if markErr := s.markTitleSourceHealth(ctx, title, err); markErr != nil {
-				return errors.Join(err, markErr)
-			}
-			if err != nil {
+			if _, err = s.lib.RefreshTitle(ctx, cfg, logSvc, title); err != nil {
 				return err
 			}
 			if payload.DownloadAfterRefresh {
@@ -2551,23 +2690,19 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 				return err
 			}
 			if title.DiscoveredCount == 0 {
-				_, err := s.lib.RefreshTitle(ctx, cfg, logSvc, title)
-				if markErr := s.markTitleSourceHealth(ctx, title, err); markErr != nil {
-					return errors.Join(err, markErr)
-				}
-				if err != nil {
+				if _, err := s.lib.RefreshTitle(ctx, cfg, logSvc, title); err != nil {
 					return err
 				}
 			}
-			results, err := s.lib.DownloadMissing(ctx, cfg, logSvc, payload.TitleID, progress)
-			if err != nil || len(results) > 0 {
-				if markErr := s.markTitleSourceHealth(ctx, title, err); markErr != nil {
-					return errors.Join(err, markErr)
-				}
-			}
+			_, err = s.lib.DownloadMissing(ctx, cfg, logSvc, payload.TitleID, progress)
 			return err
 		}
 		return s.expandTitleJob(ctx, jobs.TypeDownloadMissing, job.ID)
+	case jobs.TypeDetectCrops:
+		if payload.TitleID > 0 {
+			return s.detectCrops(ctx, payload.TitleID, logSvc)
+		}
+		return s.expandDetectCrops(ctx, job.ID)
 	case jobs.TypeSyncAniList:
 		if payload.UserID > 0 {
 			return s.runAniListSync(ctx, payload.UserID, progress)
@@ -2595,19 +2730,6 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 	}
 }
 
-func (s *JobService) markTitleSourceHealth(ctx context.Context, title library.Title, runErr error) error {
-	if strings.TrimSpace(title.SourceID) == "" {
-		return nil
-	}
-	status := sources.StatusHealthy
-	lastError := ""
-	if runErr != nil {
-		status = fetchFailureStatus(runErr)
-		lastError = runErr.Error()
-	}
-	return s.src.repo.UpdateHealth(ctx, title.SourceID, status, lastError)
-}
-
 func (s *JobService) expandTitleJob(ctx context.Context, typ string, parentID int64) error {
 	titles, err := s.lib.ListTitles(ctx)
 	if err != nil {
@@ -2625,12 +2747,91 @@ func (s *JobService) expandTitleJob(ctx context.Context, typ string, parentID in
 	return errors.Join(errs...)
 }
 
+// detectCrops adds content-crop entries to a title's downloaded archives.
+func (s *JobService) detectCrops(ctx context.Context, titleID int64, logSvc ui.Log) error {
+	chs, err := s.TitleChapters(ctx, titleID)
+	if err != nil {
+		return err
+	}
+	added, failed := 0, 0
+	for _, ch := range chs {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !ch.Downloaded || ch.OutputFile == "" {
+			continue
+		}
+		ok, err := util.AddCropsToCBZ(ch.OutputFile)
+		if err != nil {
+			failed++
+			logSvc.Debugf("detect crops: %s: %v\n", ch.OutputFile, err)
+			continue
+		}
+		if ok {
+			added++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("crops added to %d archives, %d failed", added, failed)
+	}
+	return nil
+}
+
+// expandDetectCrops fans the global job out per title with downloads,
+// skipping titles that are most likely read in strip mode.
+func (s *JobService) expandDetectCrops(ctx context.Context, parentID int64) error {
+	titles, err := s.lib.ListTitles(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, title := range titles {
+		if title.CompletedCount == 0 || s.stripLikely(ctx, title) {
+			continue
+		}
+		_, err := s.enqueueChild(ctx, jobs.TypeDetectCrops, JobPayload{TitleID: title.ID}, time.Now(), parentID)
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (s *JobService) stripLikely(ctx context.Context, title library.Title) bool {
+	if title.CatalogMangaID == nil {
+		return false
+	}
+	manga, err := s.want.GetManga(ctx, *title.CatalogMangaID)
+	if err != nil {
+		return false
+	}
+	return mangaStripLikely(manga)
+}
+
+// mangaStripLikely: KR/CN/TW origin (webtoon/manhua, from the raw AniList
+// record) or the Full Color tag.
+func mangaStripLikely(m catalog.Manga) bool {
+	for _, t := range m.Tags {
+		if strings.EqualFold(strings.TrimSpace(t), "full color") {
+			return true
+		}
+	}
+	var raw struct {
+		CountryOfOrigin string `json:"countryOfOrigin"`
+	}
+	if json.Unmarshal([]byte(m.RawJSON), &raw) == nil {
+		switch raw.CountryOfOrigin {
+		case "KR", "CN", "TW":
+			return true
+		}
+	}
+	return false
+}
+
 func (s *JobService) enqueueDownloadAfterRefresh(ctx context.Context, titleID int64) error {
 	title, err := s.lib.GetTitle(ctx, titleID)
 	if err != nil {
 		return err
 	}
-	if !title.Monitored || title.MissingCount <= 1 {
+	if title.MissingCount == 0 {
 		return nil
 	}
 	if _, err := s.enqueueExact(ctx, jobs.TypeDownloadMissing, JobPayload{TitleID: title.ID}, time.Now()); err != nil {
@@ -2667,7 +2868,7 @@ func globalTitleJobApplies(typ string, title library.Title, now time.Time) bool 
 
 func validateJob(typ string, payload JobPayload) error {
 	switch typ {
-	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing:
+	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing, jobs.TypeDetectCrops:
 		if payload.TitleID < 0 {
 			return fmt.Errorf("invalid title id %d", payload.TitleID)
 		}
@@ -2693,7 +2894,7 @@ func validateJob(typ string, payload JobPayload) error {
 
 func titleScopedJob(typ string) bool {
 	switch typ {
-	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing:
+	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing, jobs.TypeDetectCrops:
 		return true
 	default:
 		return false

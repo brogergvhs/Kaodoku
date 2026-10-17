@@ -767,6 +767,7 @@ var titleScopedJobTypes = map[string]bool{
 	jobs.TypeRefreshTitle:    true,
 	jobs.TypeDownloadMissing: true,
 	jobs.TypeScanDownloads:   true,
+	jobs.TypeDetectCrops:     true,
 }
 
 // mayEnqueue enforces the split: jobs.manage for anything; library.manage for

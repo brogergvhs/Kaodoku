@@ -136,6 +136,15 @@ func (d *Downloader) DownloadImagesConcurrently(
 				continue
 			}
 
+			if ext == ".jpg" {
+				if real := sniffImageExt(path); real != "" && real != ext {
+					renamed := strings.TrimSuffix(path, ext) + real
+					if os.Rename(path, renamed) == nil {
+						path = renamed
+					}
+				}
+			}
+
 			filesMu.Lock()
 			files = append(files, path)
 			filesMu.Unlock()
@@ -303,7 +312,12 @@ func (d *Downloader) download(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return statusError{Code: resp.StatusCode}
+		e := statusError{Code: resp.StatusCode}
+		if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt == "application/json" {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			e.Body = strings.TrimSpace(string(body))
+		}
+		return e
 	}
 
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -340,9 +354,13 @@ func (d *Downloader) download(
 
 type statusError struct {
 	Code int
+	Body string
 }
 
 func (e statusError) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("HTTP %d: %s", e.Code, e.Body)
+	}
 	return fmt.Sprintf("HTTP %d", e.Code)
 }
 
@@ -456,6 +474,24 @@ func imageExt(rawURL string) string {
 		return cleanImageExt(path.Ext(u.Path))
 	}
 	return cleanImageExt(filepath.Ext(rawURL))
+}
+
+func sniffImageExt(file string) string {
+	f, err := os.Open(file)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	head := make([]byte, 512)
+	n, _ := f.Read(head)
+	mt, _, err := mime.ParseMediaType(http.DetectContentType(head[:n]))
+	if err != nil {
+		return ""
+	}
+	if ext := cleanImageExt("." + strings.TrimPrefix(mt, "image/")); ext != ".jpeg" {
+		return ext
+	}
+	return ".jpg"
 }
 
 func cleanImageExt(ext string) string {

@@ -101,34 +101,70 @@
 {{end}}
 
 {{define "sourcesTable"}}
-<div id="sources-table" class="rounded-xl">
+<div id="sources-table" class="rounded-xl" {{template "sourcesTablePoll" .}}>
 <table class="table table-rounded">
-  {{range .}}{{template "sourceRow" sourceRow .}}{{end}}</table>
+  {{range .}}{{template "sourceRow" .}}{{end}}</table>
 </div>
 {{end}}
 
+{{define "sourcesTablePoll"}}
+{{- $verifying := false}}{{range .}}{{if .Active}}{{$verifying = true}}{{end}}{{end}}
+{{- if $verifying}}hx-get="/ui/sources/table" hx-trigger="load delay:2s" hx-swap="outerHTML" hx-sync="this:drop"{{end}}
+{{end}}
+
+{{define "kotatsuSection"}}
+<div id="kotatsu-section" class="mt-10">
+  <div class="flex items-center justify-between gap-2 mb-4">
+    <h2 class="text-lg font-semibold">Kotatsu sources</h2>
+    {{if .Status.Reachable}}<button class="btn btn-sm btn-primary" hx-get="/ui/sources/kotatsu" hx-target="body" hx-swap="beforeend" hx-disabled-elt="this">{{template "iconPlus"}}Add Kotatsu source</button>
+    {{else if .Status.Enabled}}<span class="badge badge-error badge-soft" {{with .Status.Error}}title="{{.}}"{{end}}>unreachable</span>{{end}}
+  </div>
+  {{template "kotatsuSourcesTable" .Rows}}
+</div>
+{{end}}
+
+{{define "kotatsuSourcesTable"}}
+<div id="kotatsu-sources-table" class="rounded-xl" {{template "kotatsuTablePoll" .}}>
+<table class="table table-rounded">
+  {{range .}}{{template "sourceRow" .}}{{end}}</table>
+</div>
+{{end}}
+
+{{define "kotatsuSourcesTableOOB"}}
+<div id="kotatsu-sources-table" hx-swap-oob="true" class="rounded-xl" {{template "kotatsuTablePoll" .}}>
+<table class="table table-rounded">
+  {{range .}}{{template "sourceRow" .}}{{end}}</table>
+</div>
+{{end}}
+
+{{define "kotatsuTablePoll"}}
+{{- $verifying := false}}{{range .}}{{if .Active}}{{$verifying = true}}{{end}}{{end}}
+{{- if $verifying}}hx-get="/ui/sources/kotatsu/table" hx-trigger="load delay:2s" hx-swap="outerHTML" hx-sync="this:drop"{{end}}
+{{end}}
+
 {{define "sourceRow"}}
-<tbody id="src-{{.Source.ID}}" {{if .Active}}hx-get="/ui/sources/{{.Source.ID}}/row" hx-trigger="load delay:1500ms" hx-swap="outerHTML"{{end}}>
+<tbody id="src-{{.Source.ID}}" {{if .Poll}}hx-get="/ui/sources/{{.Source.ID}}/row" hx-trigger="load delay:1500ms" hx-swap="outerHTML" hx-sync="this:drop"{{end}}>
 <tr class="row-toggle" data-target="det-src-{{.Source.ID}}">
   <td class="w-6"><span class="caret text-base-content/50">{{template "iconChevron"}}</span></td>
   <td class="min-w-0"><span class="font-medium">{{.Source.Name}}</span><div class="truncate max-w-40 text-xs text-base-content/50">{{range .Source.Domains}}{{.}} {{end}}</div></td>
-  <td>{{if .Active}}<span class="loading loading-spinner loading-xs"></span> <span class="text-sm">verifying</span>{{else if not .Source.Enabled}}<span class="badge badge-ghost badge-sm">disabled</span>{{else}}{{template "sourceStatusBadge" .Source.Status}}{{end}}</td>
+  <td>{{if .Active}}<span class="loading loading-spinner loading-xs"></span> <span class="text-sm">verifying</span>{{else if not .Source.Enabled}}<span class="badge badge-ghost badge-sm">disabled</span>{{else}}<span {{with .Source.LastError}}title="{{.}}"{{end}}>{{template "sourceStatusBadge" .Source.Status}}</span>{{end}}{{if .FetchFails}} <span class="badge badge-warning badge-soft badge-sm" title="expand the row for details">{{.FetchFails}} title {{if eq .FetchFails 1}}issue{{else}}issues{{end}}</span>{{end}}</td>
+  <td class="max-sm:hidden">{{if .Titles}}<a class="link link-hover" href="/library?source={{.Source.ID}}">{{.Titles}}</a><div class="text-xs text-base-content/50">{{if eq .Titles 1}}title{{else}}titles{{end}}</div>{{else}}<span class="text-base-content/40">—</span>{{end}}</td>
   <td class="max-sm:hidden">{{.Source.ChaptersFound}}<div class="text-xs text-base-content/50">{{.Source.SampleImagesFound}} imgs</div></td>
   <td class="text-sm max-sm:hidden">{{orDash .Source.ChapterFetch}} / {{orDash .Source.ImageFetch}}</td>
   <td class="text-right">
     <details class="dropdown dropdown-end">
       <summary class="btn btn-sm btn-ghost btn-square" aria-label="Source actions">{{template "iconDots"}}</summary>
       <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-48 p-2 shadow-lg border border-base-300">
-        <li><button hx-post="/ui/sources/{{.Source.ID}}/verify" hx-target="#src-{{.Source.ID}}" hx-swap="outerHTML" {{if not .Source.Enabled}}disabled{{end}}>{{template "iconVerify"}}Verify</button></li>
+        <li><button hx-post="/ui/sources/{{.Source.ID}}/verify" hx-target="closest tbody" hx-swap="outerHTML" {{if not .Source.Enabled}}disabled{{end}}>{{template "iconVerify"}}Verify</button></li>
         <li><button hx-get="/ui/sources/{{.Source.ID}}/edit" hx-target="body" hx-swap="beforeend">{{template "iconEdit"}}Edit</button></li>
-        <li><button {{if .Source.Enabled}}class="text-error" {{end}}hx-post="/ui/sources/{{.Source.ID}}/enabled" hx-vals='{"on":"{{if .Source.Enabled}}false{{else}}true{{end}}"}' hx-target="#src-{{.Source.ID}}" hx-swap="outerHTML">{{template "iconPower"}}{{if .Source.Enabled}}Disable{{else}}Enable{{end}}</button></li>
-        {{if eq .Source.Origin "local"}}<li><button class="text-error" hx-post="/ui/sources/{{.Source.ID}}/delete" hx-target="#sources-table" hx-swap="outerHTML" hx-confirm="Delete this source? Titles linked to it keep their chapters but lose the source.">{{template "iconTrash"}}Delete</button></li>{{end}}
+        <li><button {{if .Source.Enabled}}class="text-error" {{end}}hx-post="/ui/sources/{{.Source.ID}}/enabled" hx-vals='{"on":"{{if .Source.Enabled}}false{{else}}true{{end}}"}' hx-target="closest tbody" hx-swap="outerHTML">{{template "iconPower"}}{{if .Source.Enabled}}Disable{{else}}Enable{{end}}</button></li>
+        {{if eq .Source.Origin "local"}}<li><button class="text-error" hx-post="/ui/sources/{{.Source.ID}}/delete" hx-target="closest tbody" hx-swap="delete" hx-confirm="Delete this source? Titles linked to it keep their chapters but lose the source.">{{template "iconTrash"}}Delete</button></li>{{end}}
       </ul>
     </details>
   </td>
 </tr>
 <tr id="det-src-{{.Source.ID}}" class="bg-base-200" hidden>
-  <td colspan="6">{{template "sourceSteps" .Source}}</td>
+  <td colspan="7">{{template "sourceSteps" .Source}}{{if .FetchFails}}<div class="mt-2" hx-get="/ui/sources/{{.Source.ID}}/title-errors" hx-trigger="intersect once" hx-swap="outerHTML"><span class="loading loading-spinner loading-xs"></span></div>{{end}}</td>
 </tr>
 </tbody>
 {{end}}
@@ -142,6 +178,7 @@
 {{end}}
 
 {{define "sourceSteps"}}
+{{$failed := false}}{{range .VerifySteps}}{{if eq .Status "failed"}}{{$failed = true}}{{end}}{{end}}
 {{if .VerifySteps}}
 <div class="steps-line my-2">
   {{range .VerifySteps}}
@@ -152,12 +189,27 @@
   </div>
   {{end}}
 </div>
-{{range .VerifySteps}}{{if .Log}}
+{{range .VerifySteps}}{{if and .Log (eq .Status "failed")}}
 <div class="mt-2"><span class="badge badge-error badge-soft badge-sm">{{.Name}}</span><pre class="mt-1 rounded bg-base-300 p-2 text-xs whitespace-pre-wrap break-all">{{.Log}}</pre></div>
 {{end}}{{end}}
-{{else if .LastError}}<pre class="rounded bg-base-300 p-2 text-xs whitespace-pre-wrap break-all">{{.LastError}}</pre>
-{{else}}<p class="text-sm text-base-content/60 my-2">Not verified yet — run Verify to see the pipeline.</p>{{end}}
-{{if .LastCheckedAt}}<div class="text-xs text-base-content/50 mt-1">Last checked: {{.LastCheckedAt}}</div>{{end}}
+{{else if not .LastError}}<p class="text-sm text-base-content/60 my-2">Not verified yet — run Verify to see the pipeline.</p>{{end}}
+{{if and .LastError (not $failed)}}
+<div class="mt-2"><span class="badge badge-error badge-soft badge-sm">last error</span><pre class="mt-1 rounded bg-base-300 p-2 text-xs whitespace-pre-wrap break-all">{{.LastError}}</pre>
+{{if .VerifySteps}}<p class="text-xs text-base-content/50">This happened after the verification above — re-run Verify to re-test the pipeline.</p>{{end}}</div>
+{{end}}
+{{if and .VerifySteps $failed (eq .Status "healthy")}}
+<p class="text-xs text-base-content/50 mt-1">A later title update succeeded, so the badge is green while this older check still shows a failure.</p>
+{{end}}
+{{if .LastCheckedAt}}<div class="text-xs text-base-content/50 mt-1">Last verified: {{.LastCheckedAt}}</div>{{end}}
+{{end}}
+
+{{define "sourceTitleErrors"}}
+<div class="mt-2">
+  {{range .}}
+  <div class="mt-1"><a class="link link-hover text-sm font-medium" href="/library/{{.ID}}">{{.DisplayTitle}}</a>
+  <pre class="mt-1 rounded bg-base-300 p-2 text-xs whitespace-pre-wrap break-all">{{.FetchError}}</pre></div>
+  {{else}}<p class="text-xs text-base-content/60">No failing titles right now — the next table refresh will clear the badge.</p>{{end}}
+</div>
 {{end}}
 
 {{define "sourceEdit"}}
@@ -172,8 +224,9 @@
       <label class="fieldset"><span class="fieldset-legend">Name</span><input class="input w-full" name="name" value="{{.Name}}"></label>
       <label class="fieldset"><span class="fieldset-legend">Site base URL</span><input class="input w-full" name="base_url" value="{{.BaseURL}}" required></label>
       <label class="fieldset"><span class="fieldset-legend">Sample manga URL</span><input class="input w-full" name="manga_url" value="{{.SampleMangaURL}}" required></label>
-      <label class="fieldset"><span class="fieldset-legend">Search URL ({query} placeholder)</span><input class="input w-full" name="search_url" value="{{.SearchURL}}"></label>
+      {{if not .Kotatsu}}<label class="fieldset"><span class="fieldset-legend">Search URL ({query} placeholder)</span><input class="input w-full" name="search_url" value="{{.SearchURL}}"></label>{{end}}
       <label class="fieldset"><span class="fieldset-legend">Domains (comma-separated)</span><input class="input w-full" name="domains" value="{{range $i, $d := .Domains}}{{if $i}}, {{end}}{{$d}}{{end}}"></label>
+      {{if not .Kotatsu}}
       <label class="fieldset"><span class="fieldset-legend">Image types (comma-separated)</span><input class="input w-full" name="extensions" value="{{range $i, $e := .AllowedExtensions}}{{if $i}}, {{end}}{{$e}}{{end}}"></label>
       <label class="fieldset"><span class="fieldset-legend">Preferred languages (comma-separated)</span><input class="input w-full" name="languages" value="{{range $i, $l := .Languages}}{{if $i}}, {{end}}{{$l}}{{end}}" placeholder="en"><span class="label">For multi-language sources (MangaDex): ISO codes in preference order, e.g. en, it.</span></label>
       <div class="grid grid-cols-2 gap-3">
@@ -192,6 +245,7 @@
           </select>
         </label>
       </div>
+      {{else}}<p class="text-xs text-base-content/50">Chapters, pages and images come from the Kotatsu worker, so search URL, image types, languages and fetch methods do not apply.</p>{{end}}
       <label class="fieldset"><span class="fieldset-legend">Scraper</span>
         <select class="select w-full" name="scraper">
           {{$cur := .Scraper}}{{range .Scrapers}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}

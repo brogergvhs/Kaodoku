@@ -18,3 +18,14 @@ func TestPlainSnippet(t *testing.T) {
 		}
 	}
 }
+
+func TestPlainDescription(t *testing.T) {
+	in := "Mika is a draker.<br><br> (Source: Kodansha USA)"
+	want := "Mika is a draker.\n\n(Source: Kodansha USA)"
+	if got := PlainDescription(in); got != want {
+		t.Fatalf("PlainDescription = %q, want %q", got, want)
+	}
+	if got := PlainDescription("a<br/>b<BR >c &amp; <i>d</i>"); got != "a\nb\nc & d" {
+		t.Fatalf("variants = %q", got)
+	}
+}

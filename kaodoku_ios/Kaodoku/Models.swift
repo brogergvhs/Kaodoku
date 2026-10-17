@@ -113,6 +113,8 @@ struct ChapterProgress: Decodable, Identifiable, Hashable {
   var titleId: Int64
   var label: String
   var title: String
+  var displayName: String?
+  var displayVolume: String?
   var numberMain: Int
   var downloaded: Bool
   var bytes: Int64
@@ -145,9 +147,17 @@ struct TitleActivity: Decodable {
   var queued: [String]
   var failed: Bool
   var error: String?
+  var running: [String: Bool]?
 
   var busy: Bool {
     !active.isEmpty || !queued.isEmpty
+  }
+
+  func isActive(_ jobType: String, verb: String) -> Bool {
+    if let running {
+      return running[jobType] == true
+    }
+    return active == verb || queued.contains(verb) // old-server fallback
   }
 }
 
@@ -180,6 +190,7 @@ struct Manifest: Decodable {
       var page: Int
       var url: String
       var read: Bool
+      var crop: [Double]?
     }
 
     var id: Int64

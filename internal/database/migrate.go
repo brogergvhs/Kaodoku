@@ -177,6 +177,9 @@ CREATE TABLE IF NOT EXISTS chapters (
 	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
 	label TEXT NOT NULL,
 	title TEXT NOT NULL DEFAULT '',
+	scraped_title TEXT NOT NULL DEFAULT '',
+	title_custom INTEGER NOT NULL DEFAULT 0,
+	volume_num REAL NOT NULL DEFAULT 0,
 	url TEXT NOT NULL,
 	number_main INTEGER NOT NULL DEFAULT 0,
 	suffix_type TEXT NOT NULL DEFAULT '',
@@ -368,10 +371,34 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	if err = ensureColumn(ctx, tx, "chapters", "scraped_title", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate chapters.scraped_title: %w", err)
+	}
+	if err = ensureColumn(ctx, tx, "chapters", "title_custom", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate chapters.title_custom: %w", err)
+	}
+	if err = ensureColumn(ctx, tx, "chapters", "volume_num", "REAL NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate chapters.volume_num: %w", err)
+	}
+	if err = ensureColumn(ctx, tx, "chapters", "volume_custom", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate chapters.volume_custom: %w", err)
+	}
+	if err = ensureColumn(ctx, tx, "chapters", "source_uid", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate chapters.source_uid: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE chapters SET scraped_title = title
+		WHERE scraped_title = '' AND title != '' AND title_custom = 0`); err != nil {
+		return fmt.Errorf("backfill chapters.scraped_title: %w", err)
+	}
+
 	if err = migrateReadTablesPerUser(ctx, tx); err != nil {
 		return err
 	}
 	hadManual, _, err := txHasColumn(ctx, tx, "chapter_read_progress", "manual")
+	if err != nil {
+		return err
+	}
+	hadFetchError, _, err := txHasColumn(ctx, tx, "titles", "fetch_error")
 	if err != nil {
 		return err
 	}
@@ -417,6 +444,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"api_tokens", "last_seen_at", "TEXT NOT NULL DEFAULT ''"},
 		{"api_tokens", "device_id", "TEXT NOT NULL DEFAULT ''"},
 		{"chapter_read_progress", "manual", "INTEGER NOT NULL DEFAULT 0"}, // 1 = bulk/AniList mark, not page-by-page reading
+		{"titles", "fetch_error", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err = ensureColumn(ctx, tx, col.table, col.name, col.def); err != nil {
 			return fmt.Errorf("migrate %s.%s: %w", col.table, col.name, err)
@@ -437,6 +465,12 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 				GROUP BY user_id, chapter_id HAVING COUNT(DISTINCT read_at) >= 2
 			)`); err != nil {
 			return fmt.Errorf("backfill read/marked flag: %w", err)
+		}
+	}
+	// one-shot: clear kotatsu import-snapshot domains, stored domains now mean user overrides
+	if !hadFetchError {
+		if _, err = tx.ExecContext(ctx, `UPDATE sources SET domains_json = '[]' WHERE scraper LIKE 'kotatsu:%'`); err != nil {
+			return fmt.Errorf("clear kotatsu snapshot domains: %w", err)
 		}
 	}
 	if err = tx.Commit(); err != nil {
