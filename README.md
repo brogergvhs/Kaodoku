@@ -18,7 +18,7 @@ at read time, and your files stay portable CBZ you can take anywhere.
   releases, so your library stays current without manual work.
 - **Read in the browser.** A built-in long-strip reader integrated into the UI.
   Both chapters and volumes are supported.
-- **Read on iPhone & iPad.** The companion [App](./kaodoku_ios) app connects to your
+- **Read on iPhone & iPad.** The companion [App](./kaodoku_ios) connects to your
   server to read downloaded manga on iOS — online or fully offline.
 - **Track your progress.** Automatic reading state per user through the reader.
   If you are a veteran who has been using AniList for a while and don't want to
@@ -72,6 +72,15 @@ lighter stack and still use most built-ins:
 - **Without the browser-worker** (FlareSolverr only): 12 of 15 work.
 
 Sources you add yourself may need one or both of these depending on the site.
+
+### Kotatsu sources (optional sidecar)
+
+The optional [`kotatsu-worker`](kotatsu-worker/README.md) sidecar unlocks a
+bunch of sources from [kotatsu-parsers-redo](https://github.com/Kotatsu-Redo/kotatsu-parsers-redo).
+Enable it, point Kaodoku at the worker, then browse and import those sources
+on the **Sources** page. It (can) reuse the same FlareSolverr and
+browser-worker helpers, so Cloudflare- and JS-gated kotatsu sources work (mostly).
+See the sidecar's README for [setup](./kotatsu-worker).
 
 ## Quick start (Docker Compose)
 
@@ -142,6 +151,7 @@ Configuration is via environment variables (see the compose example) and a few
 | `KAODOKU_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_REDIRECT_URL` | OIDC single sign-on (requires the admin password as break-glass). See the compose example for the optional role-mapping and auto-provisioning knobs. |
 | `KAODOKU_BROWSER_SOLVER_ENABLED` / `_ENDPOINT` / `_TIMEOUT_SECONDS` | FlareSolverr for Cloudflare-protected sites. |
 | `KAODOKU_BROWSER_DOWNLOADER_ENABLED` / `_ENDPOINT` / `_TIMEOUT_SECONDS` | Headless-browser worker for JS-rendered readers. |
+| `KAODOKU_KOTATSU_WORKER_ENABLED` / `_ENDPOINT` / `_API_KEY` | Kotatsu sidecar; the API key must match the worker's `WORKER_KEY`. See [`kotatsu-worker/README.md`](kotatsu-worker/README.md). |
 | `XDG_CONFIG_HOME` | Config directory (source definitions, profiles). |
 
 ### `serve` flags
