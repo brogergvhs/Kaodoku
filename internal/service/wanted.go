@@ -142,7 +142,7 @@ func (s *WantedService) MatchSources(ctx context.Context, cfg *config.Config, lo
 		return nil, err
 	}
 	if profiles, err := sources.BuiltInProfiles(); err == nil {
-		if err := s.sources.Sync(ctx, profiles, sources.OriginBuiltin); err != nil {
+		if err := s.sources.Sync(ctx, profiles, sources.OriginBuiltin, true); err != nil {
 			return nil, err
 		}
 	}

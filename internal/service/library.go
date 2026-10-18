@@ -830,10 +830,10 @@ func (s *LibraryService) listSources(ctx context.Context) ([]sources.Source, err
 		}
 		return out, nil
 	}
-	// Built-in profiles only change with the binary; one sync per process.
+
 	var syncErr error
 	s.syncOnce.Do(func() {
-		syncErr = s.sources.Sync(ctx, profiles, sources.OriginBuiltin)
+		syncErr = s.sources.Sync(ctx, profiles, sources.OriginBuiltin, true)
 	})
 	if syncErr != nil {
 		return nil, syncErr

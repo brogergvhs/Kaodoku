@@ -22,8 +22,7 @@ func NewRepository(db *sql.DB) *Repository {
 }
 
 // Sync upserts profiles without clearing existing verification status.
-// It runs in one transaction so a failure cannot leave a partial sync.
-func (r *Repository) Sync(ctx context.Context, profiles []Profile, origin string) (err error) {
+func (r *Repository) Sync(ctx context.Context, profiles []Profile, origin string, prune bool) (err error) {
 	origin = cleanOrigin(origin)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -35,11 +34,13 @@ func (r *Repository) Sync(ctx context.Context, profiles []Profile, origin string
 		}
 	}()
 
+	ids := make([]string, 0, len(profiles))
 	for _, profile := range profiles {
 		p, err := normalizeProfile(profile)
 		if err != nil {
 			return err
 		}
+		ids = append(ids, p.ID)
 		domains, err := encodeList(p.Domains)
 		if err != nil {
 			return fmt.Errorf("encode domains for %s: %w", p.ID, err)
@@ -97,6 +98,21 @@ func (r *Repository) Sync(ctx context.Context, profiles []Profile, origin string
 		`, p.ID, origin, p.Name, domains, p.BaseURL, p.SampleMangaURL, p.SearchURL, p.Scraper, extensions, languages, p.MinChapters, database.BoolToInt(p.RequiresBrowserSolver), database.BoolToInt(p.RequiresBrowserDownload), database.BoolToInt(p.SingleManga), database.BoolToInt(p.Chapterless), database.BoolToInt(p.NSFW), database.BoolToInt(p.Enabled), p.Version)
 		if err != nil {
 			return fmt.Errorf("sync source %s: %w", p.ID, err)
+		}
+	}
+
+	if prune && len(ids) > 0 {
+		args := make([]any, 0, len(ids)+1)
+		args = append(args, origin)
+		placeholders := make([]string, len(ids))
+		for i, id := range ids {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		if _, err = tx.ExecContext(ctx,
+			`DELETE FROM sources WHERE origin = ? AND id NOT IN (`+strings.Join(placeholders, ",")+`)`,
+			args...); err != nil {
+			return fmt.Errorf("prune %s sources: %w", origin, err)
 		}
 	}
 	if err = tx.Commit(); err != nil {
