@@ -78,7 +78,7 @@
     {{if .Chapters}}<span>{{.Chapters}} chapters (AniList)</span>{{end}}
     {{if .Volumes}}<span>{{.Volumes}} volumes (AniList)</span>{{end}}
   </div>
-  {{if .Genres}}<div class="flex flex-wrap gap-1.5">{{range .Genres}}<span class="badge badge-outline badge-sm">{{.}}</span>{{end}}</div>{{end}}
+  {{if .Genres}}<div class="flex flex-wrap gap-1.5">{{range .Genres}}<a href="/library?include_tags={{. | urlquery}}" class="badge badge-outline badge-sm transition-colors hover:border-primary hover:text-primary">{{.}}</a>{{end}}</div>{{end}}
 </div>
 {{end}}
 
@@ -548,8 +548,8 @@
 {{if .Description}}<p class="line-clamp-3 text-sm leading-relaxed text-base-content/70">{{desc .Description}}</p>{{end}}
 {{if or .Genres .Tags}}
 <div class="flex flex-wrap gap-1.5">
-  {{range .Genres}}<span class="badge badge-outline badge-sm">{{.}}</span>{{end}}
-  {{range .Tags}}<span class="badge badge-ghost badge-sm">{{.}}</span>{{end}}
+  {{range .Genres}}<a href="/library?include_tags={{. | urlquery}}" class="badge badge-outline badge-sm transition-colors hover:border-primary hover:text-primary">{{.}}</a>{{end}}
+  {{range .Tags}}<a href="/library?include_tags={{. | urlquery}}" class="badge badge-ghost badge-sm transition-colors hover:text-primary">{{.}}</a>{{end}}
 </div>
 {{end}}
 {{end}}

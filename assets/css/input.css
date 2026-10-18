@@ -320,6 +320,46 @@
     width: 0.8rem;
     height: 0.8rem;
   }
+  .toggle {
+    appearance: none;
+    position: relative;
+    width: 2.25rem;
+    height: 1.25rem;
+    flex-shrink: 0;
+    border-radius: 9999px;
+    border: 1px solid var(--color-line);
+    background: var(--color-base-300);
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      border-color 0.15s;
+  }
+  .toggle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 0.1875rem;
+    width: 0.8125rem;
+    height: 0.8125rem;
+    border-radius: 9999px;
+    background: var(--color-muted);
+    transform: translateY(-50%);
+    transition:
+      left 0.15s,
+      background 0.15s;
+  }
+  .toggle:checked {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+  }
+  .toggle:checked::after {
+    left: calc(100% - 1rem);
+    background: var(--color-primary-content);
+  }
+  .toggle-error:checked {
+    background: var(--color-error);
+    border-color: var(--color-error);
+  }
   .fieldset {
     display: grid;
     gap: 0.25rem;

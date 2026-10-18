@@ -272,6 +272,128 @@ document.addEventListener("click", function (e) {
   }
 });
 
+function filterChips(form) {
+  var chips = [];
+  form.querySelectorAll("select[data-default]").forEach(function (sel) {
+    if (sel.value === sel.dataset.default) return;
+    var legend = sel.closest(".fieldset");
+    legend = legend ? legend.querySelector(".fieldset-legend").textContent : sel.name;
+    chips.push({ k: "sel", name: sel.name, text: legend + ": " + sel.selectedOptions[0].textContent, cls: "badge-ghost" });
+  });
+  form.querySelectorAll("input[data-filter-toggle]:checked").forEach(function (t) {
+    chips.push({ k: "tog", name: t.name, text: t.closest("label").textContent.trim(), cls: "badge-ghost" });
+  });
+  form.querySelectorAll("[data-tag-list] input[name='source']:checked").forEach(function (c) {
+    chips.push({ k: "src", val: c.value, text: "Source: " + c.closest("label").textContent.trim(), cls: "badge-ghost" });
+  });
+  form.querySelectorAll("[data-tagfilter-hidden] input[name='include_tags']").forEach(function (i) {
+    chips.push({ k: "inc", val: i.value, text: i.value, cls: "badge-soft badge-success" });
+  });
+  form.querySelectorAll("[data-tagfilter-hidden] input[name='exclude_tags']").forEach(function (i) {
+    chips.push({ k: "exc", val: i.value, text: i.value, cls: "badge-soft badge-error" });
+  });
+  return chips;
+}
+function updateFilterCounts() {
+  document.querySelectorAll("[data-filter-count]").forEach(function (span) {
+    var form = span.closest("form");
+    if (!form) return;
+    var chips = filterChips(form);
+    span.textContent = chips.length ? "Filters · " + chips.length : "Filters";
+    var strip = form.nextElementSibling;
+    if (!strip || !strip.hasAttribute("data-active-filters")) return;
+    strip.innerHTML = "";
+    strip.classList.toggle("hidden", chips.length === 0);
+    strip.classList.toggle("flex", chips.length > 0);
+    chips.forEach(function (c) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "badge badge-sm cursor-pointer gap-1 " + c.cls;
+      b.dataset.k = c.k;
+      if (c.name) b.dataset.name = c.name;
+      if (c.val !== undefined) b.dataset.val = c.val;
+      b.append(c.text);
+      var x = document.createElement("span");
+      x.className = "opacity-60";
+      x.textContent = "\u2715";
+      b.appendChild(x);
+      strip.appendChild(b);
+    });
+    var clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "btn btn-ghost btn-xs";
+    clear.dataset.k = "clear";
+    clear.textContent = "Clear all";
+    strip.appendChild(clear);
+  });
+}
+document.addEventListener("change", function (e) {
+  if (e.target.closest("form")) updateFilterCounts();
+});
+document.addEventListener("click", function (e) {
+  var strip = e.target.closest("[data-active-filters]");
+  if (!strip) return;
+  var chip = e.target.closest("[data-k]");
+  if (!chip) return;
+  var form = strip.previousElementSibling;
+  var fire = function (el) {
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  var tagOff = function (name) {
+    var tc = form.querySelector("[data-tag-chip][data-tag-name='" + CSS.escape(name) + "']");
+    if (tc) {
+      tc.dataset.state = "";
+      tagFilterApply(tc.closest("[data-tagfilter]"));
+    }
+  };
+  switch (chip.dataset.k) {
+    case "sel": {
+      var sel = form.querySelector("select[name='" + chip.dataset.name + "']");
+      sel.value = sel.dataset.default;
+      fire(sel);
+      break;
+    }
+    case "tog": {
+      var t = form.querySelector("input[data-filter-toggle][name='" + chip.dataset.name + "']");
+      t.checked = false;
+      fire(t);
+      break;
+    }
+    case "src": {
+      var c = form.querySelector("input[name='source'][value='" + CSS.escape(chip.dataset.val) + "']");
+      c.checked = false;
+      fire(c);
+      break;
+    }
+    case "inc":
+    case "exc":
+      tagOff(chip.dataset.val);
+      break;
+    case "clear": {
+      form.querySelectorAll("select[data-default]").forEach(function (sel) {
+        sel.value = sel.dataset.default;
+      });
+      form.querySelectorAll("input[data-filter-toggle]:checked, [data-tag-list] input[name='source']:checked").forEach(function (c) {
+        c.checked = false;
+      });
+      var summary = form.querySelector("[data-tag-count]");
+      if (summary) summary.textContent = summary.dataset.emptyLabel || "None selected";
+      var tf = form.querySelector("[data-tagfilter]");
+      if (tf && tf.querySelector("[data-tag-chip][data-state='include'], [data-tag-chip][data-state='exclude']")) {
+        tf.querySelectorAll("[data-tag-chip]").forEach(function (c) {
+          c.dataset.state = "";
+        });
+        tagFilterApply(tf);
+      } else {
+        fire(form.querySelector("select[data-default]"));
+      }
+      break;
+    }
+  }
+  updateFilterCounts();
+});
+updateFilterCounts();
+
 // Tag picker: keep the "N selected" summary in sync with the checkboxes.
 document.addEventListener("change", function (e) {
   if (!e.target.matches("[data-tag-list] input[type='checkbox']")) return;

@@ -95,22 +95,24 @@
       <option value="table" {{if eq .Controls.View "table"}}selected{{end}}>Table</option>
       <option value="full" {{if eq .Controls.View "full"}}selected{{end}}>Full</option>
     </select>
-    <label for="search-filters" class="btn btn-outline shrink-0">Filters {{template "iconChevron"}}</label>
+    <label for="search-filters" class="btn btn-outline shrink-0"><span data-filter-count>Filters</span> {{template "iconChevron"}}</label>
   </div>
-  <div class="hidden peer-checked:grid grid-cols-2 gap-3 lg:grid-cols-4">
-    <label class="fieldset"><span class="fieldset-legend">Sort</span>
-      <select name="sort" class="select select-sm w-full">
-        <option value="" {{if eq .Controls.Sort ""}}selected{{end}}>Relevance</option>
-        <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
-        <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
-        <option value="year" {{if eq .Controls.Sort "year"}}selected{{end}}>Year</option>
-        <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Chapters</option>
-      </select></label>
-    <label class="fieldset"><span class="fieldset-legend">Direction</span>
-      <select name="dir" class="select select-sm w-full">
-        <option value="desc" {{if eq .Controls.Dir "desc"}}selected{{end}}>Descending</option>
-        <option value="asc" {{if eq .Controls.Dir "asc"}}selected{{end}}>Ascending</option>
-      </select></label>
+  <div class="hidden peer-checked:grid grid-cols-1 gap-3 md:grid-cols-2">
+    <div class="fieldset"><span class="fieldset-legend">Sort</span>
+      <div class="flex items-center gap-1.5">
+        <select name="sort" class="select select-sm min-w-0 flex-1" data-default="">
+          <option value="" {{if eq .Controls.Sort ""}}selected{{end}}>Relevance</option>
+          <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
+          <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
+          <option value="year" {{if eq .Controls.Sort "year"}}selected{{end}}>Year</option>
+          <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Chapters</option>
+        </select>
+        <div class="flex shrink-0 items-center gap-1" data-dir-switch data-default="desc">
+          <label class="btn btn-sm btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Descending"><input type="radio" name="dir" value="desc" class="hidden" {{if eq .Controls.Dir "desc"}}checked{{end}}>{{template "iconSortDesc"}}</label>
+          <label class="btn btn-sm btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Ascending"><input type="radio" name="dir" value="asc" class="hidden" {{if eq .Controls.Dir "asc"}}checked{{end}}>{{template "iconSortAsc"}}</label>
+        </div>
+      </div>
+    </div>
     {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
   </div>
 </form>
@@ -259,17 +261,41 @@
   {{if .Screen}}<input type="hidden" name="screen" value="{{.Screen.ID}}">{{end}}
   {{if .CollectionIDs}}<input type="hidden" name="ids" value="{{.CollectionIDs}}">{{end}}
   <input type="checkbox" id="lib-filters" class="peer sr-only">
-  <div class="flex items-center gap-2">
-    <input name="q" class="input input-sm w-full" value="{{.Controls.Q}}" placeholder="Search library…" hx-trigger="keyup changed delay:300ms">
-    <label for="lib-filters" class="btn btn-sm btn-outline shrink-0">Filters {{template "iconChevron"}}</label>
+  <div class="flex flex-wrap items-center gap-2">
+    <input name="q" class="input input-sm w-full min-w-40 sm:w-auto sm:flex-1" value="{{.Controls.Q}}" placeholder="Search library…" hx-trigger="keyup changed delay:300ms">
+    <select name="sort" class="select select-sm w-36" aria-label="Sort by">
+      <option value="added" {{if eq .Controls.Sort "added"}}selected{{end}}>Last added</option>
+      <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
+      <option value="missing" {{if eq .Controls.Sort "missing"}}selected{{end}}>Missing chapters</option>
+      <option value="failed" {{if eq .Controls.Sort "failed"}}selected{{end}}>Failed chapters</option>
+      <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Total chapters</option>
+      <option value="volumes" {{if eq .Controls.Sort "volumes"}}selected{{end}}>Total volumes</option>
+      <option value="size" {{if eq .Controls.Sort "size"}}selected{{end}}>Size (total)</option>
+      <option value="size-chapters" {{if eq .Controls.Sort "size-chapters"}}selected{{end}}>Size (chapters)</option>
+      <option value="size-volumes" {{if eq .Controls.Sort "size-volumes"}}selected{{end}}>Size (volumes)</option>
+      <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
+      <option value="updated" {{if eq .Controls.Sort "updated"}}selected{{end}}>Updated</option>
+    </select>
+    <div class="flex shrink-0 items-center gap-1">
+      <label class="btn btn-sm btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Descending"><input type="radio" name="dir" value="desc" class="hidden" {{if eq .Controls.Dir "desc"}}checked{{end}}>{{template "iconSortDesc"}}</label>
+      <label class="btn btn-sm btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Ascending"><input type="radio" name="dir" value="asc" class="hidden" {{if eq .Controls.Dir "asc"}}checked{{end}}>{{template "iconSortAsc"}}</label>
+    </div>
+    <select name="view" class="select select-sm w-24 shrink-0" aria-label="Library view">
+      <option value="auto" {{if eq .Controls.View "auto"}}selected{{end}}>Auto</option>
+      <option value="table" {{if eq .Controls.View "table"}}selected{{end}}>Table</option>
+      <option value="cards" {{if eq .Controls.View "cards"}}selected{{end}}>Cards</option>
+      <option value="full" {{if eq .Controls.View "full"}}selected{{end}}>Full</option>
+    </select>
+    <label for="lib-filters" class="btn btn-sm btn-outline shrink-0"><span data-filter-count>Filters</span> {{template "iconChevron"}}</label>
   </div>
-  <div class="hidden peer-checked:grid grid-cols-2 gap-3 lg:grid-cols-4">
-  <label class="fieldset"><span class="fieldset-legend">Monitor</span>
-    <select name="monitor" class="select select-sm w-full">
-      <option value="all" {{if eq .Controls.Monitor "all"}}selected{{end}}>All</option>
-      <option value="on" {{if eq .Controls.Monitor "on"}}selected{{end}}>Monitored</option>
-      <option value="off" {{if eq .Controls.Monitor "off"}}selected{{end}}>Off</option>
-    </select></label>
+  <div class="hidden peer-checked:grid grid-cols-1 gap-4 rounded-xl border border-line/40 bg-base-100 p-4 sm:grid-cols-2 lg:grid-cols-4">
+  <div class="fieldset"><span class="fieldset-legend">Show only</span>
+    <div class="flex flex-col gap-2 pt-1">
+      <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="monitor" value="on" class="toggle" data-filter-toggle {{if eq .Controls.Monitor "on"}}checked{{end}}>Monitored</label>
+      <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="fav" value="only" class="toggle" data-filter-toggle {{if eq .Controls.Fav "only"}}checked{{end}}>Favourites</label>
+      {{if .AllowNSFW}}<label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="nsfw" value="only" class="toggle toggle-error" data-filter-toggle {{if eq .Controls.NSFW "only"}}checked{{end}}>NSFW</label>{{end}}
+    </div>
+  </div>
   {{$src := .Controls.SourceSet}}
   <div class="fieldset"><span class="fieldset-legend">Source</span>
     <details class="dropdown w-full" data-keep-open>
@@ -286,54 +312,24 @@
       </div>
     </details></div>
   <label class="fieldset"><span class="fieldset-legend">Content</span>
-    <select name="content" class="select select-sm w-full">
+    <select name="content" class="select select-sm w-full" data-default="all">
       <option value="all" {{if eq .Controls.Content "all"}}selected{{end}}>All</option>
       <option value="chapters" {{if eq .Controls.Content "chapters"}}selected{{end}}>With chapters</option>
       <option value="no-chapters" {{if eq .Controls.Content "no-chapters"}}selected{{end}}>Without chapters</option>
       <option value="volumes" {{if eq .Controls.Content "volumes"}}selected{{end}}>With volumes</option>
       <option value="no-volumes" {{if eq .Controls.Content "no-volumes"}}selected{{end}}>Without volumes</option>
     </select></label>
-  <label class="fieldset"><span class="fieldset-legend">Favourites</span>
-    <select name="fav" class="select select-sm w-full">
-      <option value="all" {{if eq .Controls.Fav "all"}}selected{{end}}>All</option>
-      <option value="only" {{if eq .Controls.Fav "only"}}selected{{end}}>Favourites</option>
-    </select></label>
   <label class="fieldset"><span class="fieldset-legend">Progress</span>
-    <select name="progress" class="select select-sm w-full">
+    <select name="progress" class="select select-sm w-full" data-default="all">
       <option value="all" {{if eq .Controls.Progress "all"}}selected{{end}}>All</option>
       <option value="missing" {{if eq .Controls.Progress "missing"}}selected{{end}}>Missing</option>
       <option value="complete" {{if eq .Controls.Progress "complete"}}selected{{end}}>Complete</option>
       <option value="empty" {{if eq .Controls.Progress "empty"}}selected{{end}}>No chapters</option>
     </select></label>
-  <label class="fieldset"><span class="fieldset-legend">Sort</span>
-    <select name="sort" class="select select-sm w-full">
-      <option value="added" {{if eq .Controls.Sort "added"}}selected{{end}}>Last added</option>
-      <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
-      <option value="missing" {{if eq .Controls.Sort "missing"}}selected{{end}}>Missing chapters</option>
-      <option value="failed" {{if eq .Controls.Sort "failed"}}selected{{end}}>Failed chapters</option>
-      <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Total chapters</option>
-      <option value="volumes" {{if eq .Controls.Sort "volumes"}}selected{{end}}>Total volumes</option>
-      <option value="size" {{if eq .Controls.Sort "size"}}selected{{end}}>Size (total)</option>
-      <option value="size-chapters" {{if eq .Controls.Sort "size-chapters"}}selected{{end}}>Size (chapters)</option>
-      <option value="size-volumes" {{if eq .Controls.Sort "size-volumes"}}selected{{end}}>Size (volumes)</option>
-      <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
-      <option value="updated" {{if eq .Controls.Sort "updated"}}selected{{end}}>Updated</option>
-    </select></label>
-  <label class="fieldset"><span class="fieldset-legend">Direction</span>
-    <select name="dir" class="select select-sm w-full">
-      <option value="asc" {{if eq .Controls.Dir "asc"}}selected{{end}}>Ascending</option>
-      <option value="desc" {{if eq .Controls.Dir "desc"}}selected{{end}}>Descending</option>
-    </select></label>
-  <label class="fieldset"><span class="fieldset-legend">View</span>
-    <select name="view" class="select select-sm w-full">
-      <option value="auto" {{if eq .Controls.View "auto"}}selected{{end}}>Auto</option>
-      <option value="table" {{if eq .Controls.View "table"}}selected{{end}}>Table</option>
-      <option value="cards" {{if eq .Controls.View "cards"}}selected{{end}}>Cards</option>
-      <option value="full" {{if eq .Controls.View "full"}}selected{{end}}>Full</option>
-    </select></label>
   {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
   </div>
 </form>
+<div data-active-filters class="mb-4 hidden flex-wrap items-center gap-1.5"></div>
 {{if not .CollectionName}}<div hx-get="/ui/anilist/suggestions?view={{.Controls.View}}" hx-trigger="load" hx-swap="outerHTML"></div>{{end}}
 <div id="library-results">{{template "libraryResults" .Table}}</div>
 {{if .Table.CanManage}}
@@ -1098,12 +1094,12 @@
 {{define "tagFilterSummary"}}{{if or .IncludeCount .ExcludeCount}}{{if .IncludeCount}}{{.IncludeCount}} included{{end}}{{if and .IncludeCount .ExcludeCount}} · {{end}}{{if .ExcludeCount}}{{.ExcludeCount}} excluded{{end}}{{else}}Any tags{{end}}{{end}}
 
 {{define "tagFilter"}}
-<div class="fieldset col-span-2"><span class="fieldset-legend">{{.Label}}</span>
+<div class="fieldset col-span-full"><span class="fieldset-legend">{{.Label}}</span>
 {{if .HasOptions}}
 <details class="dropdown w-full" data-tagfilter data-keep-open>
   <summary class="select select-sm w-full flex cursor-pointer items-center" data-tagfilter-summary data-empty-label="Any tags">{{template "tagFilterSummary" .}}</summary>
-  <div class="dropdown-content z-30 mt-1 w-full md:w-[34rem] overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-lg">
-    <div class="flex items-center gap-2 border-b border-base-300 px-3 py-2">
+  <div class="dropdown-content z-30 mt-1 w-full max-w-[calc(100vw-2rem)] md:w-[34rem] overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-lg">
+    <div class="flex items-center gap-2 px-3 py-2">
       <input class="input input-sm flex-1" placeholder="Filter tags…" data-tag-filter form="">
       <button type="button" class="btn btn-sm btn-ghost" data-tagfilter-reset>Reset</button>
     </div>

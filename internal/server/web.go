@@ -94,11 +94,13 @@ type libraryView struct {
 	CollectionID       int64
 	CollectionSmartKey string
 	SourceOptions      []sources.Source
+	AllowNSFW          bool
 }
 type libraryControls struct {
 	Q           string
 	Monitor     string
 	Fav         string
+	NSFW        string
 	Sources     []string
 	Progress    string
 	Content     string // chapters/volumes presence
@@ -796,6 +798,9 @@ func (u *webUI) libraryPage(w http.ResponseWriter, r *http.Request) {
 	view.TagOptions = visibleTagOptions(r.Context(), view.TagOptions)
 	view.Controls = libraryControlsFrom(screenDefaults(values, view.Screen))
 	view.SourceOptions = u.librarySourceOptions(r.Context())
+	if user := userFrom(r.Context()); user == nil || user.AllowAdult {
+		view.AllowNSFW = true
+	}
 	title := "Library"
 	if view.Screen != nil {
 		title = view.Screen.Name
@@ -968,9 +973,11 @@ func (u *webUI) collectionMembersPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	allowNSFW := userFrom(ctx) == nil || userFrom(ctx).AllowAdult
 	view := libraryView{
 		Table:              u.buildLibraryTable(ctx, values),
 		Controls:           libraryControlsFrom(values),
+		AllowNSFW:          allowNSFW,
 		CollectionName:     name,
 		CollectionIDs:      values.Get("ids"),
 		CollectionID:       collectionID,
@@ -1754,6 +1761,7 @@ func libraryControlsFrom(values url.Values) libraryControls {
 		Monitor:     values.Get("monitor"),
 		Fav:         values.Get("fav"),
 		Content:     values.Get("content"),
+		NSFW:        values.Get("nsfw"),
 		Sources:     selectedSources(values["source"]),
 		Progress:    values.Get("progress"),
 		Sort:        values.Get("sort"),
@@ -1815,7 +1823,7 @@ func screenDefaults(values url.Values, screen *library.Screen) url.Values {
 
 func libraryTableParams(values url.Values) url.Values {
 	out := url.Values{}
-	for _, key := range []string{"q", "monitor", "fav", "progress", "content", "sort", "dir", "view", "screen", "ids"} {
+	for _, key := range []string{"q", "monitor", "fav", "nsfw", "progress", "content", "sort", "dir", "view", "screen", "ids"} {
 		if value := strings.TrimSpace(values.Get(key)); value != "" {
 			out.Set(key, value)
 		}
@@ -1982,6 +1990,9 @@ func filterTitles(titles []library.Title, c libraryControls) []library.Title {
 			}
 		}
 		if c.Fav == "only" && !title.Favourite {
+			continue
+		}
+		if c.NSFW == "only" && !title.IsAdult {
 			continue
 		}
 		if len(c.Sources) > 0 && !matchesAnySource(title, c) {
