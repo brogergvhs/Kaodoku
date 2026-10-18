@@ -684,7 +684,7 @@
 
 {{define "titleContent"}}
 <div id="title-content" {{if .Attaching}}hx-get="/ui/library/{{.Title.ID}}/content?tab=volumes" hx-trigger="load delay:3s" hx-swap="outerHTML" hx-sync="this:drop"{{end}}>
-  <div class="flex sm:items-center justify-between gap-2 mt-6 mb-3 max-sm:flex-col">
+  <div class="flex flex-wrap items-center justify-between gap-2 mt-6 mb-3">
     <div class="flex items-center gap-4">
       <button class="text-sm font-semibold uppercase tracking-wide {{if eq .Tab "chapters"}}text-base-content{{else}}text-base-content/40 hover:text-base-content/70{{end}}"
         hx-get="/ui/library/{{.Title.ID}}/content?tab=chapters" hx-target="#title-content" hx-swap="outerHTML">{{.ChapterCount}} Chapters</button>
@@ -693,50 +693,55 @@
         hx-get="/ui/library/{{.Title.ID}}/content?tab=volumes" hx-target="#title-content" hx-swap="outerHTML">{{.VolumeCount}} Volumes</button>
       {{end}}
     </div>
-    <div class="flex sm:items-center gap-2 max-sm:flex-col">
+    <div class="ml-auto flex items-center gap-2">
       {{if eq .Tab "volumes"}}
-      {{if .VolumeCount}}<a class="btn btn-primary max-sm:w-full" href="/reader/{{.Title.ID}}?mode=volumes">{{.VolumeReadLabel}}</a>{{end}}
-      {{else if gt .Title.CompletedCount 0}}<a class="btn btn-primary max-sm:w-full" href="/reader/{{.Title.ID}}">{{.ReadLabel}}</a>{{end}}
-      <details class="dropdown dropdown-end max-sm:w-full">
-        <summary class="btn btn-outline max-sm:w-full">Bulk mark</summary>
-        {{if eq .Tab "volumes"}}
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/volumes/range" hx-target="#title-content" hx-swap="outerHTML">
-        {{else}}
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/chapters/range" hx-target="#chapters-table" hx-swap="outerHTML">
-        {{end}}
-          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
-          <div class="join"><button class="btn btn-sm join-item grow" name="action" value="read">Mark read</button><button class="btn btn-sm btn-ghost join-item grow" name="action" value="unread">Unread</button></div>
-        </form>
+      {{if .VolumeCount}}<a class="btn btn-primary" href="/reader/{{.Title.ID}}?mode=volumes">{{.VolumeReadLabel}}</a>{{end}}
+      {{else if gt .Title.CompletedCount 0}}<a class="btn btn-primary" href="/reader/{{.Title.ID}}">{{.ReadLabel}}</a>{{end}}
+      <details class="dropdown dropdown-end">
+        <summary class="btn btn-ghost btn-square" aria-label="Bulk actions">{{template "iconDots"}}</summary>
+        <ul class="dropdown-content menu z-30 w-72 max-w-[calc(100vw-2rem)] max-h-[70dvh] overflow-y-auto rounded-lg border border-line bg-base-100 p-2">
+          <li><details class="group/bulk">
+            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-neutral sm:min-h-0 [&::-webkit-details-marker]:hidden">{{template "iconCheckCircle"}}Bulk mark<span class="ml-auto group-open/bulk:rotate-90">{{template "iconChevron"}}</span></summary>
+          {{if eq .Tab "volumes"}}
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open hx-post="/ui/library/{{.Title.ID}}/volumes/range" hx-target="#title-content" hx-swap="outerHTML">
+          {{else}}
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open hx-post="/ui/library/{{.Title.ID}}/chapters/range" hx-target="#chapters-table" hx-swap="outerHTML">
+          {{end}}
+              <div class="join"><input name="from" aria-label="From chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" aria-label="To chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
+              <div class="join"><button class="btn btn-sm join-item grow" name="action" value="read">Mark read</button><button class="btn btn-sm btn-ghost join-item grow" name="action" value="unread">Unread</button></div>
+            </form>
+          </details></li>
+          {{if ne .Tab "volumes"}}
+          <li><details class="group/bulk">
+            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-neutral sm:min-h-0 [&::-webkit-details-marker]:hidden">{{template "iconDownload"}}Bulk download<span class="ml-auto group-open/bulk:rotate-90">{{template "iconChevron"}}</span></summary>
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open method="get" action="/ui/library/{{.Title.ID}}/chapters/download" target="_blank" rel="noopener">
+              <div class="join"><input name="from" aria-label="From chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" aria-label="To chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
+              <button class="btn btn-sm">Download .zip</button>
+              <p class="text-xs text-base-content/50">Whole chapter numbers. In the installed app, downloads open in Safari.</p>
+            </form>
+          </details></li>
+          {{if .CanManage}}
+          <li><button type="button" hx-get="/ui/library/{{.Title.ID}}/chapters/bulk-rename" hx-target="#bulk-rename-body" hx-swap="innerHTML" onclick="bulk_rename_modal.showModal()">{{template "iconEdit"}}Bulk rename</button></li>
+          <li><details class="group/bulk">
+            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-neutral sm:min-h-0 [&::-webkit-details-marker]:hidden">{{template "iconRefresh"}}Reset names<span class="ml-auto group-open/bulk:rotate-90">{{template "iconChevron"}}</span></summary>
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open hx-post="/ui/library/{{.Title.ID}}/chapters/reset-names" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Reset manually renamed chapters back to their scraped names?">
+              <div class="join"><input name="from" aria-label="From chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from"><input name="to" aria-label="To chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to"></div>
+              <button class="btn btn-sm">Reset to scraped</button>
+              <p class="text-xs text-base-content/50">Leave the range empty to reset every manually renamed chapter.</p>
+            </form>
+          </details></li>
+          <li class="mt-1 border-t border-line/40 pt-1"><details class="group/bulk">
+            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm text-error hover:bg-error/10 sm:min-h-0 [&::-webkit-details-marker]:hidden">{{template "iconTrash"}}Bulk delete<span class="ml-auto group-open/bulk:rotate-90">{{template "iconChevron"}}</span></summary>
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open hx-post="/ui/library/{{.Title.ID}}/chapters/delete-range" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Remove downloaded files for chapters in this range? They will show as missing.">
+              <div class="join"><input name="from" aria-label="From chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" aria-label="To chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
+              <button class="btn btn-sm btn-error">Remove from disk</button>
+              <p class="text-xs text-base-content/50">Whole chapter numbers. Files are deleted; chapters become missing.</p>
+            </form>
+          </details></li>
+          {{end}}
+          {{end}}
+        </ul>
       </details>
-      {{if ne .Tab "volumes"}}
-      <details class="dropdown dropdown-end max-sm:w-full">
-        <summary class="btn btn-outline max-sm:w-full">Bulk download</summary>
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" method="get" action="/ui/library/{{.Title.ID}}/chapters/download" target="_blank" rel="noopener">
-          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
-          <button class="btn btn-sm">Download .zip</button>
-          <p class="text-xs text-base-content/50">Whole chapter numbers. In the installed app, downloads open in Safari.</p>
-        </form>
-      </details>
-      {{if .CanManage}}
-      <details class="dropdown dropdown-end max-sm:w-full">
-        <summary class="btn btn-outline max-sm:w-full">Bulk delete</summary>
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/chapters/delete-range" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Remove downloaded files for chapters in this range? They will show as missing.">
-          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
-          <button class="btn btn-sm btn-error">Remove from disk</button>
-          <p class="text-xs text-base-content/50">Whole chapter numbers. Files are deleted; chapters become missing.</p>
-        </form>
-      </details>
-      <button class="btn btn-outline max-sm:w-full" hx-get="/ui/library/{{.Title.ID}}/chapters/bulk-rename" hx-target="#bulk-rename-body" hx-swap="innerHTML" onclick="bulk_rename_modal.showModal()">Bulk rename</button>
-      <details class="dropdown dropdown-end max-sm:w-full">
-        <summary class="btn btn-outline max-sm:w-full">Reset names</summary>
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/chapters/reset-names" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Reset manually renamed chapters back to their scraped names?">
-          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from"><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to"></div>
-          <button class="btn btn-sm">Reset to scraped</button>
-          <p class="text-xs text-base-content/50">Leave the range empty to reset every manually renamed chapter.</p>
-        </form>
-      </details>
-      {{end}}
-      {{end}}
     </div>
   </div>
 

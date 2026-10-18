@@ -85,36 +85,52 @@
 {{end}}
 
 {{define "search"}}
-<form id="search-form" class="mb-4 grid gap-3" hx-post="/ui/search" hx-target="#search-results" hx-swap="innerHTML" hx-indicator="#search-spin"
+<form id="search-form" class="filter-form mb-4 grid gap-3" hx-post="/ui/search" hx-target="#search-results" hx-swap="innerHTML" hx-indicator="#search-spin"
   hx-trigger="submit, change[event.target.name && event.target.name !== 'q'], keyup changed delay:400ms from:input[name='q']">
-  <input type="checkbox" id="search-filters" class="peer sr-only">
-  <div class="flex items-center gap-2">
-    <input name="q" class="input w-full" placeholder="Search AniList…" value="{{.Controls.Q}}" autofocus>
-    <select name="view" class="select w-28 shrink-0" aria-label="Results view">
-      <option value="cards" {{if eq .Controls.View "cards"}}selected{{end}}>Cards</option>
-      <option value="table" {{if eq .Controls.View "table"}}selected{{end}}>Table</option>
-      <option value="full" {{if eq .Controls.View "full"}}selected{{end}}>Full</option>
-    </select>
-    <label for="search-filters" class="btn btn-outline shrink-0"><span data-filter-count>Filters</span> {{template "iconChevron"}}</label>
-  </div>
-  <div class="hidden peer-checked:grid grid-cols-1 gap-3 md:grid-cols-2">
-    <div class="fieldset"><span class="fieldset-legend">Sort</span>
-      <div class="flex items-center gap-1.5">
-        <select name="sort" class="select select-sm min-w-0 flex-1" data-default="">
-          <option value="" {{if eq .Controls.Sort ""}}selected{{end}}>Relevance</option>
-          <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
-          <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
-          <option value="year" {{if eq .Controls.Sort "year"}}selected{{end}}>Year</option>
-          <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Chapters</option>
-        </select>
-        <div class="flex shrink-0 items-center gap-1" data-dir-switch data-default="desc">
-          <label class="btn btn-sm btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Descending"><input type="radio" name="dir" value="desc" class="hidden" {{if eq .Controls.Dir "desc"}}checked{{end}}>{{template "iconSortDesc"}}</label>
-          <label class="btn btn-sm btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Ascending"><input type="radio" name="dir" value="asc" class="hidden" {{if eq .Controls.Dir "asc"}}checked{{end}}>{{template "iconSortAsc"}}</label>
+  <div class="filter-toolbar">
+    <input name="q" class="input filter-query w-full min-w-0" aria-label="Search AniList" placeholder="Search AniList…" value="{{.Controls.Q}}" autofocus>
+    <div data-filter-desktop-controls>
+      <div class="filter-display-controls">
+        <div class="fieldset filter-sort"><span class="fieldset-legend filter-display-label">Sort</span>
+          <div class="flex items-center gap-1.5">
+            <select name="sort" aria-label="Sort by" class="select min-w-0 flex-1" data-default="">
+              <option value="" {{if eq .Controls.Sort ""}}selected{{end}}>Relevance</option>
+              <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
+              <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
+              <option value="year" {{if eq .Controls.Sort "year"}}selected{{end}}>Year</option>
+              <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Chapters</option>
+            </select>
+            <div class="flex shrink-0 items-center gap-1" data-dir-switch data-default="desc">
+              <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Descending"><input type="radio" name="dir" value="desc" class="sr-only" aria-label="Descending" {{if eq .Controls.Dir "desc"}}checked{{end}}>{{template "iconSortDesc"}}</label>
+              <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Ascending"><input type="radio" name="dir" value="asc" class="sr-only" aria-label="Ascending" {{if eq .Controls.Dir "asc"}}checked{{end}}>{{template "iconSortAsc"}}</label>
+            </div>
+          </div>
+        </div>
+        <div class="fieldset filter-view"><span class="fieldset-legend filter-display-label">View</span>
+          <div class="flex items-center gap-1" role="group" aria-label="View">
+            {{template "viewButtons" .Controls.View}}
+          </div>
         </div>
       </div>
     </div>
-    {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
+    <button type="button" class="filter-disclosure btn btn-outline" aria-haspopup="dialog" aria-controls="search-filters" onclick="document.getElementById('search-filters').showModal()">{{template "iconFilter"}}<span data-filter-count>Filters</span></button>
   </div>
+  <dialog id="search-filters" class="modal filter-modal" aria-labelledby="search-filters-title">
+    <div class="modal-box">
+      <div class="flex shrink-0 items-center justify-between gap-2 px-4 pt-3 pb-1">
+        <h2 id="search-filters-title" class="text-lg font-semibold">Filters</h2>
+        <button type="button" class="btn btn-ghost btn-square" aria-label="Close filters" onclick="this.closest('dialog').close()" autofocus>✕</button>
+      </div>
+      <div class="filter-modal-body">
+        <div data-filter-mobile-controls></div>
+        <div class="filter-panel grid grid-cols-1 items-start gap-2 sm:grid-cols-2">
+          {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
+        </div>
+      </div>
+      <div class="modal-action m-0 shrink-0 border-t border-line/40 px-4 py-3"><button type="button" class="btn btn-primary" onclick="this.closest('dialog').close()">Done</button></div>
+    </div>
+    <button type="button" class="modal-backdrop" tabindex="-1" aria-label="Close filters" onclick="this.closest('dialog').close()"></button>
+  </dialog>
 </form>
 <div class="text-center"><span id="search-spin" class="htmx-indicator loading my-4"></span></div>
 <div hx-get="/ui/anilist/suggestions" hx-include="#search-form" hx-trigger="load" hx-swap="outerHTML"></div>
@@ -256,78 +272,98 @@
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 {{end}}
-<form class="mb-4 grid gap-3" method="get" action="/library" hx-get="/ui/library/table" hx-trigger="change[event.target.name && event.target.name !== 'q'], keyup changed delay:300ms from:input[name='q']" hx-target="#library-results" hx-swap="innerHTML" hx-sync="#library-table:replace">
+<form class="filter-form mb-4 grid gap-3" method="get" action="/library" hx-get="/ui/library/table" hx-trigger="change[event.target.name && event.target.name !== 'q'], keyup changed delay:300ms from:input[name='q']" hx-target="#library-results" hx-swap="innerHTML" hx-sync="#library-table:replace">
   <button type="submit" class="sr-only" tabindex="-1">Apply filters</button>
   {{if .Screen}}<input type="hidden" name="screen" value="{{.Screen.ID}}">{{end}}
   {{if .CollectionIDs}}<input type="hidden" name="ids" value="{{.CollectionIDs}}">{{end}}
-  <input type="checkbox" id="lib-filters" class="peer sr-only">
-  <div class="flex flex-wrap items-center gap-2">
-    <input name="q" class="input input-sm w-full min-w-40 sm:w-auto sm:flex-1" value="{{.Controls.Q}}" placeholder="Search library…" hx-trigger="keyup changed delay:300ms">
-    <select name="sort" class="select select-sm w-36" aria-label="Sort by">
-      <option value="added" {{if eq .Controls.Sort "added"}}selected{{end}}>Last added</option>
-      <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
-      <option value="missing" {{if eq .Controls.Sort "missing"}}selected{{end}}>Missing chapters</option>
-      <option value="failed" {{if eq .Controls.Sort "failed"}}selected{{end}}>Failed chapters</option>
-      <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Total chapters</option>
-      <option value="volumes" {{if eq .Controls.Sort "volumes"}}selected{{end}}>Total volumes</option>
-      <option value="size" {{if eq .Controls.Sort "size"}}selected{{end}}>Size (total)</option>
-      <option value="size-chapters" {{if eq .Controls.Sort "size-chapters"}}selected{{end}}>Size (chapters)</option>
-      <option value="size-volumes" {{if eq .Controls.Sort "size-volumes"}}selected{{end}}>Size (volumes)</option>
-      <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
-      <option value="updated" {{if eq .Controls.Sort "updated"}}selected{{end}}>Updated</option>
-    </select>
-    <div class="flex shrink-0 items-center gap-1">
-      <label class="btn btn-sm btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Descending"><input type="radio" name="dir" value="desc" class="hidden" {{if eq .Controls.Dir "desc"}}checked{{end}}>{{template "iconSortDesc"}}</label>
-      <label class="btn btn-sm btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Ascending"><input type="radio" name="dir" value="asc" class="hidden" {{if eq .Controls.Dir "asc"}}checked{{end}}>{{template "iconSortAsc"}}</label>
-    </div>
-    <select name="view" class="select select-sm w-24 shrink-0" aria-label="Library view">
-      <option value="auto" {{if eq .Controls.View "auto"}}selected{{end}}>Auto</option>
-      <option value="table" {{if eq .Controls.View "table"}}selected{{end}}>Table</option>
-      <option value="cards" {{if eq .Controls.View "cards"}}selected{{end}}>Cards</option>
-      <option value="full" {{if eq .Controls.View "full"}}selected{{end}}>Full</option>
-    </select>
-    <label for="lib-filters" class="btn btn-sm btn-outline shrink-0"><span data-filter-count>Filters</span> {{template "iconChevron"}}</label>
-  </div>
-  <div class="hidden peer-checked:grid grid-cols-1 gap-4 rounded-xl border border-line/40 bg-base-100 p-4 sm:grid-cols-2 lg:grid-cols-4">
-  <div class="fieldset"><span class="fieldset-legend">Show only</span>
-    <div class="flex flex-col gap-2 pt-1">
-      <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="monitor" value="on" class="toggle" data-filter-toggle {{if eq .Controls.Monitor "on"}}checked{{end}}>Monitored</label>
-      <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="fav" value="only" class="toggle" data-filter-toggle {{if eq .Controls.Fav "only"}}checked{{end}}>Favourites</label>
-      {{if .AllowNSFW}}<label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="nsfw" value="only" class="toggle toggle-error" data-filter-toggle {{if eq .Controls.NSFW "only"}}checked{{end}}>NSFW</label>{{end}}
-    </div>
-  </div>
-  {{$src := .Controls.SourceSet}}
-  <div class="fieldset"><span class="fieldset-legend">Source</span>
-    <details class="dropdown w-full" data-keep-open>
-      <summary class="select select-sm w-full flex cursor-pointer items-center" data-tag-count data-empty-label="All">{{if $src}}{{len $src}} selected{{else}}All{{end}}</summary>
-      <div class="dropdown-content z-30 mt-1 w-full rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
-        <input class="input input-sm mb-2 w-full" placeholder="Filter sources…" data-tag-filter form="">
-        <div class="grid max-h-52 gap-y-1 overflow-y-auto -mr-2 pr-2" data-tag-list>
-          <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="linked" {{if index $src "linked"}}checked{{end}}><span>Linked</span></label>
-          <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="unlinked" {{if index $src "unlinked"}}checked{{end}}><span>Unlinked</span></label>
-          <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="imported" {{if index $src "imported"}}checked{{end}}><span>Imported</span></label>
-          {{if .SourceOptions}}<div class="my-1 border-t border-base-300" data-tag-divider></div>
-          {{range .SourceOptions}}<label class="flex min-w-0 cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="{{.ID}}" {{if index $src .ID}}checked{{end}}><span class="truncate">{{.Name}}</span></label>{{end}}{{end}}
+  <div class="filter-toolbar">
+    <input name="q" class="input filter-query w-full min-w-0" aria-label="Search library" value="{{.Controls.Q}}" placeholder="Search library…" hx-trigger="keyup changed delay:300ms">
+    <div data-filter-desktop-controls>
+      <div class="filter-display-controls">
+        <div class="fieldset filter-sort"><span class="fieldset-legend filter-display-label">Sort</span>
+          <div class="flex min-w-0 items-center gap-2">
+            <select name="sort" class="select min-w-0 flex-1" aria-label="Sort by">
+              <option value="added" {{if eq .Controls.Sort "added"}}selected{{end}}>Last added</option>
+              <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
+              <option value="missing" {{if eq .Controls.Sort "missing"}}selected{{end}}>Missing chapters</option>
+              <option value="failed" {{if eq .Controls.Sort "failed"}}selected{{end}}>Failed chapters</option>
+              <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Total chapters</option>
+              <option value="volumes" {{if eq .Controls.Sort "volumes"}}selected{{end}}>Total volumes</option>
+              <option value="size" {{if eq .Controls.Sort "size"}}selected{{end}}>Size (total)</option>
+              <option value="size-chapters" {{if eq .Controls.Sort "size-chapters"}}selected{{end}}>Size (chapters)</option>
+              <option value="size-volumes" {{if eq .Controls.Sort "size-volumes"}}selected{{end}}>Size (volumes)</option>
+              <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
+              <option value="updated" {{if eq .Controls.Sort "updated"}}selected{{end}}>Updated</option>
+            </select>
+            <div class="flex shrink-0 items-center gap-1">
+              <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Descending"><input type="radio" name="dir" value="desc" class="sr-only" aria-label="Descending" {{if eq .Controls.Dir "desc"}}checked{{end}}>{{template "iconSortDesc"}}</label>
+              <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Ascending"><input type="radio" name="dir" value="asc" class="sr-only" aria-label="Ascending" {{if eq .Controls.Dir "asc"}}checked{{end}}>{{template "iconSortAsc"}}</label>
+            </div>
+          </div>
+        </div>
+        <div class="fieldset filter-view"><span class="fieldset-legend filter-display-label">View</span>
+          <div class="flex items-center gap-1" role="group" aria-label="View">
+            <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Auto view"><input type="radio" name="view" value="auto" class="sr-only" aria-label="Auto view" {{if eq .Controls.View "auto"}}checked{{end}}>{{template "iconViewAuto"}}</label>
+            {{template "viewButtons" .Controls.View}}
+          </div>
         </div>
       </div>
-    </details></div>
-  <label class="fieldset"><span class="fieldset-legend">Content</span>
-    <select name="content" class="select select-sm w-full" data-default="all">
-      <option value="all" {{if eq .Controls.Content "all"}}selected{{end}}>All</option>
-      <option value="chapters" {{if eq .Controls.Content "chapters"}}selected{{end}}>With chapters</option>
-      <option value="no-chapters" {{if eq .Controls.Content "no-chapters"}}selected{{end}}>Without chapters</option>
-      <option value="volumes" {{if eq .Controls.Content "volumes"}}selected{{end}}>With volumes</option>
-      <option value="no-volumes" {{if eq .Controls.Content "no-volumes"}}selected{{end}}>Without volumes</option>
-    </select></label>
-  <label class="fieldset"><span class="fieldset-legend">Progress</span>
-    <select name="progress" class="select select-sm w-full" data-default="all">
-      <option value="all" {{if eq .Controls.Progress "all"}}selected{{end}}>All</option>
-      <option value="missing" {{if eq .Controls.Progress "missing"}}selected{{end}}>Missing</option>
-      <option value="complete" {{if eq .Controls.Progress "complete"}}selected{{end}}>Complete</option>
-      <option value="empty" {{if eq .Controls.Progress "empty"}}selected{{end}}>No chapters</option>
-    </select></label>
-  {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
+    </div>
+    <button type="button" class="filter-disclosure btn btn-outline" aria-haspopup="dialog" aria-controls="lib-filters" onclick="document.getElementById('lib-filters').showModal()">{{template "iconFilter"}}<span data-filter-count>Filters</span></button>
   </div>
+  <dialog id="lib-filters" class="modal filter-modal" aria-labelledby="lib-filters-title">
+    <div class="modal-box">
+      <div class="flex shrink-0 items-center justify-between gap-2 px-4 pt-3 pb-1">
+        <h2 id="lib-filters-title" class="text-lg font-semibold">Filters</h2>
+        <button type="button" class="btn btn-ghost btn-square" aria-label="Close filters" onclick="this.closest('dialog').close()" autofocus>✕</button>
+      </div>
+      <div class="filter-modal-body">
+        <div data-filter-mobile-controls></div>
+        <div class="filter-panel grid grid-cols-1 items-start gap-2 sm:grid-cols-3">
+          {{$src := .Controls.SourceSet}}
+          <div class="fieldset"><span class="fieldset-legend">Source</span>
+            <details class="dropdown w-full" aria-label="Source" data-keep-open>
+              <summary class="select w-full flex cursor-pointer items-center" data-tag-count data-empty-label="All">{{if $src}}{{len $src}} selected{{else}}All{{end}}</summary>
+              <div class="filter-source-menu dropdown-content z-30 w-full rounded-lg border border-line bg-base-100 p-2">
+                <input class="input input-sm mb-2 w-full" aria-label="Filter sources" placeholder="Filter sources…" data-tag-filter form="">
+                <div class="grid max-h-52 gap-y-1 overflow-y-auto -mr-2 pr-2" data-tag-list>
+                  <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="linked" {{if index $src "linked"}}checked{{end}}><span>Linked</span></label>
+                  <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="unlinked" {{if index $src "unlinked"}}checked{{end}}><span>Unlinked</span></label>
+                  <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="imported" {{if index $src "imported"}}checked{{end}}><span>Imported</span></label>
+                  {{if .SourceOptions}}<div class="my-1 border-t border-base-300" data-tag-divider></div>
+                  {{range .SourceOptions}}<label class="flex min-w-0 cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="{{.ID}}" {{if index $src .ID}}checked{{end}}><span class="truncate">{{.Name}}</span></label>{{end}}{{end}}
+                </div>
+              </div>
+            </details></div>
+          <label class="fieldset"><span class="fieldset-legend">Content</span>
+            <select name="content" class="select w-full" data-default="all">
+              <option value="all" {{if eq .Controls.Content "all"}}selected{{end}}>All</option>
+              <option value="chapters" {{if eq .Controls.Content "chapters"}}selected{{end}}>With chapters</option>
+              <option value="no-chapters" {{if eq .Controls.Content "no-chapters"}}selected{{end}}>Without chapters</option>
+              <option value="volumes" {{if eq .Controls.Content "volumes"}}selected{{end}}>With volumes</option>
+              <option value="no-volumes" {{if eq .Controls.Content "no-volumes"}}selected{{end}}>Without volumes</option>
+            </select></label>
+          <label class="fieldset"><span class="fieldset-legend">Progress</span>
+            <select name="progress" class="select w-full" data-default="all">
+              <option value="all" {{if eq .Controls.Progress "all"}}selected{{end}}>All</option>
+              <option value="missing" {{if eq .Controls.Progress "missing"}}selected{{end}}>Missing</option>
+              <option value="complete" {{if eq .Controls.Progress "complete"}}selected{{end}}>Complete</option>
+              <option value="empty" {{if eq .Controls.Progress "empty"}}selected{{end}}>No chapters</option>
+            </select></label>
+          {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
+          <div class="col-span-full flex flex-wrap items-center gap-x-4 gap-y-0 border-t border-line/40 pt-2"><span class="fieldset-legend">Show only</span>
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-0">
+              <label class="flex min-h-11 cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="monitor" value="on" class="toggle" data-filter-toggle {{if eq .Controls.Monitor "on"}}checked{{end}}>Monitored</label>
+              <label class="flex min-h-11 cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="fav" value="only" class="toggle" data-filter-toggle {{if eq .Controls.Fav "only"}}checked{{end}}>Favourites</label>
+              {{if .AllowNSFW}}<label class="flex min-h-11 cursor-pointer items-center gap-2 text-sm"><input type="checkbox" name="nsfw" value="only" class="toggle toggle-error" data-filter-toggle {{if eq .Controls.NSFW "only"}}checked{{end}}>NSFW</label>{{end}}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-action m-0 shrink-0 border-t border-line/40 px-4 py-3"><button type="button" class="btn btn-primary" onclick="this.closest('dialog').close()">Done</button></div>
+    </div>
+    <button type="button" class="modal-backdrop" tabindex="-1" aria-label="Close filters" onclick="this.closest('dialog').close()"></button>
+  </dialog>
 </form>
 <div data-active-filters class="mb-4 hidden flex-wrap items-center gap-1.5"></div>
 {{if not .CollectionName}}<div hx-get="/ui/anilist/suggestions?view={{.Controls.View}}" hx-trigger="load" hx-swap="outerHTML"></div>{{end}}
@@ -1094,14 +1130,14 @@
 {{define "tagFilterSummary"}}{{if or .IncludeCount .ExcludeCount}}{{if .IncludeCount}}{{.IncludeCount}} included{{end}}{{if and .IncludeCount .ExcludeCount}} · {{end}}{{if .ExcludeCount}}{{.ExcludeCount}} excluded{{end}}{{else}}Any tags{{end}}{{end}}
 
 {{define "tagFilter"}}
-<div class="fieldset col-span-full"><span class="fieldset-legend">{{.Label}}</span>
+<div class="fieldset filter-tags"><span class="fieldset-legend">{{.Label}}</span>
 {{if .HasOptions}}
-<details class="dropdown w-full" data-tagfilter data-keep-open>
-  <summary class="select select-sm w-full flex cursor-pointer items-center" data-tagfilter-summary data-empty-label="Any tags">{{template "tagFilterSummary" .}}</summary>
-  <div class="dropdown-content z-30 mt-1 w-full max-w-[calc(100vw-2rem)] md:w-[34rem] overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-lg">
-    <div class="flex items-center gap-2 px-3 py-2">
-      <input class="input input-sm flex-1" placeholder="Filter tags…" data-tag-filter form="">
-      <button type="button" class="btn btn-sm btn-ghost" data-tagfilter-reset>Reset</button>
+<details class="dropdown dropdown-end w-full" aria-label="{{.Label}}" data-tagfilter data-keep-open>
+  <summary class="select w-full flex cursor-pointer items-center" data-tagfilter-summary data-empty-label="Any tags">{{template "tagFilterSummary" .}}</summary>
+  <div class="filter-tag-menu dropdown-content z-30 overflow-hidden rounded-lg border border-line bg-base-100">
+    <div class="flex items-center gap-2 border-b border-line/40 p-3">
+      <input class="input min-w-0 flex-1" aria-label="Filter tags" placeholder="Filter tags…" data-tag-filter form="">
+      <button type="button" class="btn btn-ghost shrink-0" data-tagfilter-reset>Reset</button>
     </div>
     <div class="max-h-80 space-y-3 overflow-y-auto px-3 py-3">
       <div data-tagfilter-hidden hidden>
@@ -1109,14 +1145,14 @@
         {{range .Exclude}}<input type="hidden" name="exclude_tags" value="{{.}}">{{end}}
       </div>
       <input type="hidden" name="_tagsync" value="0" data-tagfilter-trigger>
-      <p class="py-4 text-center text-sm text-base-content/50" data-tagfilter-empty hidden>Nothing found.</p>
+      <p class="py-4 text-center text-sm text-muted" data-tagfilter-empty hidden>Nothing found.</p>
       {{range .Groups}}
       <div class="space-y-1.5" data-tag-list>
-        <div class="flex items-center gap-2"><span class="text-sm font-semibold text-base-content/70">{{.Title}}</span><div class="h-px grow bg-base-300"></div></div>
+        <div class="flex items-center gap-2"><span class="text-sm font-semibold text-base-content">{{.Title}}</span><div class="h-px grow bg-base-300"></div></div>
         <ul class="flex flex-wrap gap-1.5">
           {{range .Tags}}
           <li><button type="button" data-tag-chip data-tag-name="{{.Name}}" data-state="{{.State}}"{{with .Tooltip}} title="{{.}}"{{end}}
-            class="cursor-pointer rounded-md border px-2 py-0.5 text-xs transition-colors {{if eq .State "include"}}border-solid border-success text-success bg-success/10{{else if eq .State "exclude"}}border-solid border-error text-error bg-error/10{{else}}border-dashed border-base-300 text-base-content/70{{end}}">{{.Name}}</button></li>
+            class="cursor-pointer rounded-md border px-2 py-0.5 text-xs transition-colors {{if eq .State "include"}}border-solid border-success text-success bg-success/10{{else if eq .State "exclude"}}border-solid border-error text-error bg-error/10{{else}}border-solid border-line text-base-content{{end}}">{{.Name}}</button></li>
           {{end}}
         </ul>
       </div>
@@ -1126,8 +1162,8 @@
 </details>
 {{else}}
 <div class="grid gap-2">
-  <input class="input input-sm w-full" name="include_tags" value="{{range $i, $t := .Include}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="Include: Gore, Horror, …">
-  <input class="input input-sm w-full" name="exclude_tags" value="{{range $i, $t := .Exclude}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="Exclude: …">
+  <input class="input input-sm w-full" name="include_tags" value="{{range $i, $t := .Include}}{{if $i}}, {{end}}{{$t}}{{end}}" aria-label="Include tags" placeholder="Include: Gore, Horror, …">
+  <input class="input input-sm w-full" name="exclude_tags" value="{{range $i, $t := .Exclude}}{{if $i}}, {{end}}{{$t}}{{end}}" aria-label="Exclude tags" placeholder="Exclude: …">
 </div>
 {{end}}
 </div>
@@ -1264,4 +1300,10 @@
     </div>
   </details>
 </div>
+{{end}}
+
+{{define "viewButtons"}}
+<label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Table view"><input type="radio" name="view" value="table" class="sr-only" aria-label="Table view" {{if eq . "table"}}checked{{end}}>{{template "iconViewTable"}}</label>
+<label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Cards view"><input type="radio" name="view" value="cards" class="sr-only" aria-label="Cards view" {{if eq . "cards"}}checked{{end}}>{{template "iconViewCards"}}</label>
+<label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Full view"><input type="radio" name="view" value="full" class="sr-only" aria-label="Full view" {{if eq . "full"}}checked{{end}}>{{template "iconViewFull"}}</label>
 {{end}}

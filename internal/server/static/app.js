@@ -216,7 +216,7 @@ var TAG_CHIP_BASE = "cursor-pointer rounded-md border px-2 py-0.5 text-xs transi
 var TAG_CHIP_CLASS = {
   include: "border-solid border-success text-success bg-success/10",
   exclude: "border-solid border-error text-error bg-error/10",
-  "": "border-dashed border-base-300 text-base-content/70",
+  "": "border-solid border-line text-base-content",
 };
 function tagFilterApply(root) {
   var hidden = root.querySelector("[data-tagfilter-hidden]");
@@ -271,6 +271,21 @@ document.addEventListener("click", function (e) {
     tagFilterApply(root);
   }
 });
+
+// Reparent instead of duplicating controls, preserving selections and form submission.
+var desktopFilters = window.matchMedia("(min-width: 640px)");
+function positionFilterControls() {
+  document.querySelectorAll(".filter-form").forEach(function (form) {
+    var controls = form.querySelector(".filter-display-controls");
+    var target = form.querySelector(desktopFilters.matches
+      ? "[data-filter-desktop-controls]"
+      : "[data-filter-mobile-controls]");
+    if (controls && target && controls.parentElement !== target) target.appendChild(controls);
+  });
+}
+desktopFilters.addEventListener("change", positionFilterControls);
+document.body.addEventListener("htmx:afterSwap", positionFilterControls);
+positionFilterControls();
 
 function filterChips(form) {
   var chips = [];
