@@ -20,6 +20,10 @@
   --color-error: #f38ba8;
 }
 
+:root {
+  color-scheme: dark;
+}
+
 /* ============ selectable themes (override the @theme tokens) ============ */
 [data-theme="latte"] {
   color-scheme: light;
@@ -81,17 +85,14 @@
     outline-offset: 1px;
   }
 
-  /* Thin, themed scrollbars: transparent track, subtle thumb. Firefox uses
-     `scrollbar-width: thin` (overlaid, no reserved gutter); WebKit gets a
-     narrow styled bar over a transparent track. */
   * {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--color-muted) 40%, transparent)
       transparent;
   }
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
     background: transparent;
   }
   ::-webkit-scrollbar-track,

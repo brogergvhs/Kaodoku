@@ -1,11 +1,11 @@
-// dropdowns: close any open <details.dropdown> on outside click or action
+// dropdowns: close any open <details.dropdown> on outside click or action,
+// except those marked data-keep-open (multi-action popovers like the tag filter).
 document.addEventListener("click", function (e) {
   var inDrop = e.target.closest("details.dropdown");
+  var keepOpen = e.target.closest("[data-keep-open]");
+  var action = e.target.closest(".menu a, .menu button, .dropdown-content button");
   document.querySelectorAll("details.dropdown[open]").forEach(function (d) {
-    if (
-      d !== inDrop ||
-      e.target.closest(".menu a, .menu button, .dropdown-content button")
-    ) {
+    if (d !== inDrop || (action && !keepOpen)) {
       d.removeAttribute("open");
     }
   });
@@ -178,18 +178,98 @@ document.addEventListener("click", function (e) {
 });
 document.body.addEventListener("htmx:afterSwap", kotatsuSync);
 
-// Tag picker: the filter input hides non-matching checkbox rows.
+// Tag picker: the filter input hides non-matching checkbox rows or chips.
 document.addEventListener("input", function (e) {
   var filter = e.target.closest("[data-tag-filter]");
   if (!filter) return;
-  var list = filter.parentElement.querySelector("[data-tag-list]");
-  if (!list) return;
+  var scope = filter.closest(".dropdown-content") || filter.parentElement;
+  if (!scope) return;
   var q = filter.value.trim().toLowerCase();
-  list.querySelectorAll("label").forEach(function (row) {
-    row.hidden = q !== "" && row.textContent.toLowerCase().indexOf(q) === -1;
+  scope.querySelectorAll("label, [data-tag-chip]").forEach(function (row) {
+    var el = row.matches("[data-tag-chip]") ? row.parentElement : row;
+    el.hidden = q !== "" && row.textContent.toLowerCase().indexOf(q) === -1;
   });
-  var divider = list.querySelector("[data-tag-divider]");
+  var divider = scope.querySelector("[data-tag-divider]");
   if (divider) divider.hidden = q !== "";
+  // tag filter: a matching category header reveals its whole group; then hide
+  // groups with no visible chips and show the empty state when nothing matches.
+  if (filter.closest("[data-tagfilter]")) {
+    var anyVisible = false;
+    scope.querySelectorAll("[data-tag-list]").forEach(function (group) {
+      var header = group.querySelector("span");
+      if (q !== "" && header && header.textContent.toLowerCase().indexOf(q) !== -1) {
+        group.querySelectorAll("li").forEach(function (li) {
+          li.hidden = false;
+        });
+      }
+      var hasVisible = !!group.querySelector("li:not([hidden])");
+      group.hidden = !hasVisible;
+      if (hasVisible) anyVisible = true;
+    });
+    var empty = scope.querySelector("[data-tagfilter-empty]");
+    if (empty) empty.hidden = anyVisible;
+  }
+});
+
+// Tag filter: tri-state chips cycle neutral -> include -> exclude -> neutral.
+var TAG_CHIP_BASE = "cursor-pointer rounded-md border px-2 py-0.5 text-xs transition-colors";
+var TAG_CHIP_CLASS = {
+  include: "border-solid border-success text-success bg-success/10",
+  exclude: "border-solid border-error text-error bg-error/10",
+  "": "border-dashed border-base-300 text-base-content/70",
+};
+function tagFilterApply(root) {
+  var hidden = root.querySelector("[data-tagfilter-hidden]");
+  hidden.innerHTML = "";
+  var inc = 0;
+  var exc = 0;
+  root.querySelectorAll("[data-tag-chip]").forEach(function (chip) {
+    var state = chip.dataset.state;
+    chip.className = TAG_CHIP_BASE + " " + TAG_CHIP_CLASS[state];
+    if (state !== "include" && state !== "exclude") return;
+    var input = document.createElement("input");
+    input.type = "hidden";
+    input.name = state === "include" ? "include_tags" : "exclude_tags";
+    input.value = chip.dataset.tagName;
+    hidden.appendChild(input);
+    if (state === "include") inc++;
+    else exc++;
+  });
+  var summary = root.querySelector("[data-tagfilter-summary]");
+  if (summary) {
+    var parts = [];
+    if (inc) parts.push(inc + " included");
+    if (exc) parts.push(exc + " excluded");
+    summary.textContent = parts.length ? parts.join(" · ") : summary.dataset.emptyLabel;
+  }
+  var trigger = root.querySelector("[data-tagfilter-trigger]");
+  if (trigger) {
+    trigger.value = String(Number(trigger.value || "0") + 1);
+    trigger.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}
+document.addEventListener("click", function (e) {
+  var chip = e.target.closest("[data-tag-chip]");
+  if (chip) {
+    e.preventDefault();
+    chip.dataset.state =
+      chip.dataset.state === "include"
+        ? "exclude"
+        : chip.dataset.state === "exclude"
+          ? ""
+          : "include";
+    tagFilterApply(chip.closest("[data-tagfilter]"));
+    return;
+  }
+  var reset = e.target.closest("[data-tagfilter-reset]");
+  if (reset) {
+    e.preventDefault();
+    var root = reset.closest("[data-tagfilter]");
+    root.querySelectorAll("[data-tag-chip]").forEach(function (c) {
+      c.dataset.state = "";
+    });
+    tagFilterApply(root);
+  }
 });
 
 // Tag picker: keep the "N selected" summary in sync with the checkboxes.

@@ -281,17 +281,19 @@ func (c *AniListClient) TagVocabulary(ctx context.Context) (genres []string, tag
 		Data struct {
 			GenreCollection    []string `json:"GenreCollection"`
 			MediaTagCollection []struct {
-				Name    string `json:"name"`
-				IsAdult bool   `json:"isAdult"`
+				Name        string `json:"name"`
+				Category    string `json:"category"`
+				Description string `json:"description"`
+				IsAdult     bool   `json:"isAdult"`
 			} `json:"MediaTagCollection"`
 		} `json:"data"`
 	}
-	if err := c.do(ctx, `query { GenreCollection MediaTagCollection { name isAdult } }`, nil, &resp); err != nil {
+	if err := c.do(ctx, `query { GenreCollection MediaTagCollection { name category description isAdult } }`, nil, &resp); err != nil {
 		return nil, nil, err
 	}
 	for _, t := range resp.Data.MediaTagCollection {
 		if t.Name != "" {
-			tags = append(tags, ContentTag{Name: t.Name, Kind: "tag", IsAdult: t.IsAdult})
+			tags = append(tags, ContentTag{Name: t.Name, Kind: "tag", Category: t.Category, Description: t.Description, IsAdult: t.IsAdult})
 		}
 	}
 	return resp.Data.GenreCollection, tags, nil

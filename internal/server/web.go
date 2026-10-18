@@ -99,7 +99,7 @@ type libraryControls struct {
 	Q           string
 	Monitor     string
 	Fav         string
-	Sources     []string 
+	Sources     []string
 	Progress    string
 	Content     string // chapters/volumes presence
 	Sort        string
@@ -1837,6 +1837,99 @@ func tagList(raw []string) []string {
 		out = append(out, splitCommaList(v)...)
 	}
 	return out
+}
+
+type tagChipView struct {
+	Name    string
+	Tooltip string
+	IsAdult bool
+	State   string // "include" | "exclude" | ""
+}
+
+type tagGroupView struct {
+	Title string
+	Tags  []tagChipView
+}
+
+// tagCategoryLabel turns an AniList category like "Theme-Fantasy" into a
+// readable group heading; empty categories fall under "Other".
+func tagCategoryLabel(category string) string {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return "Other"
+	}
+	return strings.Replace(category, "-", " – ", 1)
+}
+
+// tagFilterView groups the tag vocabulary for the tri-state include/exclude
+// chip filter: genres first, then one group per AniList tag category, marking
+// each tag's state and keeping unknown stored values as a Custom group.
+func tagFilterView(options []catalog.ContentTag, include, exclude []string, label string) map[string]any {
+	inc := map[string]bool{}
+	exc := map[string]bool{}
+	state := func(name string) string {
+		if inc[name] {
+			return "include"
+		}
+		if exc[name] {
+			return "exclude"
+		}
+		return ""
+	}
+	for _, v := range include {
+		if v = strings.TrimSpace(v); v != "" {
+			inc[v] = true
+		}
+	}
+	for _, v := range exclude {
+		if v = strings.TrimSpace(v); v != "" {
+			exc[v] = true
+		}
+	}
+	var genres []tagChipView
+	var groups []tagGroupView
+	byLabel := map[string]int{} // category label -> index in groups
+	known := map[string]bool{}
+	for _, o := range options {
+		known[o.Name] = true
+		chip := tagChipView{Name: o.Name, Tooltip: o.Description, IsAdult: o.IsAdult, State: state(o.Name)}
+		if o.Kind == "genre" {
+			genres = append(genres, chip)
+			continue
+		}
+		title := tagCategoryLabel(o.Category)
+		i, ok := byLabel[title]
+		if !ok {
+			i = len(groups)
+			byLabel[title] = i
+			groups = append(groups, tagGroupView{Title: title})
+		}
+		groups[i].Tags = append(groups[i].Tags, chip)
+	}
+	var extras []tagChipView
+	for _, v := range append(append([]string{}, include...), exclude...) {
+		if v = strings.TrimSpace(v); v != "" && !known[v] {
+			known[v] = true
+			extras = append(extras, tagChipView{Name: v, State: state(v)})
+		}
+	}
+	var ordered []tagGroupView
+	if len(genres) > 0 {
+		ordered = append(ordered, tagGroupView{Title: "Genres", Tags: genres})
+	}
+	ordered = append(ordered, groups...)
+	if len(extras) > 0 {
+		ordered = append(ordered, tagGroupView{Title: "Custom", Tags: extras})
+	}
+	return map[string]any{
+		"HasOptions":   len(options) > 0,
+		"Label":        label,
+		"Groups":       ordered,
+		"Include":      include,
+		"Exclude":      exclude,
+		"IncludeCount": len(inc),
+		"ExcludeCount": len(exc),
+	}
 }
 
 // matchesAnySource reports whether a title satisfies any selected source token
@@ -4230,6 +4323,7 @@ func (u *webUI) funcs() template.FuncMap {
 			}
 			return map[string]any{"HasOptions": len(options) > 0, "SelectedOptions": chosen, "Options": rest, "Selected": selected, "Extras": extras, "Values": values, "Name": name, "Label": label, "Hint": hint}
 		},
+		"tagFilter": tagFilterView,
 		"globalJobs": func() []map[string]string {
 			out := make([]map[string]string, 0, len(globalJobTypes))
 			for _, typ := range globalJobTypes {

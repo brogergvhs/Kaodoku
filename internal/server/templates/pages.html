@@ -111,8 +111,7 @@
         <option value="desc" {{if eq .Controls.Dir "desc"}}selected{{end}}>Descending</option>
         <option value="asc" {{if eq .Controls.Dir "asc"}}selected{{end}}>Ascending</option>
       </select></label>
-    <div class="col-span-2">{{template "tagPicker" tagPicker .TagOptions .Controls.IncludeTags "include_tags" "Include tags/genres (all of)" ""}}</div>
-    <div class="col-span-2">{{template "tagPicker" tagPicker .TagOptions .Controls.ExcludeTags "exclude_tags" "Exclude tags/genres" ""}}</div>
+    {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
   </div>
 </form>
 <div class="text-center"><span id="search-spin" class="htmx-indicator loading my-4"></span></div>
@@ -190,8 +189,7 @@
     <form class="grid gap-3" hx-post="/ui/screens{{if .Screen}}/{{.Screen.ID}}{{end}}" hx-swap="none">
       <label class="fieldset"><span class="fieldset-legend">Name</span>
         <input class="input w-full" name="name" value="{{if .Screen}}{{.Screen.Name}}{{end}}" required placeholder="e.g. Seinen shelf"></label>
-      {{template "tagPicker" tagPicker .TagOptions .IncludeTags "include_tags" "Include tags/genres (any of)" ""}}
-      {{template "tagPicker" tagPicker .TagOptions .ExcludeTags "exclude_tags" "Exclude tags/genres" ""}}
+      {{template "tagFilter" tagFilter .TagOptions .IncludeTags .ExcludeTags "Tags & genres"}}
       <div class="grid grid-cols-2 gap-3">
         <label class="fieldset"><span class="fieldset-legend">Adult</span>
           <select name="adult" class="select w-full">
@@ -274,11 +272,11 @@
     </select></label>
   {{$src := .Controls.SourceSet}}
   <div class="fieldset"><span class="fieldset-legend">Source</span>
-    <details class="dropdown w-full">
+    <details class="dropdown w-full" data-keep-open>
       <summary class="select select-sm w-full flex cursor-pointer items-center" data-tag-count data-empty-label="All">{{if $src}}{{len $src}} selected{{else}}All{{end}}</summary>
       <div class="dropdown-content z-30 mt-1 w-full rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
         <input class="input input-sm mb-2 w-full" placeholder="Filter sources…" data-tag-filter form="">
-        <div class="grid max-h-52 gap-y-1 overflow-y-auto" data-tag-list>
+        <div class="grid max-h-52 gap-y-1 overflow-y-auto -mr-2 pr-2" data-tag-list>
           <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="linked" {{if index $src "linked"}}checked{{end}}><span>Linked</span></label>
           <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="unlinked" {{if index $src "unlinked"}}checked{{end}}><span>Unlinked</span></label>
           <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="imported" {{if index $src "imported"}}checked{{end}}><span>Imported</span></label>
@@ -333,8 +331,7 @@
       <option value="cards" {{if eq .Controls.View "cards"}}selected{{end}}>Cards</option>
       <option value="full" {{if eq .Controls.View "full"}}selected{{end}}>Full</option>
     </select></label>
-  <div class="col-span-2">{{template "tagPicker" tagPicker .TagOptions .Controls.IncludeTags "include_tags" "Include tags/genres (any of)" ""}}</div>
-  <div class="col-span-2">{{template "tagPicker" tagPicker .TagOptions .Controls.ExcludeTags "exclude_tags" "Exclude tags/genres" ""}}</div>
+  {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
   </div>
 </form>
 {{if not .CollectionName}}<div hx-get="/ui/anilist/suggestions?view={{.Controls.View}}" hx-trigger="load" hx-swap="outerHTML"></div>{{end}}
@@ -1031,7 +1028,7 @@
     <form class="grid gap-3" hx-post="/ui/users/roles" hx-swap="none">
       <label class="fieldset"><span class="fieldset-legend">Role name</span><input class="input w-full" name="name" required></label>
       <div class="fieldset"><span class="fieldset-legend">Permissions</span>
-        <div class="grid max-h-80 gap-3 overflow-y-auto">
+        <div class="grid max-h-80 gap-3 overflow-y-auto -mr-5 pr-5">
           {{range .Groups}}
           <div>
             <div class="text-xs font-semibold uppercase tracking-wide text-base-content/50">{{.Title}}</div>
@@ -1065,7 +1062,7 @@
     <summary class="select select-sm w-full flex cursor-pointer items-center" data-tag-count>{{if .Selected}}{{len .Selected}} selected{{else}}None selected{{end}}</summary>
     <div class="dropdown-content z-30 mt-1 w-full rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
       <input class="input input-sm mb-2 w-full" placeholder="Filter tags…" data-tag-filter form="">
-      <div class="grid max-h-52 grid-cols-2 gap-x-2 gap-y-1 overflow-y-auto" data-tag-list>
+      <div class="grid max-h-52 grid-cols-2 gap-x-2 gap-y-1 overflow-y-auto -mr-2 pr-2" data-tag-list>
         {{range .SelectedOptions}}
         <label class="flex min-w-0 cursor-pointer items-center gap-2 text-sm">
           <input type="checkbox" class="checkbox checkbox-xs shrink-0" name="{{$.Name}}" value="{{.Name}}" checked>
@@ -1095,6 +1092,48 @@
   <input class="input w-full" name="{{.Name}}" value="{{range $i, $t := .Values}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="Gore, Horror, …">
   <span class="label">Comma-separated (AniList tag list unavailable).{{if .Hint}} {{.Hint}}{{end}}</span>
   {{end}}
+</div>
+{{end}}
+
+{{define "tagFilterSummary"}}{{if or .IncludeCount .ExcludeCount}}{{if .IncludeCount}}{{.IncludeCount}} included{{end}}{{if and .IncludeCount .ExcludeCount}} · {{end}}{{if .ExcludeCount}}{{.ExcludeCount}} excluded{{end}}{{else}}Any tags{{end}}{{end}}
+
+{{define "tagFilter"}}
+<div class="fieldset col-span-2"><span class="fieldset-legend">{{.Label}}</span>
+{{if .HasOptions}}
+<details class="dropdown w-full" data-tagfilter data-keep-open>
+  <summary class="select select-sm w-full flex cursor-pointer items-center" data-tagfilter-summary data-empty-label="Any tags">{{template "tagFilterSummary" .}}</summary>
+  <div class="dropdown-content z-30 mt-1 w-full md:w-[34rem] overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-lg">
+    <div class="flex items-center gap-2 border-b border-base-300 px-3 py-2">
+      <input class="input input-sm flex-1" placeholder="Filter tags…" data-tag-filter form="">
+      <button type="button" class="btn btn-sm btn-ghost" data-tagfilter-reset>Reset</button>
+    </div>
+    <div class="max-h-80 space-y-3 overflow-y-auto px-3 py-3">
+      <div data-tagfilter-hidden hidden>
+        {{range .Include}}<input type="hidden" name="include_tags" value="{{.}}">{{end}}
+        {{range .Exclude}}<input type="hidden" name="exclude_tags" value="{{.}}">{{end}}
+      </div>
+      <input type="hidden" name="_tagsync" value="0" data-tagfilter-trigger>
+      <p class="py-4 text-center text-sm text-base-content/50" data-tagfilter-empty hidden>Nothing found.</p>
+      {{range .Groups}}
+      <div class="space-y-1.5" data-tag-list>
+        <div class="flex items-center gap-2"><span class="text-sm font-semibold text-base-content/70">{{.Title}}</span><div class="h-px grow bg-base-300"></div></div>
+        <ul class="flex flex-wrap gap-1.5">
+          {{range .Tags}}
+          <li><button type="button" data-tag-chip data-tag-name="{{.Name}}" data-state="{{.State}}"{{with .Tooltip}} title="{{.}}"{{end}}
+            class="cursor-pointer rounded-md border px-2 py-0.5 text-xs transition-colors {{if eq .State "include"}}border-solid border-success text-success bg-success/10{{else if eq .State "exclude"}}border-solid border-error text-error bg-error/10{{else}}border-dashed border-base-300 text-base-content/70{{end}}">{{.Name}}</button></li>
+          {{end}}
+        </ul>
+      </div>
+      {{end}}
+    </div>
+  </div>
+</details>
+{{else}}
+<div class="grid gap-2">
+  <input class="input input-sm w-full" name="include_tags" value="{{range $i, $t := .Include}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="Include: Gore, Horror, …">
+  <input class="input input-sm w-full" name="exclude_tags" value="{{range $i, $t := .Exclude}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="Exclude: …">
+</div>
+{{end}}
 </div>
 {{end}}
 
@@ -1147,7 +1186,7 @@
       <input type="hidden" name="id" value="{{.Role.ID}}">
       <label class="fieldset"><span class="fieldset-legend">Role name</span><input class="input w-full" name="name" value="{{.Role.Name}}" required></label>
       <div class="fieldset"><span class="fieldset-legend">Permissions</span>
-        <div class="grid max-h-80 gap-3 overflow-y-auto">
+        <div class="grid max-h-80 gap-3 overflow-y-auto -mr-5 pr-5">
           {{$role := .Role}}{{range .Groups}}
           <div>
             <div class="text-xs font-semibold uppercase tracking-wide text-base-content/50">{{.Title}}</div>

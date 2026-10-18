@@ -154,9 +154,11 @@ func (r *Repository) CollectionEdges(ctx context.Context) ([][2]string, error) {
 
 // ContentTag is one AniList genre or tag name, for content-guard pickers.
 type ContentTag struct {
-	Name    string
-	Kind    string // "genre" or "tag"
-	IsAdult bool
+	Name        string
+	Kind        string // "genre" or "tag"
+	Category    string // AniList tag category, e.g. "Theme-Fantasy"; empty for genres
+	Description string
+	IsAdult     bool
 }
 
 // ReplaceContentTags swaps the stored tag/genre vocabulary.
@@ -177,7 +179,7 @@ func (r *Repository) ReplaceContentTags(ctx context.Context, genres []string, ta
 	}
 	for _, t := range tags {
 		if name := strings.TrimSpace(t.Name); name != "" {
-			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_tags (name, kind, is_adult) VALUES (?, 'tag', ?)`, name, t.IsAdult); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_tags (name, kind, category, description, is_adult) VALUES (?, 'tag', ?, ?, ?)`, name, t.Category, t.Description, t.IsAdult); err != nil {
 				return err
 			}
 		}
@@ -187,7 +189,7 @@ func (r *Repository) ReplaceContentTags(ctx context.Context, genres []string, ta
 
 // ContentTags lists the stored vocabulary, genres first, alphabetical within.
 func (r *Repository) ContentTags(ctx context.Context) ([]ContentTag, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT name, kind, is_adult FROM content_tags ORDER BY kind = 'genre' DESC, name COLLATE NOCASE`)
+	rows, err := r.db.QueryContext(ctx, `SELECT name, kind, category, description, is_adult FROM content_tags ORDER BY kind = 'genre' DESC, category COLLATE NOCASE, name COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +197,7 @@ func (r *Repository) ContentTags(ctx context.Context) ([]ContentTag, error) {
 	var out []ContentTag
 	for rows.Next() {
 		var t ContentTag
-		if err := rows.Scan(&t.Name, &t.Kind, &t.IsAdult); err != nil {
+		if err := rows.Scan(&t.Name, &t.Kind, &t.Category, &t.Description, &t.IsAdult); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
