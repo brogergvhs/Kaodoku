@@ -71,7 +71,7 @@ func WithReaders(ctx context.Context, w *sql.DB, path string) (*DB, error) {
 		_ = r.Close()
 		return nil, fmt.Errorf("open sqlite readers: %w", err)
 	}
-	n := max(4, runtime.NumCPU())
+	n := min(8, max(4, runtime.NumCPU()))
 	r.SetMaxOpenConns(n)
 	r.SetMaxIdleConns(n)
 	return &DB{DB: w, read: r}, nil

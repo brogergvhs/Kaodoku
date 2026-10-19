@@ -23,17 +23,26 @@ import (
 )
 
 func TestSettingValidation(t *testing.T) {
-	if err := service.ValidateSetting(service.SettingServeDownloadEvery, "15m"); err != nil {
-		t.Fatalf("valid setting rejected: %v", err)
-	}
-	for key, value := range map[string]string{
-		service.SettingServeRunEvery:                   "0s",
-		service.SettingBrowserSolverTimeoutSeconds:     "0",
-		service.SettingBrowserDownloaderTimeoutSeconds: "0",
-		service.SettingJobsWorkers:                     "0",
+	for _, kv := range [][2]string{
+		{service.SettingServeDownloadEvery, "15m"},
+		{service.SettingJobsKeepHistory, "720h"},
+		{service.SettingJobsKeepHistory, "0"},
+		{service.SettingJobsKeepHistory, ""},
 	} {
-		if service.ValidateSetting(key, value) == nil {
-			t.Errorf("%s=%q accepted", key, value)
+		if err := service.ValidateSetting(kv[0], kv[1]); err != nil {
+			t.Errorf("%s=%q rejected: %v", kv[0], kv[1], err)
+		}
+	}
+	for _, kv := range [][2]string{
+		{service.SettingServeRunEvery, "0s"},
+		{service.SettingBrowserSolverTimeoutSeconds, "0"},
+		{service.SettingBrowserDownloaderTimeoutSeconds, "0"},
+		{service.SettingJobsWorkers, "0"},
+		{service.SettingJobsKeepHistory, "-1h"},
+		{service.SettingJobsKeepHistory, "abc"},
+	} {
+		if service.ValidateSetting(kv[0], kv[1]) == nil {
+			t.Errorf("%s=%q accepted", kv[0], kv[1])
 		}
 	}
 }

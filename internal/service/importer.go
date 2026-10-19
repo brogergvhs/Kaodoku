@@ -35,7 +35,7 @@ func (s *WantedService) ExploreDownloads(ctx context.Context, root string) ([]Im
 	if err != nil {
 		return nil, fmt.Errorf("read download dir: %w", err)
 	}
-	titles, err := s.library.ListTitles(ctx)
+	titles, err := s.library.TitleBasics(ctx, library.TitleQuery{})
 	if err != nil {
 		return nil, err
 	}

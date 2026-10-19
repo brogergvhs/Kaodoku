@@ -105,6 +105,7 @@ const (
 	SettingJobsMaxAttempts      = "jobs.max_attempts"
 	SettingJobsTimeout          = "jobs.timeout"
 	SettingJobsWorkers          = "jobs.workers"
+	SettingJobsKeepHistory      = "jobs.keep_history"
 	SettingDownloadsMaxAttempts = "downloads.max_attempts"
 
 	SettingServicesHealthInterval = "services.health_interval"
@@ -161,6 +162,8 @@ func SettingDefault(key string) string {
 		return "3"
 	case SettingJobsTimeout:
 		return "10m"
+	case SettingJobsKeepHistory:
+		return "720h"
 	case SettingJobsWorkers:
 		return "4"
 	case SettingServicesHealthInterval:
@@ -232,6 +235,7 @@ func SettingKeys() []string {
 		SettingJobsMaxAttempts,
 		SettingJobsTimeout,
 		SettingJobsWorkers,
+		SettingJobsKeepHistory,
 		SettingDownloadsMaxAttempts,
 		SettingServicesHealthInterval,
 		SettingServeAniListSyncEvery,
@@ -269,7 +273,7 @@ func ValidateSetting(key, value string) error {
 			}
 		}
 		return fmt.Errorf("unknown theme %q", value)
-	case SettingServeAniListSyncEvery, SettingServeCatalogEvery, SettingServeBackupEvery:
+	case SettingServeAniListSyncEvery, SettingServeCatalogEvery, SettingServeBackupEvery, SettingJobsKeepHistory:
 		if value == "" {
 			return nil
 		}
@@ -603,11 +607,6 @@ func (s *JobService) ApplySettings(ctx context.Context, cfg *config.Config) {
 	}
 }
 
-// ListTitles returns tracked titles.
-func (s *JobService) ListTitles(ctx context.Context) ([]library.Title, error) {
-	return s.lib.ListTitles(ctx)
-}
-
 func (s *JobService) PageTitles(ctx context.Context, q library.TitleQuery) ([]library.Title, error) {
 	return s.lib.repo.PageTitles(ctx, q)
 }
@@ -618,6 +617,10 @@ func (s *JobService) CountTitles(ctx context.Context, q library.TitleQuery) (int
 
 func (s *JobService) TitleIDs(ctx context.Context, q library.TitleQuery) ([]int64, error) {
 	return s.lib.repo.TitleIDs(ctx, q)
+}
+
+func (s *JobService) TitleBasics(ctx context.Context, q library.TitleQuery) ([]library.Title, error) {
+	return s.lib.repo.TitleBasics(ctx, q)
 }
 
 func (s *JobService) TitleNames(ctx context.Context, q library.TitleQuery) ([]string, error) {
@@ -886,7 +889,11 @@ func (s *JobService) runAniListSync(ctx context.Context, userID int64, progress 
 	if err != nil {
 		return err
 	}
-	titles, err := s.lib.ListTitles(ctx)
+	trackedIDs := make([]int64, 0, len(tracked))
+	for _, id := range tracked {
+		trackedIDs = append(trackedIDs, id)
+	}
+	titles, err := s.lib.repo.TitlesByIDs(ctx, trackedIDs)
 	if err != nil {
 		return err
 	}
@@ -1647,6 +1654,10 @@ func (s *JobService) MangaByIDs(ctx context.Context, ids []int64) (map[int64]cat
 	return s.want.catalog.MangaByIDs(ctx, ids)
 }
 
+func (s *JobService) MangaAuthors(ctx context.Context, ids []int64) (map[int64]catalog.Manga, error) {
+	return s.want.catalog.MangaAuthors(ctx, ids)
+}
+
 // CollectionEdges returns the stored relation graph as (from, to) provider-id pairs.
 func (s *JobService) CollectionEdges(ctx context.Context) ([][2]string, error) {
 	return s.want.catalog.CollectionEdges(ctx)
@@ -2351,16 +2362,15 @@ func (s *JobService) enqueueRefreshForSource(ctx context.Context, sourceID strin
 	if sourceID == "" {
 		return nil
 	}
-	titles, err := s.lib.ListTitles(ctx)
+	titles, err := s.lib.repo.TitleBasics(ctx, library.TitleQuery{Monitored: "on", Sources: []string{"linked"}})
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, title := range titles {
-		if title.SourceID != sourceID || !title.Monitored {
-			continue
+		if title.SourceID == sourceID {
+			errs = append(errs, s.enqueueRefreshForTitle(ctx, title))
 		}
-		errs = append(errs, s.enqueueRefreshForTitle(ctx, title))
 	}
 	return errors.Join(errs...)
 }
@@ -2487,6 +2497,29 @@ func (s *JobService) coveringJob(ctx context.Context, typ string, payload JobPay
 // GetJob returns one job by id.
 func (s *JobService) GetJob(ctx context.Context, id int64) (jobs.Job, error) {
 	return s.jobs.Get(ctx, id)
+}
+
+// Maintain prunes job history older than keep_history (0 or empty keeps it) and refreshes SQLite planner statistics.
+func (s *JobService) Maintain(ctx context.Context) error {
+	var pruned int64
+	var err error
+	if keep, perr := time.ParseDuration(s.Setting(ctx, SettingJobsKeepHistory, SettingDefault(SettingJobsKeepHistory))); perr == nil && keep > 0 {
+		pruned, err = s.jobs.Prune(ctx, time.Now().Add(-keep))
+	}
+	if pruned > 0 {
+		fmt.Printf("Pruned %d finished jobs\n", pruned)
+	}
+	for _, stmt := range []string{`PRAGMA analysis_limit = 1000`, `PRAGMA optimize = 0x10002`} {
+		if _, e := s.db.ExecContext(ctx, stmt); e != nil {
+			err = errors.Join(err, fmt.Errorf("optimize database: %w", e))
+		}
+	}
+	if pruned > 10000 {
+		if _, e := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); e != nil {
+			err = errors.Join(err, fmt.Errorf("checkpoint database: %w", e))
+		}
+	}
+	return err
 }
 
 func (s *JobService) RunningJobs() int {
@@ -2771,14 +2804,24 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 }
 
 func (s *JobService) expandTitleJob(ctx context.Context, typ string, parentID int64) error {
-	titles, err := s.lib.ListTitles(ctx)
+	q := library.TitleQuery{Monitored: "on", Sources: []string{"linked"}}
+	switch typ {
+	case jobs.TypeRefreshTitle:
+	case jobs.TypeDownloadMissing:
+		q.Progress = "needs-download"
+	case jobs.TypeScanDownloads:
+		q = library.TitleQuery{Downloaded: true}
+	default:
+		return nil
+	}
+	titles, err := s.lib.repo.TitleBasics(ctx, q)
 	if err != nil {
 		return err
 	}
 	now := time.Now()
 	var errs []error
 	for _, title := range titles {
-		if !globalTitleJobApplies(typ, title, now) {
+		if typ == jobs.TypeRefreshTitle && !titleRefreshDue(title, now) {
 			continue
 		}
 		_, err := s.enqueueChild(ctx, typ, JobPayload{TitleID: title.ID}, time.Now(), parentID)
@@ -2820,13 +2863,13 @@ func (s *JobService) detectCrops(ctx context.Context, titleID int64, logSvc ui.L
 // expandDetectCrops fans the global job out per title with downloads,
 // skipping titles that are most likely read in strip mode.
 func (s *JobService) expandDetectCrops(ctx context.Context, parentID int64) error {
-	titles, err := s.lib.ListTitles(ctx)
+	titles, err := s.lib.repo.TitleBasics(ctx, library.TitleQuery{Downloaded: true})
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, title := range titles {
-		if title.CompletedCount == 0 || s.stripLikely(ctx, title) {
+		if s.stripLikely(ctx, title) {
 			continue
 		}
 		_, err := s.enqueueChild(ctx, jobs.TypeDetectCrops, JobPayload{TitleID: title.ID}, time.Now(), parentID)
@@ -2890,20 +2933,6 @@ func titleRefreshDue(title library.Title, now time.Time) bool {
 		return true
 	}
 	return now.Sub(*title.LastRefreshedAt) >= d
-}
-
-func globalTitleJobApplies(typ string, title library.Title, now time.Time) bool {
-	switch typ {
-	case jobs.TypeRefreshTitle:
-		// pending:/local: titles have nothing to refresh from
-		return title.Monitored && strings.HasPrefix(title.SourceURL, "http") && titleRefreshDue(title, now)
-	case jobs.TypeDownloadMissing:
-		return title.Monitored && strings.HasPrefix(title.SourceURL, "http") && (title.MissingCount > 0 || title.DiscoveredCount == 0)
-	case jobs.TypeScanDownloads:
-		return title.CompletedCount > 0
-	default:
-		return false
-	}
 }
 
 func validateJob(typ string, payload JobPayload) error {

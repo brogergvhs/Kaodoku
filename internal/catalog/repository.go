@@ -232,6 +232,29 @@ func (r *Repository) MangaByIDs(ctx context.Context, ids []int64) (map[int64]Man
 	return out, rows.Err()
 }
 
+// MangaAuthors loads only ID, ProviderID and Authors for the given manga.
+func (r *Repository) MangaAuthors(ctx context.Context, ids []int64) (map[int64]Manga, error) {
+	raw, _ := json.Marshal(ids)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, provider_id, authors_json FROM catalog_manga WHERE id IN (SELECT value FROM json_each(?))`, string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("load manga authors: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64]Manga, len(ids))
+	for rows.Next() {
+		var m Manga
+		var authors string
+		if err := rows.Scan(&m.ID, &m.ProviderID, &authors); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(authors), &m.Authors); err != nil {
+			return nil, fmt.Errorf("decode authors: %w", err)
+		}
+		out[m.ID] = m
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) GetManga(ctx context.Context, id int64) (Manga, error) {
 	row := r.db.QueryRowContext(ctx, mangaSelect()+` WHERE id = ?`, id)
 	m, err := scanManga(row)

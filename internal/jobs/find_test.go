@@ -99,3 +99,56 @@ func TestFindTopLevelAndChildren(t *testing.T) {
 		t.Fatalf("Children = %+v", k)
 	}
 }
+
+func TestPrune(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	old := database.FormatTime(time.Now().Add(-48 * time.Hour))
+	add := func(status, updated string, parent int64) int64 {
+		t.Helper()
+		res, err := db.ExecContext(ctx, `INSERT INTO jobs(type, status, payload_json, parent_id, updated_at) VALUES (?, ?, '{}', NULLIF(?, 0), ?)`, TypeScanDownloads, status, parent, updated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	now := database.FormatTime(time.Now())
+	oldDone := add("done", old, 0)
+	oldCancelled := add("cancelled", old, 0)
+	oldDead := add("dead", old, 0)
+	keep := []int64{
+		add("done", now, 0),
+		add("failed", old, 0),
+		add("queued", old, 0),
+	}
+	busyParent := add("done", old, 0)
+	keep = append(keep, busyParent, add("queued", now, busyParent))
+	doneParent := add("done", old, 0)
+	doneChild := add("done", old, doneParent)
+
+	n, err := repo.Prune(ctx, time.Now().Add(-24*time.Hour))
+	if err != nil || n != 5 {
+		t.Fatalf("Prune = %d, %v", n, err)
+	}
+	for _, id := range []int64{oldDone, oldCancelled, oldDead, doneParent, doneChild} {
+		if _, err := repo.Get(ctx, id); err == nil {
+			t.Errorf("job %d survived prune", id)
+		}
+	}
+	for _, id := range keep {
+		if _, err := repo.Get(ctx, id); err != nil {
+			t.Errorf("job %d pruned: %v", id, err)
+		}
+	}
+}

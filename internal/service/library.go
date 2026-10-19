@@ -421,7 +421,7 @@ func (s *LibraryService) RefreshMonitored(
 	cfg *config.Config,
 	logSvc ui.Log,
 ) ([]RefreshResult, error) {
-	titles, err := s.repo.ListTitles(ctx)
+	titles, err := s.repo.PageTitles(ctx, library.TitleQuery{Monitored: "on"})
 	if err != nil {
 		return nil, err
 	}
@@ -429,9 +429,6 @@ func (s *LibraryService) RefreshMonitored(
 	results := make([]RefreshResult, 0, len(titles))
 	var errs []error
 	for _, title := range titles {
-		if !title.Monitored {
-			continue
-		}
 		result, err := s.RefreshTitle(ctx, cfg, logSvc, title)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("refresh %s: %w", title.DisplayTitle, err))
@@ -636,7 +633,7 @@ func (s *LibraryService) DownloadMonitoredMissing(
 	cfg *config.Config,
 	logSvc ui.Log,
 ) ([]ChapterDownloadResult, error) {
-	titles, err := s.repo.ListTitles(ctx)
+	titles, err := s.repo.PageTitles(ctx, library.TitleQuery{Monitored: "on"})
 	if err != nil {
 		return nil, err
 	}
@@ -644,9 +641,6 @@ func (s *LibraryService) DownloadMonitoredMissing(
 	var results []ChapterDownloadResult
 	var errs []error
 	for _, title := range titles {
-		if !title.Monitored {
-			continue
-		}
 		titleResults, err := s.DownloadMissing(ctx, cfg, logSvc, title.ID, nil)
 		results = append(results, titleResults...)
 		if err != nil {

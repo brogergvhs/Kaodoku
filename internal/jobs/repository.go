@@ -234,6 +234,32 @@ func (r *Repository) Cancel(ctx context.Context, id int64) (bool, error) {
 	return n > 0, err
 }
 
+// Prune deletes finished jobs last updated before the cutoff, keeping parents of live children.
+func (r *Repository) Prune(ctx context.Context, before time.Time) (int64, error) {
+	var total int64
+	for {
+		res, err := r.db.ExecContext(ctx, `
+			DELETE FROM jobs WHERE id IN (
+				SELECT p.id FROM jobs p
+				WHERE p.status IN ('done', 'cancelled', 'dead') AND p.updated_at < ?
+					AND NOT EXISTS (SELECT 1 FROM jobs c WHERE c.parent_id = p.id AND c.status IN ('queued', 'running', 'failed'))
+				LIMIT 5000
+			)
+		`, database.FormatTime(before))
+		if err != nil {
+			return total, fmt.Errorf("prune jobs: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if n == 0 {
+			return total, nil
+		}
+	}
+}
+
 // CancelChildren cancels all not-yet-running children of a global job and
 // returns the IDs of children that are currently running (the caller aborts
 // those via their contexts).

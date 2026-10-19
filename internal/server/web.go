@@ -247,6 +247,8 @@ func settingMeta(key string) (label, desc string) {
 		return "Job stall limit", "How long a background job may go without making progress before it is aborted (e.g. 10m). Jobs that keep downloading run as long as they need."
 	case service.SettingJobsWorkers:
 		return "Job worker count", "How many background jobs can run at the same time. Jobs for the same manga still run one at a time."
+	case service.SettingJobsKeepHistory:
+		return "Keep finished jobs", "How long completed, cancelled and dead jobs stay in the jobs list before they are deleted (e.g. 720h). 0 or empty keeps them forever. Queued, running and retrying jobs are never deleted."
 	case service.SettingDownloadsMaxAttempts:
 		return "Download retry limit", "How many times a failed chapter download is retried before giving up."
 	case service.SettingServicesHealthInterval:
@@ -406,6 +408,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/sessions", u.sessionsFrag)
 	mux.HandleFunc("GET /ui/health", u.health)
 	mux.HandleFunc("GET /ui/import/candidates", u.importCandidates)
+	mux.HandleFunc("GET /ui/import/titles", u.importTitleOptions)
 	mux.HandleFunc("GET /ui/library/{id}/related", u.relatedManga)
 	mux.HandleFunc("GET /ui/search/trending", u.trendingManga)
 	mux.HandleFunc("GET /anilist/connect", u.anilistConnect)
@@ -671,18 +674,6 @@ func visibleTagOptions(ctx context.Context, options []catalog.ContentTag) []cata
 	return out
 }
 
-// filterRestrictedTitles hides titles the acting user must not see (adult
-// flag or blocked tags/genres).
-func filterRestrictedTitles(ctx context.Context, titles []library.Title) []library.Title {
-	out := make([]library.Title, 0, len(titles))
-	for _, t := range titles {
-		if contentAllowed(ctx, t.IsAdult, t.ContentTags) {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
 // theme returns the active UI theme and, for the custom theme, a CSS block of
 // its color variables (values are hex-validated on save, so safe to embed).
 func (u *webUI) theme(ctx context.Context) (string, template.CSS) {
@@ -878,7 +869,7 @@ func (u *webUI) collectionsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	u.page(w, r, "collections", "Collections", collectionsView{
 		Mode:         mode,
-		Cards:        collectionCards(pageCols),
+		Cards:        collectionCards(withMemberStats(ctx, u.svc, pageCols)),
 		HasRelations: hasRelations,
 		Page:         page,
 		PerPage:      collectionsPerPage,
@@ -894,11 +885,14 @@ func (u *webUI) buildAllCollections(ctx context.Context) (author, smart, custom 
 }
 
 func buildCollections(ctx context.Context, svc *service.JobService) (author, smart, custom []collection, hasRelations bool, err error) {
-	titles, err := svc.ListTitles(ctx)
+	q, ok := visibleTitles(ctx)
+	if !ok {
+		return nil, nil, nil, false, nil
+	}
+	titles, err := svc.TitleBasics(ctx, q)
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
-	titles = filterRestrictedTitles(ctx, titles)
 	titleByID := make(map[int64]library.Title, len(titles))
 	ids := make([]int64, 0, len(titles))
 	for _, t := range titles {
@@ -907,7 +901,7 @@ func buildCollections(ctx context.Context, svc *service.JobService) (author, sma
 			ids = append(ids, *t.CatalogMangaID)
 		}
 	}
-	mangas, _ := svc.MangaByIDs(ctx, ids)
+	mangas, _ := svc.MangaAuthors(ctx, ids)
 	edges, _ := svc.CollectionEdges(ctx)
 	pins, _ := svc.SmartPins(ctx)
 	customs, _ := svc.CustomCollections(ctx)
@@ -1182,6 +1176,37 @@ func (u *webUI) visibleMembers(ctx context.Context, ids []int64) []library.Title
 	mem, _ := u.svc.PageTitles(ctx, q)
 	sortByTitle(mem)
 	return mem
+}
+
+// withMemberStats swaps the basic member titles for fully aggregated ones.
+func withMemberStats(ctx context.Context, svc *service.JobService, cols []collection) []collection {
+	var ids []int64
+	for _, c := range cols {
+		for _, m := range c.Members {
+			ids = append(ids, m.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return cols
+	}
+	full, _ := svc.PageTitles(ctx, library.TitleQuery{IDs: ids})
+	byID := make(map[int64]library.Title, len(full))
+	for _, t := range full {
+		byID[t.ID] = t
+	}
+	out := make([]collection, len(cols))
+	for i, c := range cols {
+		members := make([]library.Title, len(c.Members))
+		for j, m := range c.Members {
+			if t, ok := byID[m.ID]; ok {
+				m = t
+			}
+			members[j] = m
+		}
+		c.Members = members
+		out[i] = c
+	}
+	return out
 }
 
 func collectionCards(cols []collection) []collectionCard {
@@ -3314,7 +3339,7 @@ func (u *webUI) importPage(w http.ResponseWriter, r *http.Request) {
 
 type importCandidatesView struct {
 	Candidates []service.ImportCandidate
-	Titles     []library.Title // attach targets for volume folders
+	HasTitles  bool
 }
 
 func (u *webUI) importCandidates(w http.ResponseWriter, r *http.Request) {
@@ -3323,9 +3348,20 @@ func (u *webUI) importCandidates(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	titles, _ := u.svc.ListTitles(r.Context())
-	titles = filterRestrictedTitles(r.Context(), titles)
-	u.frag(w, "importCandidates", importCandidatesView{Candidates: cands, Titles: titles})
+	view := importCandidatesView{Candidates: cands}
+	if q, ok := visibleTitles(r.Context()); ok {
+		n, _ := u.svc.CountTitles(r.Context(), q)
+		view.HasTitles = n > 0
+	}
+	u.frag(w, "importCandidates", view)
+}
+
+func (u *webUI) importTitleOptions(w http.ResponseWriter, r *http.Request) {
+	var titles []library.Title
+	if q, ok := visibleTitles(r.Context()); ok {
+		titles, _ = u.svc.TitleBasics(r.Context(), q)
+	}
+	u.frag(w, "importTitleOptions", titles)
 }
 
 func (u *webUI) importSearch(w http.ResponseWriter, r *http.Request) {
@@ -3946,7 +3982,8 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 				service.SettingServeCatalogEvery)},
 			settingGroup{Title: "Jobs & downloads", Fields: fields(
 				service.SettingJobsMaxAttempts, service.SettingJobsTimeout,
-				service.SettingJobsWorkers, service.SettingDownloadsMaxAttempts,
+				service.SettingJobsWorkers, service.SettingJobsKeepHistory,
+				service.SettingDownloadsMaxAttempts,
 				service.SettingRateLimitIntervalMS, service.SettingRateLimitBurst,
 				service.SettingRateLimitDisabled)},
 			settingGroup{Title: "Services", Fields: fields(

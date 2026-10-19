@@ -187,7 +187,7 @@ func (a *apiV1) collectionsList(w http.ResponseWriter, r *http.Request) {
 	pins, _ := a.svc.SmartPins(r.Context())
 	group := func(cols []collection) []collectionDTO {
 		out := make([]collectionDTO, 0, len(cols))
-		for _, c := range cols {
+		for _, c := range withMemberStats(r.Context(), a.svc, cols) {
 			out = append(out, toCollectionDTO(c, pins))
 		}
 		return out
@@ -225,7 +225,7 @@ func (a *apiV1) collectionGet(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range custom {
 		if c.CustomID == id {
-			writeJSON(w, http.StatusOK, toCollectionDTO(c, nil))
+			writeJSON(w, http.StatusOK, toCollectionDTO(withMemberStats(r.Context(), a.svc, []collection{c})[0], nil))
 			return
 		}
 	}

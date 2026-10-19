@@ -460,6 +460,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_jobs_active_title ON jobs(json_extract(payload_json, '$.title_id')) WHERE status IN ('queued', 'running', 'failed')`,
 		`CREATE INDEX IF NOT EXISTS idx_jobs_active_payload ON jobs(payload_json, type) WHERE status IN ('queued', 'running', 'failed')`,
 		`CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id) WHERE parent_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_jobs_finished ON jobs(updated_at) WHERE status IN ('done', 'cancelled', 'dead')`,
 		`CREATE INDEX IF NOT EXISTS idx_titles_name ON titles(display_title COLLATE NOCASE)`,
 		`CREATE INDEX IF NOT EXISTS idx_titles_source ON titles(source_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_title_sources_source ON title_sources(source_id)`,

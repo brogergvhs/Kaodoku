@@ -3,12 +3,17 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"github.com/brogergvhs/kaodoku/internal/jobs"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/brogergvhs/kaodoku/internal/chapters"
+	"github.com/brogergvhs/kaodoku/internal/database"
+	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
+	"github.com/brogergvhs/kaodoku/internal/providers"
 )
 
 func TestTitleRefreshDue(t *testing.T) {
@@ -34,22 +39,72 @@ func TestTitleRefreshDue(t *testing.T) {
 	}
 }
 
-func TestGlobalJobsSkipUnlinkedTitles(t *testing.T) {
-	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		url  string
-		want bool
-	}{
-		{"https://mangapill.com/manga/1/x", true},
-		{"local:Infinite%20leveling%20murim", false},
-		{"pending:42", false},
-	} {
-		title := library.Title{SourceURL: tc.url, Monitored: true, MissingCount: 3, DiscoveredCount: 10}
-		if got := globalTitleJobApplies("refresh_title", title, now); got != tc.want {
-			t.Errorf("refresh applies(%q) = %v, want %v", tc.url, got, tc.want)
+func TestExpandTitleJobSelectsTitlesInSQL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, closeDB, err := OpenJobs(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	repo := svc.lib.repo
+	add := func(url string, monitored bool, chapterCount, downloaded int) int64 {
+		t.Helper()
+		title, err := repo.AddTitle(ctx, library.AddTitleParams{SourceURL: url, DisplayTitle: url, Monitored: monitored})
+		if err != nil {
+			t.Fatal(err)
 		}
-		if got := globalTitleJobApplies("download_missing", title, now); got != tc.want {
-			t.Errorf("download applies(%q) = %v, want %v", tc.url, got, tc.want)
+		var list []chapters.Chapter
+		for i := 1; i <= chapterCount; i++ {
+			list = append(list, chapters.Chapter{Chapter: providers.Chapter{URL: fmt.Sprintf("%s/%d", url, i), Label: fmt.Sprint(i), NumMain: i}})
+		}
+		if _, err := repo.UpsertChapters(ctx, title.ID, list); err != nil {
+			t.Fatal(err)
+		}
+		chs, _ := repo.ListChapters(ctx, title.ID)
+		for i := 0; i < downloaded; i++ {
+			if err := repo.MarkDownloadCompleted(ctx, chs[i].ID, "/x.cbz", 10, 2); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return title.ID
+	}
+	missing := add("https://x.test/missing", true, 2, 1)
+	complete := add("https://x.test/complete", true, 2, 2)
+	add("local:folder", true, 0, 0)
+	add("pending:42", true, 0, 0)
+	unmonitored := add("https://x.test/unmonitored", false, 2, 1)
+	notDue := add("https://x.test/not-due", true, 0, 0)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE titles SET refresh_interval = '6h', last_refreshed_at = ? WHERE id = ?`, database.FormatTime(time.Now().Add(-time.Hour)), notDue); err != nil {
+		t.Fatal(err)
+	}
+
+	for parent, tc := range []struct {
+		typ  string
+		want []int64
+	}{
+		{jobs.TypeRefreshTitle, []int64{missing, complete}},
+		{jobs.TypeDownloadMissing, []int64{missing, notDue}},
+		{jobs.TypeScanDownloads, []int64{missing, complete, unmonitored}},
+	} {
+		if err := svc.expandTitleJob(ctx, tc.typ, int64(parent+1000)); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := svc.db.QueryContext(ctx, `SELECT json_extract(payload_json, '$.title_id') FROM jobs WHERE parent_id = ? ORDER BY 1`, parent+1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := []int64{}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, id)
+		}
+		rows.Close()
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s children = %v, want %v", tc.typ, got, tc.want)
 		}
 	}
 }

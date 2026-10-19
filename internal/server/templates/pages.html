@@ -687,17 +687,15 @@
     <button class="btn btn-sm" hx-post="/ui/import/{{pathEscape $c.Folder}}/search" hx-target="#picker-{{$i}}" hx-swap="innerHTML">Match on AniList</button>
   </div>
   <div id="picker-{{$i}}"></div>
-  {{if $.Titles}}
-  <details class="group mt-1">
+  {{if $.HasTitles}}
+  <details class="group mt-1" hx-get="/ui/import/titles" hx-trigger="toggle once" hx-target="find select" hx-swap="innerHTML">
     <summary class="flex cursor-pointer list-none items-center justify-between text-sm font-medium select-none">
       Add as volumes to an existing manga
       <span class="text-base-content/50 transition-transform group-open:rotate-90">{{template "iconChevron"}}</span>
     </summary>
     <form hx-post="/ui/import/attach-volumes" hx-swap="none" class="mt-2 flex flex-wrap items-center gap-2">
       <input type="hidden" name="folder" value="{{$c.Folder}}">
-      <select name="title_id" class="select select-sm min-w-48">
-        {{range $.Titles}}<option value="{{.ID}}">{{.DisplayTitle}}</option>{{end}}
-      </select>
+      <select name="title_id" class="select select-sm min-w-48"></select>
       <button class="btn btn-sm btn-outline">Attach volumes</button>
     </form>
   </details>
@@ -705,6 +703,8 @@
 </div></div>
 {{else}}<p class="text-base-content/60">No untracked folders with chapter files found in the download directory.</p>{{end}}
 {{end}}
+
+{{define "importTitleOptions"}}{{range .}}<option value="{{.ID}}">{{.DisplayTitle}}</option>{{end}}{{end}}
 
 {{define "importPicker"}}
 <form hx-post="/ui/import" hx-swap="none" class="mt-3 grid gap-3">

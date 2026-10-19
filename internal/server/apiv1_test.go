@@ -305,6 +305,14 @@ func seedTitle(t *testing.T, dbPath, url, name string, ownerID int64) int64 {
 func TestAPIV1Actions(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
 	titleID := seedTitle(t, dbPath, "https://example.test/m", "Example", 1)
+	seedDB, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := library.NewRepository(seedDB).UpsertChapters(context.Background(), titleID, []chaptersPkg.Chapter{{Chapter: providers.Chapter{URL: "https://example.test/m/1", Label: "1", NumMain: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	seedDB.Close()
 	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -345,8 +353,8 @@ func TestAPIV1Actions(t *testing.T) {
 	}
 	rec = do(t, api, http.MethodGet, "/api/v1/collections/"+cid, "", nil)
 	_ = json.NewDecoder(rec.Body).Decode(&col)
-	if len(col.TitleIDs) != 1 || col.TitleIDs[0] != titleID {
-		t.Fatalf("members = %+v", col.TitleIDs)
+	if len(col.TitleIDs) != 1 || col.TitleIDs[0] != titleID || col.Chapters != 1 {
+		t.Fatalf("collection = %+v", col)
 	}
 
 	var scr screenDTO

@@ -127,6 +127,22 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
 
+	go func() {
+		timer := time.NewTimer(time.Minute)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+			if err := svc.Maintain(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "maintenance: %v\n", err)
+			}
+			timer.Reset(24 * time.Hour)
+		}
+	}()
+
 	nextRefresh := time.Now()
 	nextScan := time.Now()
 	nextDownload := time.Now()

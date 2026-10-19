@@ -95,6 +95,8 @@ func TestPageTitlesFiltersSortsAndPagesInSQL(t *testing.T) {
 		"missing":               {TitleQuery{Progress: "missing"}, []int64{master}},
 		"complete":              {TitleQuery{Progress: "complete"}, []int64{alpha}},
 		"empty":                 {TitleQuery{Progress: "empty"}, []int64{beta, gamma}},
+		"needs download":        {TitleQuery{Progress: "needs-download"}, []int64{beta, gamma, master}},
+		"downloaded":            {TitleQuery{Downloaded: true}, []int64{alpha, master}},
 		"has volumes":           {TitleQuery{Content: "volumes"}, []int64{beta}},
 		"unmonitored":           {TitleQuery{Monitored: "off"}, []int64{master}},
 		"favourites":            {TitleQuery{FavouriteOnly: true}, []int64{master}},
@@ -115,6 +117,12 @@ func TestPageTitlesFiltersSortsAndPagesInSQL(t *testing.T) {
 		}
 	}
 
+	exec(`UPDATE titles SET refresh_interval = '6h', last_refreshed_at = '2026-01-02 03:04:05' WHERE id = ?`, gamma)
+	basics, err := repo.TitleBasics(ctx, TitleQuery{Sources: []string{"linked"}, Monitored: "on"})
+	if err != nil || len(basics) != 2 || basics[0].ID != alpha || basics[0].DisplayTitle != "Alpha" || basics[0].SourceID != "mangadex" || !basics[0].Monitored || basics[0].CatalogMangaID == nil ||
+		basics[1].RefreshInterval != "6h" || basics[1].LastRefreshedAt == nil || basics[1].LastRefreshedAt.Hour() != 3 {
+		t.Fatalf("TitleBasics = %+v, %v", basics, err)
+	}
 	if n, err := repo.CountTitles(ctx, TitleQuery{NoAdult: true, Limit: 1}); err != nil || n != 3 {
 		t.Fatalf("CountTitles = %d, %v; want 3", n, err)
 	}

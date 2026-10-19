@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
+	"github.com/brogergvhs/kaodoku/internal/database"
 )
 
 type TitleQuery struct {
@@ -25,6 +26,7 @@ type TitleQuery struct {
 	Sources       []string
 	Progress      string
 	Content       string
+	Downloaded    bool
 	Sort, Dir     string
 	Offset, Limit int
 }
@@ -110,6 +112,11 @@ func (r *Repository) titleWhere(q TitleQuery, uid int64) (string, []any) {
 		add(hasChapters + ` AND NOT ` + hasMissing)
 	case "empty":
 		add(`NOT ` + hasChapters)
+	case "needs-download":
+		add(`(` + hasMissing + ` OR NOT ` + hasChapters + `)`)
+	}
+	if q.Downloaded {
+		add(`EXISTS (SELECT 1 FROM chapters c JOIN downloads d ON d.chapter_id = c.id WHERE c.title_id = t.id AND d.status = 'completed')`)
 	}
 	switch q.Content {
 	case "chapters":
@@ -197,6 +204,37 @@ func (r *Repository) pageIDs(ctx context.Context, q TitleQuery) ([]int64, error)
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// TitleBasics returns matching titles by name with only their own columns set, no per-chapter aggregates.
+func (r *Repository) TitleBasics(ctx context.Context, q TitleQuery) ([]Title, error) {
+	where, args := r.titleWhere(q, auth.UserID(ctx))
+	rows, err := r.db.QueryContext(ctx, `SELECT t.id, t.catalog_manga_id, COALESCE(t.source_id, ''), t.source_url, t.display_title, t.output_path, t.monitored, t.refresh_interval, t.last_refreshed_at`+titleFrom+` WHERE `+where+` ORDER BY t.display_title COLLATE NOCASE, t.id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list title basics: %w", err)
+	}
+	defer rows.Close()
+	var out []Title
+	for rows.Next() {
+		var t Title
+		var catalogID sql.NullInt64
+		var lastRefreshed sql.NullString
+		if err := rows.Scan(&t.ID, &catalogID, &t.SourceID, &t.SourceURL, &t.DisplayTitle, &t.OutputPath, &t.Monitored, &t.RefreshInterval, &lastRefreshed); err != nil {
+			return nil, err
+		}
+		if catalogID.Valid {
+			t.CatalogMangaID = &catalogID.Int64
+		}
+		if lastRefreshed.Valid {
+			at, err := database.ParseTime(lastRefreshed.String)
+			if err != nil {
+				return nil, err
+			}
+			t.LastRefreshedAt = &at
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) TitlesByIDs(ctx context.Context, ids []int64) ([]Title, error) {
