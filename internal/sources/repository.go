@@ -13,11 +13,11 @@ import (
 
 // Repository persists source profiles.
 type Repository struct {
-	db *sql.DB
+	db database.Handle
 }
 
 // NewRepository creates a source repository.
-func NewRepository(db *sql.DB) *Repository {
+func NewRepository(db database.Handle) *Repository {
 	return &Repository{db: db}
 }
 

@@ -13,11 +13,11 @@ import (
 
 // Repository persists canonical manga and source matches.
 type Repository struct {
-	db *sql.DB
+	db database.Handle
 }
 
 // NewRepository creates a catalog repository.
-func NewRepository(db *sql.DB) *Repository {
+func NewRepository(db database.Handle) *Repository {
 	return &Repository{db: db}
 }
 

@@ -199,6 +199,9 @@ func TestScanDownloadsMarksMissingFilesFailed(t *testing.T) {
 		t.Fatalf("MarkDownloadCompleted() error = %v", err)
 	}
 
+	if _, err := db.ExecContext(ctx, `UPDATE downloads SET completed_at = '2000-01-01 00:00:00' WHERE chapter_id = ?`, chapter.ID); err != nil {
+		t.Fatal(err)
+	}
 	svc := &LibraryService{repo: repo}
 	result, err := svc.ScanDownloads(ctx, nil, title.ID)
 	if err != nil {
@@ -206,6 +209,20 @@ func TestScanDownloadsMarksMissingFilesFailed(t *testing.T) {
 	}
 	if result.Checked != 1 || result.Missing != 0 {
 		t.Fatalf("ScanDownloads() existing file = %+v, want checked 1 missing 0", result)
+	}
+	var completedAt string
+	if err := db.QueryRowContext(ctx, `SELECT completed_at FROM downloads WHERE chapter_id = ?`, chapter.ID).Scan(&completedAt); err != nil || completedAt != "2000-01-01 00:00:00" {
+		t.Fatalf("unchanged file was rewritten: completed_at = %q, %v", completedAt, err)
+	}
+	if err := os.WriteFile(out, []byte("cbz-grown"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ScanDownloads(ctx, nil, title.ID); err != nil {
+		t.Fatal(err)
+	}
+	var size int64
+	if err := db.QueryRowContext(ctx, `SELECT bytes FROM downloads WHERE chapter_id = ?`, chapter.ID).Scan(&size); err != nil || size != 9 {
+		t.Fatalf("changed file not rewritten: bytes = %d, %v", size, err)
 	}
 
 	if err := os.Remove(out); err != nil {

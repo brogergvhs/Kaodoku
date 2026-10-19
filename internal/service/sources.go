@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -15,6 +14,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/browserfetch"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/config"
+	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
@@ -37,7 +37,7 @@ type SourceVerifyResult struct {
 	Error           string               `json:"error,omitempty"`
 }
 
-func newSourceService(db *sql.DB) *sourceService {
+func newSourceService(db database.Handle) *sourceService {
 	return &sourceService{repo: sources.NewRepository(db)}
 }
 

@@ -29,7 +29,7 @@ func boolInt(b bool) int {
 
 // Service manages users, roles and sessions.
 type Service struct {
-	db      *sql.DB
+	db      database.Handle
 	touched sync.Map // session token hash -> last_seen_at write
 	loginMu sync.Mutex
 	logins  map[string]*loginState
@@ -45,7 +45,9 @@ const (
 	loginLockWindow = 15 * time.Minute
 )
 
-func NewService(db *sql.DB) *Service { return &Service{db: db, logins: map[string]*loginState{}} }
+func NewService(db database.Handle) *Service {
+	return &Service{db: db, logins: map[string]*loginState{}}
+}
 
 // loginAllowed rejects a username that has hit the failed-attempt cap within
 // the lock window.

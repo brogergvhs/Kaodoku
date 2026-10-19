@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +17,6 @@ import (
 	"time"
 	"unicode"
 
-	cloudflarebp "github.com/DaRealFreak/cloudflare-bp-go"
 	"github.com/PuerkitoBio/goquery"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
@@ -87,7 +85,7 @@ func OpenWanted(ctx context.Context, dbPath string) (*WantedService, func(), err
 	return newWantedService(db), func() { _ = db.Close() }, nil
 }
 
-func newWantedService(db *sql.DB) *WantedService {
+func newWantedService(db database.Handle) *WantedService {
 	return &WantedService{
 		catalog: catalog.NewRepository(db),
 		sources: sources.NewRepository(db),
@@ -492,7 +490,7 @@ func fetchSearchPage(ctx context.Context, cfg config.Config, target string) (bod
 		UserAgent:            util.PickUserAgent(cfg.UserAgent),
 		Cookie:               cfg.Cookie,
 		CookieFile:           cfg.CookieFile,
-		Transport:            cloudflarebp.AddCloudFlareByPass(http.DefaultTransport),
+		Transport:            cloudflareTransport,
 		RateLimit:            hostRateLimit(&cfg),
 		BlockPrivateNetworks: true,
 	})

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -67,7 +66,7 @@ func OpenLibrary(ctx context.Context, dbPath string) (*LibraryService, func(), e
 	return svc, func() { _ = db.Close() }, nil
 }
 
-func newLibraryService(db *sql.DB) *LibraryService {
+func newLibraryService(db database.Handle) *LibraryService {
 	return &LibraryService{repo: library.NewRepository(db), sources: sources.NewRepository(db)}
 }
 
@@ -571,6 +570,10 @@ func (s *LibraryService) ScanDownloads(ctx context.Context, cfg *config.Config, 
 	}
 
 	for _, v := range found {
+		d := v.download
+		if d.Status == "completed" && d.OutputFile == v.file && d.Bytes == v.size && d.Pages > 0 {
+			continue
+		}
 		if err := s.repo.MarkDownloadCompleted(ctx, v.download.ChapterID, v.file, v.size, cbzPageCount(v.file)); err != nil {
 			return result, err
 		}

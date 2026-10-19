@@ -21,7 +21,7 @@ import (
 
 // Repository persists tracked titles and chapters.
 type Repository struct {
-	db *sql.DB
+	db database.Handle
 	// MaxDownloadAttempts caps failed retries before a chapter stops
 	// counting as missing.
 	MaxDownloadAttempts int
@@ -33,10 +33,13 @@ type CompletedDownload struct {
 	TitleID    int64
 	Label      string
 	OutputFile string
+	Status     string
+	Bytes      int64
+	Pages      int
 }
 
 // NewRepository creates a library repository.
-func NewRepository(db *sql.DB) *Repository {
+func NewRepository(db database.Handle) *Repository {
 	return &Repository{db: db, MaxDownloadAttempts: DefaultDownloadAttempts}
 }
 
@@ -1268,7 +1271,7 @@ func (r *Repository) ListScannableDownloads(ctx context.Context, titleID int64) 
 
 func (r *Repository) listDownloadsByStatus(ctx context.Context, titleID int64, where string) ([]CompletedDownload, error) {
 	q := `
-		SELECT c.id, c.title_id, c.label, d.output_file
+		SELECT c.id, c.title_id, c.label, d.output_file, d.status, d.bytes, d.pages
 		FROM downloads d
 		JOIN chapters c ON c.id = d.chapter_id
 		WHERE ` + where + `
@@ -1289,7 +1292,7 @@ func (r *Repository) listDownloadsByStatus(ctx context.Context, titleID int64, w
 	var out []CompletedDownload
 	for rows.Next() {
 		var d CompletedDownload
-		if err := rows.Scan(&d.ChapterID, &d.TitleID, &d.Label, &d.OutputFile); err != nil {
+		if err := rows.Scan(&d.ChapterID, &d.TitleID, &d.Label, &d.OutputFile, &d.Status, &d.Bytes, &d.Pages); err != nil {
 			return nil, fmt.Errorf("scan completed download: %w", err)
 		}
 		out = append(out, d)

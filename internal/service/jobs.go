@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
@@ -31,7 +32,7 @@ import (
 
 // JobService enqueues and runs jobs.
 type JobService struct {
-	db         *sql.DB
+	db         database.Handle
 	dbPath     string
 	secrets    *tokenCipher
 	jobTimeout time.Duration
@@ -42,6 +43,8 @@ type JobService struct {
 	src        *sourceService
 	want       *WantedService
 	running    sync.Map // job ID -> context.CancelCauseFunc for in-flight jobs
+	runMu      sync.Mutex
+	rerun      atomic.Bool
 	titleLocks sync.Map // title ID -> *sync.Mutex
 	auth       *auth.Service
 	recMu      sync.Mutex
@@ -340,12 +343,17 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 	if dbPath == "" {
 		dbPath = database.DefaultPath()
 	}
-	db, err := database.Open(ctx, dbPath)
+	w, err := database.Open(ctx, dbPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := database.Migrate(ctx, db); err != nil {
-		_ = db.Close()
+	if err := database.Migrate(ctx, w); err != nil {
+		_ = w.Close()
+		return nil, nil, err
+	}
+	db, err := database.WithReaders(ctx, w, dbPath)
+	if err != nil {
+		_ = w.Close()
 		return nil, nil, err
 	}
 
@@ -396,7 +404,7 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 	return svc, func() { _ = db.Close() }, nil
 }
 
-func newJobService(db *sql.DB) *JobService {
+func newJobService(db database.Handle) *JobService {
 	svc := &JobService{
 		db:         db,
 		dbPath:     database.DefaultPath(),
@@ -2488,6 +2496,12 @@ func (s *JobService) GetJob(ctx context.Context, id int64) (jobs.Job, error) {
 	return s.jobs.Get(ctx, id)
 }
 
+func (s *JobService) RunningJobs() int {
+	n := 0
+	s.running.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
+
 // CancelJob aborts a job: a running job's context is cancelled; a queued or
 // awaiting-retry job is marked cancelled so it never runs.
 func (s *JobService) CancelJob(ctx context.Context, id int64) error {
@@ -2533,8 +2547,29 @@ func (s *JobService) List(ctx context.Context) ([]jobs.Job, error) {
 	return s.jobs.List(ctx)
 }
 
-// RunDue claims and runs due jobs until the queue is empty.
+// RunDue drains due jobs; a call that overlaps a running drain hands its work to it and returns.
 func (s *JobService) RunDue(ctx context.Context, cfg *config.Config, logSvc ui.Log) (RunSummary, error) {
+	var total RunSummary
+	s.rerun.Store(true)
+	for s.rerun.Load() && ctx.Err() == nil {
+		if !s.runMu.TryLock() {
+			return total, nil
+		}
+		for s.rerun.Swap(false) {
+			summary, err := s.drainQueue(ctx, cfg, logSvc)
+			total.Done += summary.Done
+			total.Failed += summary.Failed
+			if err != nil {
+				s.runMu.Unlock()
+				return total, err
+			}
+		}
+		s.runMu.Unlock()
+	}
+	return total, nil
+}
+
+func (s *JobService) drainQueue(ctx context.Context, cfg *config.Config, logSvc ui.Log) (RunSummary, error) {
 	var summary RunSummary
 	var summaryMu sync.Mutex
 	var firstErr error

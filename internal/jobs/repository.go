@@ -18,13 +18,13 @@ const (
 
 // Repository persists and claims background jobs.
 type Repository struct {
-	db *sql.DB
+	db database.Handle
 	// MaxAttempts caps retries before a job becomes dead.
 	MaxAttempts int
 }
 
 // NewRepository creates a jobs repository.
-func NewRepository(db *sql.DB) *Repository {
+func NewRepository(db database.Handle) *Repository {
 	return &Repository{db: db, MaxAttempts: DefaultMaxAttempts}
 }
 
