@@ -464,10 +464,11 @@ func (u *webUI) page(w http.ResponseWriter, r *http.Request, content, title stri
 }
 
 type mangaResults struct {
-	Heading string
-	View    string // "cards" (default) or "table"
-	Items   []searchResultView
-	CanAdd  bool
+	Heading       string
+	View          string // "cards" (default) or "table"
+	Items         []searchResultView
+	CanAdd        bool
+	ShowRelations bool
 }
 
 // resultView picks the search results layout from the request.
@@ -550,7 +551,9 @@ func (u *webUI) relatedManga(w http.ResponseWriter, r *http.Request) {
 		u.frag(w, "mangaResults", mangaResults{})
 		return
 	}
-	u.frag(w, "mangaResults", u.mangaResultsView(r.Context(), "", "cards", items))
+	view := u.mangaResultsView(r.Context(), "", "cards", items)
+	view.ShowRelations = true
+	u.frag(w, "mangaResults", view)
 }
 
 func (u *webUI) trendingManga(w http.ResponseWriter, r *http.Request) {
@@ -2967,6 +2970,19 @@ func (u *webUI) settingsPage(w http.ResponseWriter, r *http.Request) {
 type searchResultView struct {
 	catalog.Manga
 	TitleID int64 // set when the manga is already in the library
+}
+
+func (v searchResultView) RelationLabel() string {
+	labels := map[string]string{
+		"SEQUEL": "Sequel", "PREQUEL": "Prequel", "PARENT": "Parent story",
+		"SIDE_STORY": "Side story", "SPIN_OFF": "Spin-off", "ALTERNATIVE": "Alternative version",
+		"ADAPTATION": "Adaptation", "SOURCE": "Source material", "SUMMARY": "Summary",
+		"COMPILATION": "Compilation", "CONTAINS": "Contains", "CHARACTER": "Shared character",
+	}
+	if label := labels[v.RelationType]; label != "" {
+		return label
+	}
+	return "Direct relation"
 }
 
 type searchView struct {

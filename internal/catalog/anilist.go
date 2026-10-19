@@ -145,7 +145,8 @@ func (c *AniListClient) Related(ctx context.Context, id int, limit int) ([]Manga
 			Media struct {
 				Relations struct {
 					Edges []struct {
-						Node anilistMedia `json:"node"`
+						RelationType string       `json:"relationType"`
+						Node         anilistMedia `json:"node"`
 					} `json:"edges"`
 				} `json:"relations"`
 				Recommendations struct {
@@ -159,7 +160,7 @@ func (c *AniListClient) Related(ctx context.Context, id int, limit int) ([]Manga
 	if err := c.do(ctx, `
 		query ($id: Int) {
 			Media(id: $id, type: MANGA) {
-				relations { edges { node {
+				relations { edges { relationType node {
 					id type title { romaji english native } description(asHtml: false)
 					coverImage { large } status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name }
 				} } }
@@ -172,8 +173,10 @@ func (c *AniListClient) Related(ctx context.Context, id int, limit int) ([]Manga
 		return nil, err
 	}
 	var media []anilistMedia
+	relations := make(map[string]string)
 	for _, e := range resp.Data.Media.Relations.Edges {
 		media = append(media, e.Node)
+		relations[strconv.Itoa(e.Node.ID)] = e.RelationType
 	}
 	for _, n := range resp.Data.Media.Recommendations.Nodes {
 		media = append(media, n.MediaRecommendation)
@@ -189,6 +192,7 @@ func (c *AniListClient) Related(ctx context.Context, id int, limit int) ([]Manga
 			continue
 		}
 		seen[m.ProviderID] = true
+		m.RelationType = relations[m.ProviderID]
 		out = append(out, m)
 		if len(out) >= limit {
 			break

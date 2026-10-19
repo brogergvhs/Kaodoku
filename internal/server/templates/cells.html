@@ -640,6 +640,10 @@
     <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
       {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>
       {{else}}<a href="/manga/{{.ProviderID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
+      {{if $.ShowRelations}}<div class="pointer-events-none absolute inset-x-2 bottom-2 flex">
+        {{if .RelationType}}<span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info" title="Direct connection to this manga">{{.RelationLabel}}</span>
+        {{else}}<span class="badge badge-sm max-w-full whitespace-normal bg-base-100">Recommendation</span>{{end}}
+      </div>{{end}}
     </div>
     <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{mangaTitle .Manga}}</div>
     <div class="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-base-content/50">
