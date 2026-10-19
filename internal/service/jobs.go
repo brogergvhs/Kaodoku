@@ -603,31 +603,33 @@ func (s *JobService) ApplySettings(ctx context.Context, cfg *config.Config) {
 	}
 }
 
-// BrowserSolverHealth checks the configured browser solver endpoint.
-func (s *JobService) BrowserSolverHealth(ctx context.Context) (bool, error) {
-	enabled, _ := strconv.ParseBool(s.Setting(ctx, SettingBrowserSolverEnabled, SettingDefault(SettingBrowserSolverEnabled)))
-	if !enabled {
-		return false, nil
-	}
-	if provider := s.Setting(ctx, SettingBrowserSolverProvider, SettingDefault(SettingBrowserSolverProvider)); provider != browserfetch.ProviderFlareSolverr {
-		return false, fmt.Errorf("unsupported browser solver provider %q", provider)
-	}
-
-	timeoutSeconds, _ := strconv.Atoi(s.Setting(ctx, SettingBrowserSolverTimeoutSeconds, SettingDefault(SettingBrowserSolverTimeoutSeconds)))
-	client := browserfetch.NewFlareSolverr(
-		s.Setting(ctx, SettingBrowserSolverEndpoint, SettingDefault(SettingBrowserSolverEndpoint)),
-		time.Duration(timeoutSeconds)*time.Second,
-		nil,
-	)
-	if err := client.Health(ctx); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // ListTitles returns tracked titles.
 func (s *JobService) ListTitles(ctx context.Context) ([]library.Title, error) {
 	return s.lib.ListTitles(ctx)
+}
+
+func (s *JobService) PageTitles(ctx context.Context, q library.TitleQuery) ([]library.Title, error) {
+	return s.lib.repo.PageTitles(ctx, q)
+}
+
+func (s *JobService) CountTitles(ctx context.Context, q library.TitleQuery) (int, error) {
+	return s.lib.repo.CountTitles(ctx, q)
+}
+
+func (s *JobService) TitleIDs(ctx context.Context, q library.TitleQuery) ([]int64, error) {
+	return s.lib.repo.TitleIDs(ctx, q)
+}
+
+func (s *JobService) TitleNames(ctx context.Context, q library.TitleQuery) ([]string, error) {
+	return s.lib.repo.TitleNames(ctx, q)
+}
+
+func (s *JobService) ReadTitleIDs(ctx context.Context) ([]int64, error) {
+	return s.lib.repo.ReadTitleIDs(ctx)
+}
+
+func (s *JobService) FailingTitles(ctx context.Context, sourceID string) ([]library.Title, error) {
+	return s.lib.repo.FailingTitles(ctx, sourceID)
 }
 
 // GetTitle returns one tracked title.
@@ -735,10 +737,6 @@ func (s *JobService) RemoveChapterDownloadsRange(ctx context.Context, titleID in
 // ListTitleSources returns all sources linked to a title.
 func (s *JobService) ListTitleSources(ctx context.Context, id int64) ([]library.LinkedSource, error) {
 	return s.lib.ListTitleSources(ctx, id)
-}
-
-func (s *JobService) SourceTitleIDs(ctx context.Context, sourceID string) (map[int64]bool, error) {
-	return s.lib.TitleIDsForSource(ctx, sourceID)
 }
 
 // UnlinkTitleSource removes a linked source from a title.
@@ -1888,12 +1886,16 @@ func (s *JobService) DeleteScreen(ctx context.Context, id int64) error {
 	return s.lib.DeleteScreen(ctx, id)
 }
 
-func (s *JobService) LastReadAt(ctx context.Context) (map[int64]time.Time, error) {
-	return s.lib.LastReadAt(ctx)
+func (s *JobService) LastReadAt(ctx context.Context, k int) (map[int64]time.Time, bool, error) {
+	return s.lib.repo.LastReadAt(ctx, k)
 }
 
-func (s *JobService) LatestArrivals(ctx context.Context) (map[int64]library.Arrival, error) {
-	return s.lib.LatestArrivals(ctx)
+func (s *JobService) LatestArrivals(ctx context.Context, k int) (map[int64]library.Arrival, bool, error) {
+	return s.lib.repo.LatestArrivals(ctx, k)
+}
+
+func (s *JobService) TopGenre(ctx context.Context, q library.TitleQuery) (string, error) {
+	return s.lib.repo.TopGenre(ctx, q)
 }
 
 func (s *JobService) MarkVolumePageRead(ctx context.Context, volumeID int64, page, totalPages int) (library.Volume, error) {
@@ -2018,19 +2020,6 @@ func (s *JobService) TrackMatch(ctx context.Context, matchID int64, output strin
 	return title, nil
 }
 
-// TrackMatchDefault adds a selected match using catalog status for monitoring.
-func (s *JobService) TrackMatchDefault(ctx context.Context, matchID int64, output string, refreshInterval string) (library.Title, error) {
-	match, err := s.want.catalog.GetMatch(ctx, matchID)
-	if err != nil {
-		return library.Title{}, err
-	}
-	manga, err := s.want.catalog.GetManga(ctx, match.CatalogMangaID)
-	if err != nil {
-		return library.Title{}, err
-	}
-	return s.TrackMatch(ctx, matchID, output, defaultMonitored(manga), refreshInterval)
-}
-
 // SyncSources stores bundled profiles and, when set, a remote registry.
 func (s *JobService) SyncSources(ctx context.Context, registryURL string) error {
 	if err := s.src.SyncBuiltIn(ctx); err != nil {
@@ -2049,6 +2038,10 @@ func (s *JobService) ListSources(ctx context.Context) ([]sources.Source, error) 
 
 func (s *JobService) SourceTitleCounts(ctx context.Context) (map[string]int, error) {
 	return s.src.repo.TitleCounts(ctx)
+}
+
+func (s *JobService) SourcesInUse(ctx context.Context) (map[string]int, error) {
+	return s.src.repo.SourcesInUse(ctx)
 }
 
 // SourceFetchFailureCounts counts titles per source whose last chapter
@@ -2524,7 +2517,7 @@ func (s *JobService) CancelJob(ctx context.Context, id int64) error {
 }
 
 func (s *JobService) cancelTitleJobs(ctx context.Context, titleID int64) error {
-	js, err := s.jobs.List(ctx)
+	js, err := s.jobs.Find(ctx, jobs.Filter{TitleIDs: []int64{titleID}})
 	if err != nil {
 		return err
 	}
@@ -2545,6 +2538,18 @@ func (s *JobService) cancelTitleJobs(ctx context.Context, titleID int64) error {
 // List returns recent jobs.
 func (s *JobService) List(ctx context.Context) ([]jobs.Job, error) {
 	return s.jobs.List(ctx)
+}
+
+func (s *JobService) FindJobs(ctx context.Context, f jobs.Filter) ([]jobs.Job, error) {
+	return s.jobs.Find(ctx, f)
+}
+
+func (s *JobService) TopLevelJobs(ctx context.Context, sort, dir string, offset, limit int) ([]jobs.Job, int, error) {
+	return s.jobs.TopLevel(ctx, sort, dir, offset, limit)
+}
+
+func (s *JobService) JobChildren(ctx context.Context, parentIDs []int64, newest int) (map[int64]*jobs.ChildSummary, error) {
+	return s.jobs.Children(ctx, parentIDs, newest)
 }
 
 // RunDue drains due jobs; a call that overlaps a running drain hands its work to it and returns.

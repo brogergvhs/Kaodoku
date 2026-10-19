@@ -716,20 +716,26 @@ func (a *apiV1) track(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiV1) jobsList(w http.ResponseWriter, r *http.Request) {
-	list, err := a.svc.List(r.Context())
+	q := r.URL.Query()
+	f := jobs.Filter{Type: q.Get("type"), Limit: clampLimit(q.Get("limit"))}
+	if status := q.Get("status"); status != "" {
+		f.Statuses = []string{status}
+	}
+	f.BeforeID, _ = strconv.ParseInt(q.Get("cursor"), 10, 64)
+	list, err := a.svc.FindJobs(r.Context(), f)
 	if err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
-	q := r.URL.Query()
-	status, typ := q.Get("status"), q.Get("type")
 	items := make([]jobDTO, 0, len(list))
 	for _, j := range list {
-		if (status == "" || j.Status == status) && (typ == "" || j.Type == typ) {
-			items = append(items, toJobDTO(j))
-		}
+		items = append(items, toJobDTO(j))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	next := ""
+	if len(list) == f.Limit {
+		next = strconv.FormatInt(list[len(list)-1].ID, 10)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
 
 func (a *apiV1) jobGet(w http.ResponseWriter, r *http.Request) {

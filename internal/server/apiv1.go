@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
-	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/service"
 	"github.com/brogergvhs/kaodoku/internal/util"
@@ -450,64 +449,50 @@ func serveTitleCover(w http.ResponseWriter, r *http.Request, svc *service.JobSer
 
 func (a *apiV1) libraryList(w http.ResponseWriter, r *http.Request) {
 	now := serverTime()
-	titles, err := a.svc.ListTitles(r.Context())
-	if err != nil {
-		v1err(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	titles = filterRestrictedTitles(r.Context(), titles)
+	ctx := r.Context()
 	q := r.URL.Query()
 	since, ok := parseSince(r)
 	if !ok {
 		v1err(w, http.StatusBadRequest, "bad_request", "since must be RFC3339")
 		return
 	}
+	base, visible := visibleTitles(ctx)
+	tq := libraryControlsFromQuery(q).apply(base)
+	tq.Sort, tq.Dir = v1SortKey(q.Get("sort")), q.Get("dir")
 	var ids []int64
 	if since != "" {
-		ids = make([]int64, 0, len(titles))
-		kept := titles[:0]
-		for _, t := range titles {
-			ids = append(ids, t.ID)
-			if database.FormatTime(t.UpdatedAt) >= since {
-				kept = append(kept, t)
+		ids = []int64{}
+		if visible {
+			all, err := a.svc.TitleIDs(ctx, base)
+			if err != nil {
+				v1err(w, http.StatusInternalServerError, "internal", err.Error())
+				return
 			}
+			ids = append(ids, all...)
 		}
-		titles = kept
+		tq.UpdatedSince = since
 	}
 	if rawIDs := q.Get("ids"); rawIDs != "" {
-		want := map[int64]bool{}
-		for _, part := range strings.Split(rawIDs, ",") {
-			if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
-				want[id] = true
-			}
-		}
-		kept := titles[:0]
-		for _, t := range titles {
-			if want[t.ID] {
-				kept = append(kept, t)
-			}
-		}
-		titles = kept
+		tq.IDs = parseIDs(rawIDs)
 	}
-	titles = filterTitles(titles, libraryControlsFromQuery(q))
-	sortTitles(titles, v1SortKey(q.Get("sort")), q.Get("dir"))
-	total := len(titles)
 	limit := clampLimit(q.Get("limit"))
 	off, _ := strconv.Atoi(q.Get("cursor"))
-	if off < 0 {
-		off = 0
+	tq.Offset, tq.Limit = max(off, 0), limit
+	var titles []library.Title
+	total := 0
+	if visible {
+		var err error
+		if total, err = a.svc.CountTitles(ctx, tq); err == nil && tq.Offset < total {
+			titles, err = a.svc.PageTitles(ctx, tq)
+		}
+		if err != nil {
+			v1err(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
 	}
 	next := ""
-	if off < total {
-		end := off + limit
-		if end >= total {
-			end = total
-		} else {
-			next = strconv.Itoa(end)
-		}
-		titles = titles[off:end]
-	} else {
-		titles = nil
+	if end := tq.Offset + limit; end < total {
+		next = strconv.Itoa(end)
 	}
 	items := make([]titleDTO, 0, len(titles))
 	for _, t := range titles {

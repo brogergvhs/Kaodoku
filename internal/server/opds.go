@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -152,32 +151,53 @@ func (o *opds) openSearch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+const opdsPageSize = 100
+
 func (o *opds) series(w http.ResponseWriter, r *http.Request) {
-	titles, err := o.svc.ListTitles(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	titles = filterRestrictedTitles(r.Context(), titles)
+	ctx := r.Context()
+	tq, visible := visibleTitles(ctx)
 	feedID, feedTitle := "urn:kaodoku:series", "All series"
-	self := opdsBase + "/series"
+	params := url.Values{}
 	if q := strings.TrimSpace(r.URL.Query().Get("search")); q != "" {
-		kept := titles[:0]
-		for _, t := range titles {
-			if strings.Contains(strings.ToLower(t.DisplayTitle), strings.ToLower(q)) {
-				kept = append(kept, t)
-			}
-		}
-		titles = kept
-		escaped := url.QueryEscape(q)
-		feedID, feedTitle = "urn:kaodoku:search:"+escaped, "Search: "+q
-		self += "?search=" + escaped
+		tq.Name = q
+		params.Set("search", q)
+		feedID, feedTitle = "urn:kaodoku:search:"+url.QueryEscape(q), "Search: "+q
 	}
-	sort.Slice(titles, func(i, j int) bool { return titles[i].DisplayTitle < titles[j].DisplayTitle })
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	page = max(page, 1)
+	tq.Sort, tq.Offset, tq.Limit = "title", (page-1)*opdsPageSize, opdsPageSize
+	var titles []library.Title
+	total := 0
+	if visible {
+		total, _ = o.svc.CountTitles(ctx, tq)
+		if tq.Offset < total {
+			titles, _ = o.svc.PageTitles(ctx, tq)
+		}
+	}
+	pageURL := func(p int) string {
+		v := url.Values{}
+		for k, vs := range params {
+			v[k] = vs
+		}
+		if p > 1 {
+			v.Set("page", strconv.Itoa(p))
+		}
+		if len(v) == 0 {
+			return opdsBase + "/series"
+		}
+		return opdsBase + "/series?" + v.Encode()
+	}
+	links := opdsSelfStart(pageURL(page))
+	if page > 1 {
+		links = append(links, opdsLink{Rel: "previous", Type: opdsNavType, Href: pageURL(page - 1)})
+	}
+	if page*opdsPageSize < total {
+		links = append(links, opdsLink{Rel: "next", Type: opdsNavType, Href: pageURL(page + 1)})
+	}
 	descriptions := o.descriptions(r, titles)
 	feed := opdsFeed{
 		ID: feedID, Title: feedTitle, Updated: opdsNow(),
-		Links: opdsSelfStart(self),
+		Links: links,
 	}
 	for _, t := range titles {
 		id := strconv.FormatInt(t.ID, 10)

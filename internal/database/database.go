@@ -4,6 +4,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +14,7 @@ import (
 
 	"github.com/brogergvhs/kaodoku/internal/config"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 // DefaultPath returns the default application database path.
@@ -97,4 +98,18 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *s
 func isRead(query string) bool {
 	query = strings.TrimLeft(query, " \t\r\n")
 	return len(query) >= 6 && strings.EqualFold(query[:6], "SELECT")
+}
+
+func init() {
+	if err := sqlite.RegisterDeterministicScalarFunction("casefold", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		switch v := args[0].(type) {
+		case string:
+			return strings.ToLower(v), nil
+		case []byte:
+			return strings.ToLower(string(v)), nil
+		}
+		return args[0], nil
+	}); err != nil {
+		panic(err)
+	}
 }

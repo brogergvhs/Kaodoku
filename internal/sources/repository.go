@@ -182,6 +182,13 @@ func (r *Repository) TitleCounts(ctx context.Context) (map[string]int, error) {
 		) GROUP BY source_id`)
 }
 
+func (r *Repository) SourcesInUse(ctx context.Context) (map[string]int, error) {
+	return r.countsBySource(ctx, `
+		SELECT s.id, 1 FROM sources s
+		WHERE EXISTS (SELECT 1 FROM titles t WHERE t.source_id = s.id)
+			OR EXISTS (SELECT 1 FROM title_sources ts WHERE ts.source_id = s.id)`)
+}
+
 // FetchFailureCounts counts titles per source whose last chapter refresh failed.
 func (r *Repository) FetchFailureCounts(ctx context.Context) (map[string]int, error) {
 	return r.countsBySource(ctx, `

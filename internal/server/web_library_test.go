@@ -24,37 +24,6 @@ func TestLibraryControlsFromTags(t *testing.T) {
 	}
 }
 
-func TestFilterTitlesTags(t *testing.T) {
-	t.Parallel()
-
-	titles := []library.Title{
-		{ID: 1, ContentTags: []string{"Action", "Drama"}},
-		{ID: 2, ContentTags: []string{"Horror"}},
-		{ID: 3},
-	}
-	got := filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		IncludeTags: []string{"action", "horror"},
-	})
-	if ids := titleIDs(got); !reflect.DeepEqual(ids, []int64{1, 2}) {
-		t.Errorf("include filter ids = %v, want [1 2]", ids)
-	}
-
-	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		ExcludeTags: []string{"horror"},
-	})
-	if ids := titleIDs(got); !reflect.DeepEqual(ids, []int64{1, 3}) {
-		t.Errorf("exclude filter ids = %v, want [1 3]", ids)
-	}
-
-	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		IncludeTags: []string{"action", "horror"},
-		ExcludeTags: []string{"drama"},
-	})
-	if ids := titleIDs(got); !reflect.DeepEqual(ids, []int64{2}) {
-		t.Errorf("include+exclude filter ids = %v, want [2]", ids)
-	}
-}
-
 func TestTagList(t *testing.T) {
 	t.Parallel()
 
@@ -128,32 +97,6 @@ func TestTableDataPageURLCarriesTagFilters(t *testing.T) {
 	}
 	if q.Get("page") != "2" || q.Get("sort") != "rating" || q.Get("dir") != "desc" {
 		t.Errorf("page/sort/dir = %s/%s/%s, want 2/rating/desc", q.Get("page"), q.Get("sort"), q.Get("dir"))
-	}
-}
-
-func titleIDs(ts []library.Title) []int64 {
-	out := make([]int64, 0, len(ts))
-	for _, t := range ts {
-		out = append(out, t.ID)
-	}
-	return out
-}
-
-func TestSortTitlesRating(t *testing.T) {
-	t.Parallel()
-
-	ts := []library.Title{
-		{ID: 1, AverageScore: 71},
-		{ID: 2}, // unrated
-		{ID: 3, AverageScore: 88},
-	}
-	sortTitles(ts, "rating", "desc")
-	if ids := titleIDs(ts); !reflect.DeepEqual(ids, []int64{3, 1, 2}) {
-		t.Errorf("rating desc ids = %v, want [3 1 2]", ids)
-	}
-	sortTitles(ts, "rating", "asc")
-	if ids := titleIDs(ts); !reflect.DeepEqual(ids, []int64{2, 1, 3}) {
-		t.Errorf("rating asc ids = %v, want [2 1 3]", ids)
 	}
 }
 

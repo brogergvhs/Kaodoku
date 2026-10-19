@@ -100,40 +100,19 @@ func (r *Repository) AddTitle(ctx context.Context, params AddTitleParams) (Title
 
 // GetTitle returns a tracked title by ID.
 func (r *Repository) GetTitle(ctx context.Context, id int64) (Title, error) {
-	row := r.db.QueryRowContext(ctx, r.titleSelectQuery()+` WHERE t.id = ?`, auth.UserID(ctx), auth.UserID(ctx), auth.UserID(ctx), id)
-
-	title, err := scanTitle(row)
+	titles, err := r.titlesIn(ctx, `SELECT ?`, "", id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Title{}, fmt.Errorf("title %d not found", id)
-		}
 		return Title{}, fmt.Errorf("get title %d: %w", id, err)
 	}
-
-	return title, nil
+	if len(titles) == 0 {
+		return Title{}, fmt.Errorf("title %d not found", id)
+	}
+	return titles[0], nil
 }
 
 // ListTitles returns all tracked titles with chapter counts.
 func (r *Repository) ListTitles(ctx context.Context) ([]Title, error) {
-	rows, err := r.db.QueryContext(ctx, r.titleSelectQuery()+` ORDER BY t.display_title COLLATE NOCASE, t.id`, auth.UserID(ctx), auth.UserID(ctx), auth.UserID(ctx))
-	if err != nil {
-		return nil, fmt.Errorf("list titles: %w", err)
-	}
-	defer rows.Close()
-
-	var out []Title
-	for rows.Next() {
-		title, err := scanTitle(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan title: %w", err)
-		}
-		out = append(out, title)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate titles: %w", err)
-	}
-
-	return out, nil
+	return r.titlesIn(ctx, `SELECT id FROM titles`, ` ORDER BY t.display_title COLLATE NOCASE, t.id`)
 }
 
 // RemoveTitle deletes a tracked title and its dependent chapters/downloads.
@@ -209,24 +188,6 @@ func (r *Repository) ListTitleSources(ctx context.Context, titleID int64) ([]Lin
 			return nil, fmt.Errorf("scan title source: %w", err)
 		}
 		out = append(out, ls)
-	}
-	return out, rows.Err()
-}
-
-// TitleIDsForSource returns ids of titles linked to a source via title_sources.
-func (r *Repository) TitleIDsForSource(ctx context.Context, sourceID string) (map[int64]bool, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT title_id FROM title_sources WHERE source_id = ?`, sourceID)
-	if err != nil {
-		return nil, fmt.Errorf("list source titles: %w", err)
-	}
-	defer rows.Close()
-	out := map[int64]bool{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan source title: %w", err)
-		}
-		out[id] = true
 	}
 	return out, rows.Err()
 }
@@ -1194,15 +1155,14 @@ func (r *Repository) TitlesByProvider(ctx context.Context, provider string) (map
 
 // FindByCatalog returns the tracked title for a catalog manga, if any.
 func (r *Repository) FindByCatalog(ctx context.Context, catalogID int64) (Title, bool, error) {
-	row := r.db.QueryRowContext(ctx, r.titleSelectQuery()+` WHERE t.catalog_manga_id = ? LIMIT 1`, auth.UserID(ctx), auth.UserID(ctx), auth.UserID(ctx), catalogID)
-	title, err := scanTitle(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Title{}, false, nil
-	}
+	titles, err := r.titlesIn(ctx, `SELECT id FROM titles WHERE catalog_manga_id = ? LIMIT 1`, "", catalogID)
 	if err != nil {
 		return Title{}, false, fmt.Errorf("find title by catalog %d: %w", catalogID, err)
 	}
-	return title, true, nil
+	if len(titles) == 0 {
+		return Title{}, false, nil
+	}
+	return titles[0], true, nil
 }
 
 // GetChapterByLabel returns one discovered chapter by title and label.
@@ -1539,7 +1499,34 @@ func chapterSelectQuery() string {
 	`
 }
 
-func (r *Repository) titleSelectQuery() string {
+// titlesIn loads full titles whose id is in scope, aggregating only their chapters and volumes.
+func (r *Repository) titlesIn(ctx context.Context, scope, order string, scopeArgs ...any) ([]Title, error) {
+	uid := auth.UserID(ctx)
+	args := []any{uid, uid}
+	args = append(args, scopeArgs...)
+	args = append(args, uid)
+	args = append(args, scopeArgs...)
+	args = append(args, scopeArgs...)
+	rows, err := r.db.QueryContext(ctx, r.titleSelectQuery(scope)+` WHERE t.id IN (`+scope+`)`+order, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list titles: %w", err)
+	}
+	defer rows.Close()
+	var out []Title
+	for rows.Next() {
+		title, err := scanTitle(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan title: %w", err)
+		}
+		out = append(out, title)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate titles: %w", err)
+	}
+	return out, nil
+}
+
+func (r *Repository) titleSelectQuery(scope string) string {
 	// Per-title aggregates are grouped once in a subquery (downloads and
 	// read-progress are 1:1 per chapter, so no DISTINCT is needed) — far
 	// cheaper than aggregating over the fanned-out join on large libraries.
@@ -1591,6 +1578,7 @@ func (r *Repository) titleSelectQuery() string {
 				SUM(v.pages) AS pages
 			FROM volumes v
 			LEFT JOIN volume_read_progress vr ON vr.volume_id = v.id AND vr.user_id = ?
+			WHERE v.title_id IN (%[2]s)
 			GROUP BY v.title_id
 		) vagg ON vagg.title_id = t.id
 		LEFT JOIN (
@@ -1599,18 +1587,19 @@ func (r *Repository) titleSelectQuery() string {
 				COUNT(*) AS discovered,
 				COUNT(CASE WHEN d.status = 'completed' THEN 1 END) AS completed,
 				COUNT(CASE WHEN d.id IS NULL
-					OR (d.status != 'completed' AND NOT (d.status = 'failed' AND d.attempts >= %d)) THEN 1 END) AS missing,
-				COUNT(CASE WHEN d.status = 'failed' AND d.attempts >= %d THEN 1 END) AS failed,
+					OR (d.status != 'completed' AND NOT (d.status = 'failed' AND d.attempts >= %[1]d)) THEN 1 END) AS missing,
+				COUNT(CASE WHEN d.status = 'failed' AND d.attempts >= %[1]d THEN 1 END) AS failed,
 				COUNT(CASE WHEN rp.completed = 1 THEN 1 END) AS read,
 				SUM(CASE WHEN d.status = 'completed' THEN d.bytes ELSE 0 END) AS bytes,
 				SUM(CASE WHEN d.status = 'completed' THEN d.pages ELSE 0 END) AS pages
 			FROM chapters c
 			LEFT JOIN downloads d ON d.chapter_id = c.id
 			LEFT JOIN chapter_read_progress rp ON rp.chapter_id = c.id AND rp.user_id = ?
+			WHERE c.title_id IN (%[2]s)
 			GROUP BY c.title_id
 		) agg ON agg.title_id = t.id
 		LEFT JOIN catalog_manga m ON m.id = t.catalog_manga_id
-	`, r.MaxDownloadAttempts, r.MaxDownloadAttempts)
+	`, r.MaxDownloadAttempts, scope)
 }
 
 func scanTitle(row database.Scanner) (Title, error) {

@@ -590,3 +590,120 @@ func TestAPIV1LoginReplacesDeviceToken(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIV1LibraryAndJobsPaginateInSQL(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	var ids []int64
+	for i := 1; i <= 5; i++ {
+		ids = append(ids, seedTitle(t, dbPath, fmt.Sprintf("https://x.test/%d", i), fmt.Sprintf("T%d", i), 1))
+	}
+	db, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO catalog_manga(provider, provider_id, is_adult) VALUES ('anilist', 'adult', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE titles SET catalog_manga_id = (SELECT id FROM catalog_manga) WHERE id = ?`, ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	api := New(svc, nil, nil)
+
+	type page struct {
+		Items []titleDTO `json:"items"`
+		Next  string     `json:"next_cursor"`
+		Total int        `json:"total"`
+	}
+	get := func(path, token string) page {
+		t.Helper()
+		var p page
+		rec := do(t, api, http.MethodGet, path, token, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d %s", path, rec.Code, rec.Body.String())
+		}
+		_ = json.NewDecoder(rec.Body).Decode(&p)
+		return p
+	}
+	names := func(p page) string {
+		var out []string
+		for _, it := range p.Items {
+			out = append(out, it.DisplayTitle)
+		}
+		return strings.Join(out, ",")
+	}
+	if p := get("/api/v1/library?limit=2&sort=title&dir=desc", ""); names(p) != "T5,T4" || p.Next != "2" || p.Total != 5 {
+		t.Fatalf("first page = %s next=%q total=%d", names(p), p.Next, p.Total)
+	}
+	if p := get("/api/v1/library?limit=2&sort=title&dir=desc&cursor=4", ""); names(p) != "T1" || p.Next != "" {
+		t.Fatalf("last page = %s next=%q", names(p), p.Next)
+	}
+	if p := get("/api/v1/library?cursor=10", ""); len(p.Items) != 0 || p.Total != 5 {
+		t.Fatalf("past end = %+v", p)
+	}
+	if p := get("/api/v1/library?q=t3", ""); names(p) != "T3" {
+		t.Fatalf("search = %s", names(p))
+	}
+
+	ctx := context.Background()
+	roles, _ := svc.Auth().ListRoles(ctx)
+	for _, ro := range roles {
+		if ro.Name == "member" {
+			if err := svc.Auth().CreateUser(ctx, "reader", "pass12345", ro.ID, auth.ContentGuards{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	token, err := svc.Auth().CreateAPIToken(ctx, func() int64 {
+		users, _ := svc.Auth().ListUsers(ctx)
+		for _, u := range users {
+			if u.Username == "reader" {
+				return u.ID
+			}
+		}
+		return 0
+	}(), "test", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAODOKU_ADMIN_USER", "boss")
+	t.Setenv("KAODOKU_ADMIN_PASSWORD", "secret123")
+	if p := get("/api/v1/library?sort=title", token); p.Total != 4 || strings.Contains(names(p), "T3") {
+		t.Fatalf("restricted library = %s total=%d", names(p), p.Total)
+	}
+	t.Setenv("KAODOKU_ADMIN_USER", "")
+	t.Setenv("KAODOKU_ADMIN_PASSWORD", "")
+
+	for _, id := range ids[:3] {
+		if _, err := svc.Enqueue(ctx, "scan_downloads", id, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var jl struct {
+		Items []jobDTO `json:"items"`
+		Next  string   `json:"next_cursor"`
+	}
+	rec := do(t, api, http.MethodGet, "/api/v1/jobs?limit=2", "", nil)
+	_ = json.NewDecoder(rec.Body).Decode(&jl)
+	if len(jl.Items) != 2 || jl.Next == "" || jl.Items[0].ID < jl.Items[1].ID {
+		t.Fatalf("jobs page 1 = %+v next=%q", jl.Items, jl.Next)
+	}
+	cursor := jl.Next
+	jl.Items, jl.Next = nil, ""
+	rec = do(t, api, http.MethodGet, "/api/v1/jobs?limit=2&status=queued&cursor="+cursor, "", nil)
+	_ = json.NewDecoder(rec.Body).Decode(&jl)
+	if c, _ := strconv.ParseInt(cursor, 10, 64); len(jl.Items) != 1 || jl.Next != "" || jl.Items[0].ID >= c {
+		t.Fatalf("jobs page 2 = %+v next=%q", jl.Items, jl.Next)
+	}
+	jl.Items = nil
+	rec = do(t, api, http.MethodGet, "/api/v1/jobs?status=done", "", nil)
+	_ = json.NewDecoder(rec.Body).Decode(&jl)
+	if len(jl.Items) != 0 {
+		t.Fatalf("done jobs = %+v", jl.Items)
+	}
+}

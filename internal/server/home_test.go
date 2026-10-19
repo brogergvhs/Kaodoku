@@ -4,25 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/library"
 )
-
-func TestTopGenreWeighsByReads(t *testing.T) {
-	titles := []library.Title{
-		{ID: 1, ReadCount: 10},
-		{ID: 2, ReadCount: 2, VolumeReadCount: 1},
-		{ID: 3}, // unread: must not count
-	}
-	mangas := map[int64]catalog.Manga{
-		1: {Genres: []string{"Action", "Fantasy"}},
-		2: {Genres: []string{"Romance"}},
-		3: {Genres: []string{"Romance", "Drama"}},
-	}
-	if got := topGenre(titles, mangas); got != "Action" {
-		t.Fatalf("topGenre = %q, want Action", got)
-	}
-}
 
 func TestContinueReadingRowOrderAndLinks(t *testing.T) {
 	now := time.Now()

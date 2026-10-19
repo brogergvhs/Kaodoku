@@ -71,13 +71,7 @@ type readerView struct {
 	PagePosition string
 }
 type dashData struct {
-	Titles     []library.Title
-	Sources    []sources.Source
-	TotalBytes int64
-	TotalPages int64
-	TotalChaps int64
-	TotalVols  int64
-	User       *auth.User
+	User *auth.User
 }
 type libraryView struct {
 	Controls           libraryControls
@@ -109,7 +103,6 @@ type libraryControls struct {
 	View        string
 	IncludeTags []string
 	ExcludeTags []string
-	SourceLinks map[int64]bool
 }
 
 // SourceSet reports which source tokens are selected, for the filter template.
@@ -750,18 +743,7 @@ func (u *webUI) management(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "missing a management permission")
 		return
 	}
-	titles, _ := u.svc.ListTitles(r.Context())
-	titles = filterRestrictedTitles(r.Context(), titles)
-	srcs, _ := u.svc.ListSources(r.Context())
-	srcs = filterNSFWSources(r.Context(), srcs)
-	data := dashData{Titles: titles, Sources: srcs, User: user} // services health post-loads via /ui/health
-	for _, t := range titles {
-		data.TotalBytes += t.SizeBytes + t.VolumeBytes
-		data.TotalPages += t.Pages + t.VolumePages
-		data.TotalChaps += t.DiscoveredCount
-		data.TotalVols += t.VolumeCount
-	}
-	u.page(w, r, "dashboard", "Management", data)
+	u.page(w, r, "dashboard", "Management", dashData{User: user})
 }
 
 func (u *webUI) health(w http.ResponseWriter, r *http.Request) {
@@ -778,6 +760,7 @@ func (u *webUI) healthView(ctx context.Context) healthView {
 const (
 	libraryPerPage     = 20
 	jobsPerPage        = 15
+	jobChildrenShown   = 100
 	collectionsPerPage = 24
 )
 
@@ -1180,55 +1163,25 @@ func (u *webUI) renderCollectionManage(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	members, _ := u.svc.CollectionMembers(ctx)
-	titles, _ := u.svc.ListTitles(ctx)
-	titles = filterRestrictedTitles(ctx, titles)
-	byID := make(map[int64]library.Title, len(titles))
-	for _, t := range titles {
-		byID[t.ID] = t
-	}
-	var mem []library.Title
-	for _, tid := range members[id] {
-		if t, ok := byID[tid]; ok {
-			mem = append(mem, t)
-		}
-	}
-	sortByTitle(mem)
+	mem := u.visibleMembers(ctx, members[id])
 	u.frag(w, "collectionManage", collectionManageView{ID: id, Name: name, Members: mem})
 }
 
 func (u *webUI) renderSmartCollectionManage(w http.ResponseWriter, r *http.Request, key string) {
 	ctx := r.Context()
 	pins, _ := u.svc.SmartPins(ctx)
-	titles, _ := u.svc.ListTitles(ctx)
-	titles = filterRestrictedTitles(ctx, titles)
-	byID := make(map[int64]library.Title, len(titles))
-	for _, t := range titles {
-		byID[t.ID] = t
-	}
-	var mem []library.Title
-	for _, tid := range pins[key] {
-		if t, ok := byID[tid]; ok {
-			mem = append(mem, t)
-		}
-	}
-	sortByTitle(mem)
-	u.frag(w, "collectionManage", collectionManageView{SmartKey: key, Name: "Pinned titles", Members: mem})
+	u.frag(w, "collectionManage", collectionManageView{SmartKey: key, Name: "Pinned titles", Members: u.visibleMembers(ctx, pins[key])})
 }
 
-func restrictToIDs(titles []library.Title, csv string) []library.Title {
-	want := map[int64]bool{}
-	for _, s := range strings.Split(csv, ",") {
-		if id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
-			want[id] = true
-		}
+func (u *webUI) visibleMembers(ctx context.Context, ids []int64) []library.Title {
+	q, ok := visibleTitles(ctx)
+	if !ok {
+		return nil
 	}
-	kept := titles[:0]
-	for _, t := range titles {
-		if want[t.ID] {
-			kept = append(kept, t)
-		}
-	}
-	return kept
+	q.IDs = append([]int64{}, ids...)
+	mem, _ := u.svc.PageTitles(ctx, q)
+	sortByTitle(mem)
+	return mem
 }
 
 func collectionCards(cols []collection) []collectionCard {
@@ -1635,38 +1588,39 @@ func (u *webUI) buildLibraryTable(ctx context.Context, values url.Values) librar
 		}
 	}
 	controls := libraryControlsFrom(screenDefaults(values, screen))
-	for _, s := range controls.Sources {
-		if s == "linked" || s == "unlinked" || s == "imported" {
-			continue
-		}
-		links, _ := u.svc.SourceTitleIDs(ctx, s)
-		if controls.SourceLinks == nil {
-			controls.SourceLinks = links
-		} else {
-			for id := range links {
-				controls.SourceLinks[id] = true
-			}
-		}
-	}
-	titles, _ := u.svc.ListTitles(ctx)
-	titles = filterRestrictedTitles(ctx, titles)
+	base, visible := visibleTitles(ctx)
 	if ids := values.Get("ids"); ids != "" {
-		titles = restrictToIDs(titles, ids)
+		base.IDs = parseIDs(ids)
 	}
-	allCount := len(titles)
+	q := controls.apply(base)
 	if screen != nil {
-		kept := titles[:0]
-		for _, t := range titles {
-			if screen.Config.Matches(t) {
-				kept = append(kept, t)
-			}
-		}
-		titles = kept
+		q = applyScreen(q, screen.Config)
 	}
-	titles = filterTitles(titles, controls)
-	sortTitles(titles, controls.Sort, controls.Dir)
-	pageTitles, total := paginate(titles, page, libraryPerPage)
-	js := u.jobs(ctx)
+	var pageTitles []library.Title
+	var total, allCount int
+	if visible {
+		total, _ = u.svc.CountTitles(ctx, q)
+		if total > 0 {
+			q.Limit = libraryPerPage
+			q.Offset = min((page-1)*libraryPerPage, ((total-1)/libraryPerPage)*libraryPerPage)
+			pageTitles, _ = u.svc.PageTitles(ctx, q)
+		}
+		allCount = total
+		if total == 0 {
+			allCount, _ = u.svc.CountTitles(ctx, base)
+		}
+	}
+	pageIDs := make([]int64, len(pageTitles))
+	for i, tl := range pageTitles {
+		pageIDs[i] = tl.ID
+	}
+	byTitle := map[int64][]jobs.Job{}
+	for _, j := range u.jobs(ctx, pageIDs...) {
+		var p service.JobPayload
+		if json.Unmarshal([]byte(j.Payload), &p) == nil {
+			byTitle[p.TitleID] = append(byTitle[p.TitleID], j)
+		}
+	}
 	empty := "Nothing in your library yet — add manga from Search or Import a collection."
 	if allCount > 0 {
 		empty = "No manga match the current search or filters."
@@ -1696,7 +1650,7 @@ func (u *webUI) buildLibraryTable(ctx context.Context, values url.Values) librar
 	}
 	mangas, _ := u.svc.MangaByIDs(ctx, catalogIDs) // one query for all page rows
 	for _, tl := range pageTitles {
-		running, label, queued, failed, msg := titleActivityFrom(js, tl)
+		running, label, queued, failed, msg := titleActivityFrom(byTitle[tl.ID], tl)
 		_ = queued
 		if len(running) > 0 {
 			t.Poll = true
@@ -1736,7 +1690,7 @@ func (u *webUI) buildLibraryTable(ctx context.Context, values url.Values) librar
 func (u *webUI) librarySourceOptions(ctx context.Context) []sources.Source {
 	srcs, _ := u.svc.ListSources(ctx)
 	srcs = filterNSFWSources(ctx, srcs)
-	counts, _ := u.svc.SourceTitleCounts(ctx)
+	counts, _ := u.svc.SourcesInUse(ctx)
 	out := srcs[:0]
 	for _, s := range srcs {
 		if counts[s.ID] > 0 {
@@ -1943,99 +1897,56 @@ func tagFilterView(options []catalog.ContentTag, include, exclude []string, labe
 	}
 }
 
-// matchesAnySource reports whether a title satisfies any selected source token
-// (categorical linked/unlinked/imported, a concrete source id, or a linked one).
-func matchesAnySource(title library.Title, c libraryControls) bool {
-	for _, s := range c.Sources {
-		switch s {
-		case "linked":
-			if strings.HasPrefix(title.SourceURL, "http") {
-				return true
-			}
-		case "unlinked":
-			if !strings.HasPrefix(title.SourceURL, "http") {
-				return true
-			}
-		case "imported":
-			if strings.HasPrefix(title.SourceURL, "local:") {
-				return true
-			}
-		default:
-			if title.SourceID == s || c.SourceLinks[title.ID] {
-				return true
-			}
-		}
+func visibleTitles(ctx context.Context) (library.TitleQuery, bool) {
+	u := auth.FromContext(ctx)
+	if u == nil {
+		return library.TitleQuery{}, false
 	}
-	return false
+	q := library.TitleQuery{NoAdult: !u.AllowAdult, Exclude: u.BlockedTags}
+	if len(u.AllowedTags) > 0 {
+		q.IncludeAny = [][]string{u.AllowedTags}
+	}
+	return q, true
 }
 
-func filterTitles(titles []library.Title, c libraryControls) []library.Title {
-	q := strings.ToLower(c.Q)
-	out := titles[:0]
-	for _, title := range titles {
-		if q != "" && !strings.Contains(strings.ToLower(title.DisplayTitle+" "+title.SourceID+" "+title.ReleaseStatus), q) {
-			continue
-		}
-		if len(c.IncludeTags) > 0 && !library.HasAnyTag(title.ContentTags, c.IncludeTags) {
-			continue
-		}
-		if library.HasAnyTag(title.ContentTags, c.ExcludeTags) {
-			continue
-		}
-		switch c.Monitor {
-		case "on":
-			if !title.Monitored {
-				continue
-			}
-		case "off":
-			if title.Monitored {
-				continue
-			}
-		}
-		if c.Fav == "only" && !title.Favourite {
-			continue
-		}
-		if c.NSFW == "only" && !title.IsAdult {
-			continue
-		}
-		if len(c.Sources) > 0 && !matchesAnySource(title, c) {
-			continue
-		}
-		switch c.Progress {
-		case "missing":
-			if title.MissingCount == 0 {
-				continue
-			}
-		case "complete":
-			if title.DiscoveredCount == 0 || title.MissingCount != 0 {
-				continue
-			}
-		case "empty":
-			if title.DiscoveredCount != 0 {
-				continue
-			}
-		}
-		switch c.Content {
-		case "chapters":
-			if title.DiscoveredCount == 0 {
-				continue
-			}
-		case "no-chapters":
-			if title.DiscoveredCount != 0 {
-				continue
-			}
-		case "volumes":
-			if title.VolumeCount == 0 {
-				continue
-			}
-		case "no-volumes":
-			if title.VolumeCount != 0 {
-				continue
-			}
-		}
-		out = append(out, title)
+func (c libraryControls) apply(q library.TitleQuery) library.TitleQuery {
+	q.Search = c.Q
+	if len(c.IncludeTags) > 0 {
+		q.IncludeAny = append(append([][]string{}, q.IncludeAny...), c.IncludeTags)
 	}
-	return out
+	q.Exclude = append(append([]string{}, q.Exclude...), c.ExcludeTags...)
+	q.Monitored = c.Monitor
+	q.FavouriteOnly = c.Fav == "only"
+	q.AdultOnly = q.AdultOnly || c.NSFW == "only"
+	q.Sources = c.Sources
+	q.Progress = c.Progress
+	q.Content = c.Content
+	q.Sort, q.Dir = c.Sort, c.Dir
+	return q
+}
+
+func applyScreen(q library.TitleQuery, sc library.ScreenConfig) library.TitleQuery {
+	switch sc.Adult {
+	case "only":
+		q.AdultOnly = true
+	case "exclude":
+		q.NoAdult = true
+	}
+	if len(sc.IncludeTags) > 0 {
+		q.IncludeAny = append(append([][]string{}, q.IncludeAny...), sc.IncludeTags)
+	}
+	q.Exclude = append(append([]string{}, q.Exclude...), sc.ExcludeTags...)
+	return q
+}
+
+func parseIDs(csv string) []int64 {
+	ids := []int64{}
+	for _, s := range strings.Split(csv, ",") {
+		if id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (u *webUI) jobCancel(w http.ResponseWriter, r *http.Request) {
@@ -2077,66 +1988,38 @@ func (u *webUI) jobStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *webUI) jobsTable(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	page, key, dir := tableParams(r.URL.Query(), jobsPerPage)
-	all, _ := u.svc.List(r.Context())
-
-	// Group sweep-spawned jobs under the global job that created them. A big
-	// sweep can push its own parent row outside the list window — fetch any
-	// missing parents so their children never render ungrouped.
-	children := map[int64][]jobs.Job{}
-	seen := map[int64]bool{}
-	for _, j := range all {
-		seen[j.ID] = true
+	rows, total, _ := u.svc.TopLevelJobs(ctx, key, dir, (page-1)*jobsPerPage, jobsPerPage)
+	ids := make([]int64, len(rows))
+	for i, j := range rows {
+		ids[i] = j.ID
 	}
-	for _, j := range all {
-		if j.ParentID != 0 && !seen[j.ParentID] {
-			if parent, err := u.svc.GetJob(r.Context(), j.ParentID); err == nil {
-				all = append(all, parent)
-				seen[parent.ID] = true
-			} else {
-				seen[j.ParentID] = false // truly gone: child stays top-level
-			}
-		}
-	}
-	var top []jobs.Job
-	for _, j := range all {
-		if j.ParentID != 0 && seen[j.ParentID] {
-			children[j.ParentID] = append(children[j.ParentID], j)
-		} else {
-			top = append(top, j)
-		}
-	}
-	sortJobs(top, key, dir)
-	rows, total := paginate(top, page, jobsPerPage)
+	children, _ := u.svc.JobChildren(ctx, ids, jobChildrenShown)
+	active, _ := u.svc.FindJobs(ctx, jobs.Filter{Statuses: []string{"queued", "running"}, Limit: 1})
 
 	t := tableData{
 		ID: "jobs-table", BaseURL: "/ui/jobs/table",
 		Page: page, PerPage: jobsPerPage, Total: total, Sort: key, Dir: dir,
-		Poll: anyActive(all), Empty: "No jobs yet.",
+		Poll: len(active) > 0, Empty: "No jobs yet.",
 		Columns: []tableColumn{
 			{Label: ""},
 			{Label: ""},
 		},
 	}
 	for _, j := range rows {
-		kids := children[j.ID]
-		activeKids, deadKids, cancelledKids := 0, 0, 0
-		for _, k := range kids {
-			if a, _ := jobState(k.Status); a {
-				activeKids++
-			}
-			switch k.Status {
-			case "dead":
-				deadKids++
-			case "cancelled":
-				cancelledKids++
-			}
+		var kids []jobs.Job
+		activeKids, deadKids, cancelledKids, kidCount := 0, 0, 0, 0
+		if c := children[j.ID]; c != nil {
+			kids = c.Newest
+			activeKids = c.Counts["queued"] + c.Counts["running"] + c.Counts["failed"]
+			deadKids, cancelledKids, kidCount = c.Counts["dead"], c.Counts["cancelled"], c.Total
 		}
 		selfActive, _ := jobState(j.Status)
 		// A group is only "done" once every child finished successfully; the
 		// status icon rolls up the children's worst outcome.
 		display := j
-		if len(kids) > 0 {
+		if kidCount > 0 {
 			switch {
 			case selfActive || activeKids > 0:
 				display.Status = "running"
@@ -2147,13 +2030,13 @@ func (u *webUI) jobsTable(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		detail := u.renderToHTML("jobDetail", j)
-		if len(kids) > 0 {
+		if kidCount > 0 {
 			detail = u.renderToHTML("jobChildren", kids)
 		}
 		t.Rows = append(t.Rows, tableRow{
 			ID: strconv.FormatInt(j.ID, 10),
 			Cells: []template.HTML{
-				u.renderToHTML("jobCell", jobGroupView{Job: j, Children: len(kids), ActiveChildren: activeKids}),
+				u.renderToHTML("jobCell", jobGroupView{Job: j, Children: kidCount, ActiveChildren: activeKids}),
 				u.renderToHTML("jobActions", jobActionsView{Job: display, CanCancel: selfActive || activeKids > 0}),
 			},
 			Detail: detail,
@@ -2239,7 +2122,7 @@ type titleContentView struct {
 func (u *webUI) buildTitleContent(r *http.Request, title library.Title, tab string) titleContentView {
 	ctx := r.Context()
 	vols, _ := u.svc.Volumes(ctx, title.ID)
-	running, _, queued, _, _ := titleActivityFrom(u.jobs(ctx), title)
+	running, _, queued, _, _ := titleActivityFrom(u.jobs(ctx, title.ID), title)
 	attaching := running[jobs.TypeAttachVolumes] || slices.Contains(queued, "attaching volumes")
 	if tab == "" && title.DiscoveredCount == 0 && (len(vols) > 0 || attaching) {
 		tab = "volumes"
@@ -2346,7 +2229,7 @@ func (u *webUI) titleProgress(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	running, _, queued, _, _ := titleActivityFrom(u.jobs(r.Context()), title)
+	running, _, queued, _, _ := titleActivityFrom(u.jobs(r.Context(), title.ID), title)
 	u.frag(w, "titleProgress", activityView{Title: title, Running: running, Queued: queued})
 }
 
@@ -2775,7 +2658,7 @@ func (u *webUI) buildChaptersTable(ctx context.Context, title library.Title, val
 		Page: page, PerPage: chaptersPerPage, Total: total, Sort: key, Dir: dir, Empty: empty,
 		Params: chapterTableParams(values),
 	}}
-	running, _, queued, _, _ := titleActivityFrom(u.jobs(ctx), title)
+	running, _, queued, _, _ := titleActivityFrom(u.jobs(ctx, title.ID), title)
 	t.Poll = len(running) > 0 || len(queued) > 0
 	canManage := auth.FromContext(ctx).Can(auth.PermLibraryManage)
 	for _, c := range rows {
@@ -3666,10 +3549,8 @@ func (u *webUI) srcDelete(w http.ResponseWriter, r *http.Request) {
 // verifying spinner.
 func (u *webUI) sourceRows(ctx context.Context, srcs []sources.Source) []sourceRowView {
 	verifying := map[string]bool{}
-	for _, j := range u.jobs(ctx) {
-		if j.Type != jobs.TypeVerifySource || (j.Status != "queued" && j.Status != "running") {
-			continue
-		}
+	active, _ := u.svc.FindJobs(ctx, jobs.Filter{Type: jobs.TypeVerifySource, Statuses: []string{"queued", "running"}})
+	for _, j := range active {
 		var p service.JobPayload
 		if json.Unmarshal([]byte(j.Payload), &p) == nil {
 			verifying[p.SourceID] = true
@@ -3719,16 +3600,10 @@ func (u *webUI) sourceFetchFailCount(ctx context.Context, id string) int {
 // srcTitleErrors lists this source's titles whose last refresh failed.
 func (u *webUI) srcTitleErrors(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	titles, err := u.svc.ListTitles(r.Context())
+	failing, err := u.svc.FailingTitles(r.Context(), id)
 	if err != nil {
 		u.fail(w, err)
 		return
-	}
-	var failing []library.Title
-	for _, t := range titles {
-		if t.SourceID == id && t.FetchError != "" {
-			failing = append(failing, t)
-		}
 	}
 	u.frag(w, "sourceTitleErrors", failing)
 }
@@ -4128,7 +4003,7 @@ func (u *webUI) titleActivity(ctx context.Context, id int64) activityView {
 	if err != nil {
 		title = library.Title{ID: id, Monitored: true}
 	}
-	running, label, queued, failed, msg := titleActivityFrom(u.jobs(ctx), title)
+	running, label, queued, failed, msg := titleActivityFrom(u.jobs(ctx, title.ID), title)
 	return activityView{Title: title, Running: running, ActiveLabel: label, Queued: queued, Failed: failed, Error: msg}
 }
 
@@ -4195,28 +4070,17 @@ func (u *webUI) jobStateFor(ctx context.Context, typ string, payload service.Job
 
 func jobStateForSvc(ctx context.Context, svc *service.JobService, typ string, payload service.JobPayload) (active, failed bool, msg string) {
 	want, _ := json.Marshal(payload)
-	all, _ := svc.List(ctx)
-	for _, j := range all {
-		if j.Type == typ && j.Payload == string(want) {
-			active, failed = jobState(j.Status)
-			return active, failed, j.LastError
-		}
+	list, _ := svc.FindJobs(ctx, jobs.Filter{Type: typ, Payload: string(want), Limit: 1})
+	if len(list) == 0 {
+		return false, false, ""
 	}
-	return false, false, ""
+	active, failed = jobState(list[0].Status)
+	return active, failed, list[0].LastError
 }
 
-func (u *webUI) jobs(ctx context.Context) []jobs.Job {
-	all, _ := u.svc.List(ctx)
-	return all
-}
-
-func anyActive(js []jobs.Job) bool {
-	for _, j := range js {
-		if j.Status == "queued" || j.Status == "running" {
-			return true
-		}
-	}
-	return false
+func (u *webUI) jobs(ctx context.Context, titleIDs ...int64) []jobs.Job {
+	list, _ := u.svc.FindJobs(ctx, jobs.Filter{TitleIDs: titleIDs, Newest: true})
+	return list
 }
 
 func navFor(path string) string {

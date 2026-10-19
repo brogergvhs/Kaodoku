@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 	"unicode"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
@@ -121,14 +120,6 @@ func (s *LibraryService) DeleteScreen(ctx context.Context, id int64) error {
 	return s.repo.DeleteScreen(ctx, id)
 }
 
-func (s *LibraryService) LastReadAt(ctx context.Context) (map[int64]time.Time, error) {
-	return s.repo.LastReadAt(ctx)
-}
-
-func (s *LibraryService) LatestArrivals(ctx context.Context) (map[int64]library.Arrival, error) {
-	return s.repo.LatestArrivals(ctx)
-}
-
 func (s *LibraryService) MarkVolumePageRead(ctx context.Context, volumeID int64, page, totalPages int) (library.Volume, error) {
 	return s.repo.MarkVolumePageRead(ctx, volumeID, page, totalPages)
 }
@@ -206,10 +197,6 @@ func (s *LibraryService) TitlesByProvider(ctx context.Context, provider string) 
 // ListTitleSources returns all sources linked to a title.
 func (s *LibraryService) ListTitleSources(ctx context.Context, titleID int64) ([]library.LinkedSource, error) {
 	return s.repo.ListTitleSources(ctx, titleID)
-}
-
-func (s *LibraryService) TitleIDsForSource(ctx context.Context, sourceID string) (map[int64]bool, error) {
-	return s.repo.TitleIDsForSource(ctx, sourceID)
 }
 
 // UnlinkSource removes a linked source from a title.

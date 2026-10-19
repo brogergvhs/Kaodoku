@@ -456,6 +456,24 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, err = tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_subject ON users(oidc_subject) WHERE oidc_subject != ''`); err != nil {
 		return fmt.Errorf("migrate users oidc index: %w", err)
 	}
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_jobs_active_title ON jobs(json_extract(payload_json, '$.title_id')) WHERE status IN ('queued', 'running', 'failed')`,
+		`CREATE INDEX IF NOT EXISTS idx_jobs_active_payload ON jobs(payload_json, type) WHERE status IN ('queued', 'running', 'failed')`,
+		`CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id) WHERE parent_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_titles_name ON titles(display_title COLLATE NOCASE)`,
+		`CREATE INDEX IF NOT EXISTS idx_titles_source ON titles(source_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_title_sources_source ON title_sources(source_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_titles_created ON titles(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_titles_updated ON titles(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_downloads_completed_at ON downloads(completed_at) WHERE completed_at IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_volumes_created ON volumes(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_chapter_read_recent ON chapter_read_progress(user_id, last_read_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_volume_read_recent ON volume_read_progress(user_id, last_read_at)`,
+	} {
+		if _, err = tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate indexes: %w", err)
+		}
+	}
 
 	// One-shot backfill when the manual column is first added; rerunning would
 	// clobber genuinely-read chapters whose pages share one timestamp.

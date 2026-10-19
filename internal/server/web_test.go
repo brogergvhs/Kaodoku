@@ -105,41 +105,6 @@ func TestSelectedTitleIDs(t *testing.T) {
 	}
 }
 
-func TestFilterTitlesBySourceID(t *testing.T) {
-	t.Parallel()
-
-	titles := []library.Title{
-		{ID: 1, SourceID: "mangadex", SourceURL: "https://mangadex.org/x"},
-		{ID: 2, SourceID: "other", SourceURL: "https://other.to/y"},
-		{ID: 3, SourceURL: "local:import"},
-	}
-	got := filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		Sources: []string{"mangadex"}, SourceLinks: map[int64]bool{3: true},
-		Monitor: "all", Fav: "all", Content: "all", Progress: "all",
-	})
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
-		t.Fatalf("source filter kept %#v", got)
-	}
-	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		Sources: []string{"linked"}, Monitor: "all", Fav: "all", Content: "all", Progress: "all",
-	})
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
-		t.Fatalf("linked filter kept %#v", got)
-	}
-	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		Monitor: "all", Fav: "all", Content: "all", Progress: "all",
-	})
-	if len(got) != 3 {
-		t.Fatalf("all filter kept %#v", got)
-	}
-	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		Sources: []string{"mangadex", "other"}, Monitor: "all", Fav: "all", Content: "all", Progress: "all",
-	})
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
-		t.Fatalf("multi-source filter kept %#v", got)
-	}
-}
-
 func TestLibraryPageSourceOptionsRender(t *testing.T) {
 	u := &webUI{}
 	u.tmpl = template.Must(template.New("").Funcs(u.funcs()).ParseFS(templateFS, "templates/*.html"))
