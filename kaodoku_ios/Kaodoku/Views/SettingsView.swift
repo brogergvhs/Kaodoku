@@ -52,14 +52,9 @@ struct SettingsView: View {
               LabeledContent("Status", value: "…")
             }
           }
-          if app.me?.can("jobs.view") == true || app.me?.can("sources.manage") == true {
+          if app.me?.can("jobs.view") == true {
             Section("Management") {
-              if app.me?.can("jobs.view") == true {
-                NavigationLink("Jobs") { JobsView() }
-              }
-              if app.me?.can("sources.manage") == true {
-                NavigationLink("Sources") { SourcesManageView() }
-              }
+              NavigationLink("Jobs") { JobsView() }
             }
           }
           Section("Device storage") {

@@ -301,8 +301,7 @@ struct MatchList: Decodable {
   var items: [Match]
 }
 
-// Source linking (GET /api/v1/library/{id}/sources) and management
-// (GET /api/v1/sources/manage) DTOs.
+// Source linking (GET /api/v1/library/{id}/sources) DTOs.
 
 struct LinkedSource: Decodable, Identifiable {
   var sourceId: String
@@ -327,20 +326,4 @@ struct TitleSources: Decodable {
   var failed: Bool
   var error: String?
   var sources: [SourcePick]
-}
-
-struct SourceManageRow: Decodable, Identifiable {
-  var id: String
-  var name: String
-  var enabled: Bool
-  var nsfw: Bool
-  var origin: String
-  var status: String
-  var lastCheckedAt: String?
-  var lastError: String?
-  var chaptersFound: Int
-}
-
-struct SourceManageList: Decodable {
-  var items: [SourceManageRow]
 }
