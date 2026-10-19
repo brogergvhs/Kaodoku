@@ -141,8 +141,6 @@ func requiredPerm(r *http.Request) string {
 		return auth.PermUsersManage + "|" + auth.PermUsersApprove
 	case p == "/users" || strings.HasPrefix(p, "/ui/users"):
 		return auth.PermUsersManage
-	case p == "/api/settings":
-		return auth.PermSettingsManage // the JSON API has no per-section split
 	case p == "/settings" || p == "/ui/settings":
 		return ""
 	case p == "/sources" || strings.HasPrefix(p, "/ui/sources"):

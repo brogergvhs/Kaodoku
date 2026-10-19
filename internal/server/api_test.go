@@ -17,40 +17,25 @@ import (
 
 	chaptersPkg "github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/database"
-	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/providers"
 	"github.com/brogergvhs/kaodoku/internal/service"
 )
 
-func TestAPISettings(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	var got map[string]string
-	requestJSON(t, api, http.MethodGet, "/api/settings", nil, http.StatusOK, &got)
-	if got[service.SettingServeRefreshEvery] != "1h" || got[service.SettingServeRunEvery] != "5s" {
-		t.Fatalf("default settings = %#v", got)
+func TestSettingValidation(t *testing.T) {
+	if err := service.ValidateSetting(service.SettingServeDownloadEvery, "15m"); err != nil {
+		t.Fatalf("valid setting rejected: %v", err)
 	}
-	if got[service.SettingBrowserSolverEnabled] != "false" || got[service.SettingBrowserSolverEndpoint] == "" {
-		t.Fatalf("solver settings = %#v", got)
+	for key, value := range map[string]string{
+		service.SettingServeRunEvery:                   "0s",
+		service.SettingBrowserSolverTimeoutSeconds:     "0",
+		service.SettingBrowserDownloaderTimeoutSeconds: "0",
+		service.SettingJobsWorkers:                     "0",
+	} {
+		if service.ValidateSetting(key, value) == nil {
+			t.Errorf("%s=%q accepted", key, value)
+		}
 	}
-	if got[service.SettingBrowserDownloaderEnabled] != "false" || got[service.SettingBrowserDownloaderEndpoint] == "" {
-		t.Fatalf("browser downloader settings = %#v", got)
-	}
-	if got[service.SettingJobsWorkers] != "4" {
-		t.Fatalf("job worker setting = %#v", got)
-	}
-
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingServeDownloadEvery: "15m"}, http.StatusOK, &got)
-	if got[service.SettingServeDownloadEvery] != "15m" {
-		t.Fatalf("updated settings = %#v", got)
-	}
-
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingServeRunEvery: "0s"}, http.StatusBadRequest, nil)
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingBrowserSolverTimeoutSeconds: "0"}, http.StatusBadRequest, nil)
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingBrowserDownloaderTimeoutSeconds: "0"}, http.StatusBadRequest, nil)
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingJobsWorkers: "0"}, http.StatusBadRequest, nil)
 }
 
 func TestSettingsPageRedactsAniListSecret(t *testing.T) {
@@ -90,23 +75,6 @@ func TestSettingsPageRedactsAniListSecret(t *testing.T) {
 	}
 	if got := svc.Setting(ctx, service.SettingAniListClientSecret, ""); got != "top-secret" {
 		t.Fatalf("stored secret = %q, want original", got)
-	}
-}
-
-func TestAPIJobs(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	var job jobs.Job
-	requestJSON(t, api, http.MethodPost, "/api/jobs/enqueue", map[string]any{"type": jobs.TypeScanDownloads}, http.StatusCreated, &job)
-	if job.Type != jobs.TypeScanDownloads || job.Status != "queued" {
-		t.Fatalf("job = %#v", job)
-	}
-
-	var all []jobs.Job
-	requestJSON(t, api, http.MethodGet, "/api/jobs", nil, http.StatusOK, &all)
-	if len(all) != 1 || all[0].ID != job.ID {
-		t.Fatalf("jobs = %#v", all)
 	}
 }
 
@@ -244,7 +212,7 @@ func TestSessionAuth(t *testing.T) {
 	defer closeDB()
 
 	rec := httptest.NewRecorder()
-	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/me", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d, want 401", rec.Code)
 	}
@@ -267,61 +235,13 @@ func TestSessionAuth(t *testing.T) {
 		t.Fatal("no session cookie issued")
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	req.AddCookie(session)
 	rec = httptest.NewRecorder()
 	api.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("session status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-}
-
-func TestAPISolverHealthDisabled(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	var got map[string]any
-	requestJSON(t, api, http.MethodGet, "/api/solver/health", nil, http.StatusOK, &got)
-	if got["ok"] != false {
-		t.Fatalf("health = %#v", got)
-	}
-}
-
-func TestAPISourcesList(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	var got []map[string]any
-	requestJSON(t, api, http.MethodGet, "/api/sources", nil, http.StatusOK, &got)
-	if len(got) == 0 || got[0]["id"] == "" {
-		t.Fatalf("sources = %#v", got)
-	}
-}
-
-func TestAPISourcesLocal(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	profile := map[string]any{
-		"id":               "localdemo",
-		"name":             "Local Demo",
-		"base_url":         "https://local.test/",
-		"sample_manga_url": "https://local.test/manga/demo/",
-		"enabled":          true,
-	}
-	requestJSON(t, api, http.MethodPost, "/api/sources/local", profile, http.StatusOK, nil)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/sources/export?id=localdemo", nil)
-	api.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("export status = %d; body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "id: localdemo") {
-		t.Fatalf("export body = %s", rec.Body.String())
-	}
-
-	requestJSON(t, api, http.MethodDelete, "/api/sources/local?id=localdemo", nil, http.StatusNoContent, nil)
 }
 
 func testAPI(t *testing.T) (http.Handler, func()) {
