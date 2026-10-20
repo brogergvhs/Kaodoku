@@ -19,6 +19,10 @@ struct TitleDetailView: View {
   @State private var autoTabbed = false
   @State private var activity: TitleActivity?
   @State private var pollGen = 0
+  @State private var order = ChapterOrder.number
+  @State private var ascending = false
+  @State private var page = 0
+  private let perPage = 25
 
   private var canManage: Bool {
     app.me?.can("library.manage") == true
@@ -27,21 +31,31 @@ struct TitleDetailView: View {
   var body: some View {
     List {
       if let p = progress {
-        if p.title.bannerImage != nil {
-          Section { bigCover(p).padding(.top, 70) }
-            .listRowBackground(Color.clear)
+        Section {
+          VStack(spacing: 12) {
+            bigCover(p)
+            readButton(p)
+          }
+          .padding(.top, p.title.bannerImage == nil ? 0 : 70)
         }
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets())
         Section { header(p) }
           .nordRows()
-        Section { contentHeader(p) }
-          .listRowBackground(Color.clear)
-          .listRowInsets(EdgeInsets())
-        Section(volumes ? "Volumes" : "Chapters") {
+        if activity?.busy == true || activity?.failed == true || (!p.title.linked && canManage) || p.title.volumeCount > 0 {
+          Section { contentHeader(p) }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets())
+        }
+        let sorted = ordered(p.chapters)
+        let pages = max(1, (sorted.count + perPage - 1) / perPage)
+        let current = min(page, pages - 1)
+        Section {
           if p.chapters.isEmpty {
             Text(volumes ? "No volumes yet." : "No chapters yet.")
               .font(.caption).foregroundStyle(.secondary)
           }
-          ForEach(p.chapters) { ch in
+          ForEach(sorted.dropFirst(current * perPage).prefix(perPage)) { ch in
             let local = app.store.isDownloaded(ch.id, volume: volumes)
             Button {
               readerChapter = ch
@@ -57,12 +71,41 @@ struct TitleDetailView: View {
               }
             }
           }
+          if pages > 1 {
+            HStack {
+              Button { page = current - 1 } label: { Image(systemName: "chevron.left") }
+                .disabled(current == 0)
+              Spacer()
+              Text("\(current + 1) / \(pages)").font(.caption).foregroundStyle(.secondary)
+              Spacer()
+              Button { page = current + 1 } label: { Image(systemName: "chevron.right") }
+                .disabled(current == pages - 1)
+            }
+            .buttonStyle(.borderless)
+          }
+        } header: {
+          HStack {
+            Text(volumes ? "Volumes" : "Chapters")
+            Spacer()
+            Picker("Sort by", selection: $order) {
+              ForEach(ChapterOrder.allCases, id: \.self) { Text($0.rawValue) }
+            }
+            .pickerStyle(.menu)
+            Button {
+              ascending.toggle()
+            } label: {
+              Image(systemName: ascending ? "arrow.up" : "arrow.down")
+            }
+            .accessibilityLabel(ascending ? "Ascending" : "Descending")
+          }
+          .textCase(nil)
         }
         .nordRows()
       } else {
         ProgressView()
       }
     }
+    .listSectionSpacing(.compact)
     .background(alignment: .top) {
       if let banner = progress?.title.bannerImage {
         Color.clear
@@ -76,7 +119,9 @@ struct TitleDetailView: View {
     .nordScreen()
     .navigationTitle(progress?.title.displayTitle ?? "")
     .navigationBarTitleDisplayMode(.inline)
-    .onChange(of: volumes) { pollGen += 1 }
+    .onChange(of: volumes) { pollGen += 1; page = 0 }
+    .onChange(of: order) { page = 0 }
+    .onChange(of: ascending) { page = 0 }
     .task(id: pollGen) {
       await load()
       while activity?.busy == true {
@@ -160,8 +205,13 @@ struct TitleDetailView: View {
     }
   }
 
-  /// header mirrors the web title page on mobile: centered cover on top, then
-  /// title, progress block, and the mangaDetail badges/description/genres.
+  private func ordered(_ chs: [ChapterProgress]) -> [ChapterProgress] {
+    let asc = chs.enumerated().sorted { a, b in
+      order.less(a.element, b.element) ?? (a.offset < b.offset)
+    }.map(\.element)
+    return ascending ? asc : asc.reversed()
+  }
+
   private func bigCover(_ p: TitleReadProgress) -> some View {
     HStack {
       Spacer()
@@ -172,9 +222,6 @@ struct TitleDetailView: View {
 
   private func header(_ p: TitleReadProgress) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      if p.title.bannerImage == nil {
-        bigCover(p)
-      }
       Text(p.title.displayTitle).font(.title2.bold())
       if !p.title.monitored {
         Label("Not monitored", systemImage: "bell.slash").font(.caption).foregroundStyle(.secondary)
@@ -186,8 +233,6 @@ struct TitleDetailView: View {
     }
   }
 
-  /// contentHeader is the web titleContent header: tab switcher plus the
-  /// full-width Read/Continue button above the list.
   @ViewBuilder private var activityBanner: some View {
     if let a = activity, a.busy {
       HStack(spacing: 8) {
@@ -217,7 +262,7 @@ struct TitleDetailView: View {
   private func contentHeader(_ p: TitleReadProgress) -> some View {
     VStack(spacing: 10) {
       activityBanner
-      if !p.title.linked && canManage {
+      if !p.title.linked, canManage {
         Button {
           showSources = true
         } label: {
@@ -236,20 +281,23 @@ struct TitleDetailView: View {
         }
         .pickerStyle(.segmented)
       }
-      if volumes ? p.title.volumeCount > 0 : p.title.completedCount > 0,
-         let next = p.chapters.first(where: { $0.id == p.nextChapterId })
-         ?? p.chapters.first(where: { volumes || $0.downloaded })
-      {
-        Button {
-          readerChapter = next
-        } label: {
-          Text(readLabel(p))
-            .font(.headline)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-        }
-        .buttonStyle(.borderedProminent)
+    }
+  }
+
+  @ViewBuilder private func readButton(_ p: TitleReadProgress) -> some View {
+    if volumes ? p.title.volumeCount > 0 : p.title.completedCount > 0,
+       let next = p.chapters.first(where: { $0.id == p.nextChapterId })
+       ?? p.chapters.first(where: { volumes || $0.downloaded })
+    {
+      Button {
+        readerChapter = next
+      } label: {
+        Text(readLabel(p))
+          .font(.headline)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 8)
       }
+      .buttonStyle(.borderedProminent)
     }
   }
 
@@ -260,8 +308,6 @@ struct TitleDetailView: View {
     return started ? "Continue reading" : "Read"
   }
 
-  /// actionsMenu mirrors the web title dropdown, plus the device-download
-  /// scopes; management actions stay gated like the web.
   private func actionsMenu(_ p: TitleReadProgress) -> some View {
     Menu {
       Menu {
@@ -815,5 +861,30 @@ struct ChapterRow: View {
         Image(systemName: "icloud.slash").foregroundStyle(.secondary)
       }
     }
+  }
+}
+
+enum ChapterOrder: String, CaseIterable {
+  case number = "Number", name = "Name", read = "Read", missing = "Missing"
+
+  func less(_ a: ChapterProgress, _ b: ChapterProgress) -> Bool? {
+    switch self {
+    case .number:
+      return nil
+    case .name:
+      let r = a.label.localizedStandardCompare(b.label)
+      return r == .orderedSame ? nil : r == .orderedAscending
+    case .read:
+      let x = a.readShare, y = b.readShare
+      return x == y ? nil : x < y
+    case .missing:
+      return a.downloaded == b.downloaded ? nil : !a.downloaded
+    }
+  }
+}
+
+private extension ChapterProgress {
+  var readShare: Double {
+    completed ? 1 : Double(readPages) / Double(max(totalPages, 1))
   }
 }
