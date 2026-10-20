@@ -586,6 +586,23 @@
 {{range .Controls.ExcludeTags}}<input type="hidden" name="exclude_tags" value="{{.}}">{{end}}
 {{end}}
 
+{{define "relatedSections"}}
+{{with .Relations.Items}}
+<div class="collapse collapse-arrow bg-base-100 mt-4">
+  <input type="checkbox">
+  <div class="collapse-title font-semibold">Related manga <span class="badge badge-sm badge-ghost ml-1">{{len .}}</span></div>
+  <div class="collapse-content">{{template "mangaResults" $.Relations}}</div>
+</div>
+{{end}}
+{{with .Recommendations.Items}}
+<div class="collapse collapse-arrow bg-base-100 mt-4">
+  <input type="checkbox">
+  <div class="collapse-title font-semibold">Recommended manga <span class="badge badge-sm badge-ghost ml-1">{{len .}}</span></div>
+  <div class="collapse-content">{{template "mangaResults" $.Recommendations}}</div>
+</div>
+{{end}}
+{{end}}
+
 {{define "mangaResults"}}
 {{if .Heading}}<h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-base-content/60">{{.Heading}}</h2>{{end}}
 {{if not .Items}}
@@ -641,8 +658,7 @@
       {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>
       {{else}}<a href="/manga/{{.ProviderID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
       {{if $.ShowRelations}}<div class="pointer-events-none absolute inset-x-2 bottom-2 flex">
-        {{if .RelationType}}<span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info" title="Direct connection to this manga">{{.RelationLabel}}</span>
-        {{else}}<span class="badge badge-sm max-w-full whitespace-normal bg-base-100">Recommendation</span>{{end}}
+        <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
       </div>{{end}}
     </div>
     <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{mangaTitle .Manga}}</div>

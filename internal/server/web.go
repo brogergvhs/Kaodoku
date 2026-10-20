@@ -539,17 +539,21 @@ func (u *webUI) relatedManga(w http.ResponseWriter, r *http.Request) {
 	}
 	title, err := u.svc.GetTitle(r.Context(), id)
 	if err != nil || title.CatalogMangaID == nil || !contentAllowed(r.Context(), title.IsAdult, title.ContentTags) {
-		u.frag(w, "mangaResults", mangaResults{})
+		u.frag(w, "relatedSections", relatedView{})
 		return
 	}
-	items, err := u.svc.RelatedManga(r.Context(), *title.CatalogMangaID, 12)
-	if err != nil {
-		u.frag(w, "mangaResults", mangaResults{})
-		return
+	relations, recs, _ := u.svc.RelatedManga(r.Context(), *title.CatalogMangaID, 24)
+	view := relatedView{
+		Relations:       u.mangaResultsView(r.Context(), "", "cards", relations),
+		Recommendations: u.mangaResultsView(r.Context(), "", "cards", recs),
 	}
-	view := u.mangaResultsView(r.Context(), "", "cards", items)
-	view.ShowRelations = true
-	u.frag(w, "mangaResults", view)
+	view.Relations.ShowRelations = true
+	u.frag(w, "relatedSections", view)
+}
+
+type relatedView struct {
+	Relations       mangaResults
+	Recommendations mangaResults
 }
 
 func (u *webUI) trendingManga(w http.ResponseWriter, r *http.Request) {
@@ -2890,7 +2894,7 @@ func (v searchResultView) RelationLabel() string {
 	if label := labels[v.RelationType]; label != "" {
 		return label
 	}
-	return "Direct relation"
+	return "Other"
 }
 
 type searchView struct {

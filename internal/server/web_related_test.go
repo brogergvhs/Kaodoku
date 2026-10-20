@@ -15,7 +15,6 @@ func TestRelatedMangaLabels(t *testing.T) {
 	cases := []struct{ relation, label string }{
 		{"PREQUEL", "Prequel"}, {"SEQUEL", "Sequel"}, {"SIDE_STORY", "Side story"},
 		{"SPIN_OFF", "Spin-off"}, {"ALTERNATIVE", "Alternative version"}, {"OTHER", "Direct relation"},
-		{"", "Recommendation"},
 	}
 	for _, tc := range cases {
 		for _, show := range []bool{true, false} {

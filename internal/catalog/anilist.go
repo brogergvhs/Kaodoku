@@ -134,11 +134,11 @@ func (c *AniListClient) Search(ctx context.Context, query string, limit int, fil
 	return items, searchHasMore(resp.Data.Page.PageInfo.HasNextPage, filter.Page, limit), err
 }
 
-// Related returns manga related to an AniList entry (relations first, then
-// community recommendations), deduped.
-func (c *AniListClient) Related(ctx context.Context, id int, limit int) ([]Manga, error) {
+// Related returns an AniList entry's direct manga relations (all of them) and
+// up to limit community recommendations not already among the relations.
+func (c *AniListClient) Related(ctx context.Context, id int, limit int) (relations, recommendations []Manga, err error) {
 	if limit <= 0 {
-		limit = 12
+		limit = 24
 	}
 	var resp struct {
 		Data struct {
@@ -164,41 +164,49 @@ func (c *AniListClient) Related(ctx context.Context, id int, limit int) ([]Manga
 					id type title { romaji english native } description(asHtml: false)
 					coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name }
 				} } }
-				recommendations(perPage: 12, sort: RATING_DESC) { nodes { mediaRecommendation {
+				recommendations(perPage: 50, sort: RATING_DESC) { nodes { mediaRecommendation {
 					id type title { romaji english native } description(asHtml: false)
 					coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name }
 				} } }
 			}
 		}`, map[string]any{"id": id}, &resp); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var media []anilistMedia
-	relations := make(map[string]string)
+	var related []anilistMedia
+	types := make(map[string]string)
 	for _, e := range resp.Data.Media.Relations.Edges {
-		media = append(media, e.Node)
-		relations[strconv.Itoa(e.Node.ID)] = e.RelationType
+		if e.Node.Type == "MANGA" {
+			related = append(related, e.Node)
+			types[strconv.Itoa(e.Node.ID)] = e.RelationType
+		}
 	}
+	if relations, err = anilistMediaToManga(related); err != nil {
+		return nil, nil, err
+	}
+	seen := map[string]bool{strconv.Itoa(id): true}
+	for i := range relations {
+		relations[i].RelationType = types[relations[i].ProviderID]
+		seen[relations[i].ProviderID] = true
+	}
+	var recs []anilistMedia
 	for _, n := range resp.Data.Media.Recommendations.Nodes {
-		media = append(media, n.MediaRecommendation)
+		recs = append(recs, n.MediaRecommendation)
 	}
-	items, err := anilistMediaToManga(media)
+	items, err := anilistMediaToManga(recs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	seen := map[string]bool{}
-	out := items[:0]
 	for _, m := range items {
 		if m.Format != "MANGA" || seen[m.ProviderID] {
 			continue
 		}
 		seen[m.ProviderID] = true
-		m.RelationType = relations[m.ProviderID]
-		out = append(out, m)
-		if len(out) >= limit {
+		recommendations = append(recommendations, m)
+		if len(recommendations) >= limit {
 			break
 		}
 	}
-	return out, nil
+	return relations, recommendations, nil
 }
 
 // Trending returns currently trending manga.
@@ -417,7 +425,8 @@ type anilistGetResponse struct {
 }
 
 type anilistMedia struct {
-	ID    int `json:"id"`
+	ID    int    `json:"id"`
+	Type  string `json:"type"`
 	Title struct {
 		Romaji  string `json:"romaji"`
 		English string `json:"english"`

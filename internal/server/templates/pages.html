@@ -694,15 +694,10 @@
 
 {{end}}
 
-{{if .Title.CatalogMangaID}}
-<div class="collapse collapse-arrow bg-base-100 mt-4">
-  <input type="checkbox">
-  <div class="collapse-title font-semibold">Related manga</div>
-  <div class="collapse-content">
-    <div hx-get="/ui/library/{{.Title.ID}}/related" hx-trigger="load" hx-swap="outerHTML"></div>
-  </div>
-</div>
-{{end}}
+{{if .Title.CatalogMangaID}}<div hx-get="/ui/library/{{.Title.ID}}/related" hx-trigger="load" hx-swap="outerHTML">
+  <div class="collapse bg-base-100 mt-4"><div class="collapse-title font-semibold">Related manga <span class="loading loading-spinner loading-xs ml-1 align-middle"></span></div></div>
+  <div class="collapse bg-base-100 mt-4"><div class="collapse-title font-semibold">Recommended manga <span class="loading loading-spinner loading-xs ml-1 align-middle"></span></div></div>
+</div>{{end}}
 
 {{template "titleContent" .Content}}
 

@@ -1523,16 +1523,17 @@ func (s *JobService) SyncAniListTitle(ctx context.Context, titleID int64) error 
 	return s.reconcileAniListEntry(actx, mediaID, local, status, false)
 }
 
-// RelatedManga returns AniList relations/recommendations for a catalog entry.
-func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) ([]catalog.Manga, error) {
+// RelatedManga returns a catalog entry's direct AniList relations and up to
+// limit recommendations.
+func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, err error) {
 	// Unauthenticated: see SearchAniList.
 	m, err := s.want.GetManga(ctx, catalogID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	id, err := strconv.Atoi(m.ProviderID)
 	if err != nil {
-		return nil, fmt.Errorf("catalog entry %d has no AniList id", catalogID)
+		return nil, nil, fmt.Errorf("catalog entry %d has no AniList id", catalogID)
 	}
 	return s.want.AniList().Related(ctx, id, limit)
 }
@@ -1630,12 +1631,12 @@ func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog
 		if err != nil {
 			continue
 		}
-		items, err := s.want.AniList().Related(ctx, mediaID, limit) // unauthenticated: see SearchAniList
+		relations, recs, err := s.want.AniList().Related(ctx, mediaID, limit) // unauthenticated: see SearchAniList
 		if err != nil {
 			continue // one bad seed shouldn't empty the grid
 		}
-		for _, m := range items {
-			if onList[m.ProviderID] || seen[m.ProviderID] {
+		for _, m := range append(relations, recs...) {
+			if m.Format != "MANGA" || onList[m.ProviderID] || seen[m.ProviderID] {
 				continue
 			}
 			seen[m.ProviderID] = true

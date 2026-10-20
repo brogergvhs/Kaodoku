@@ -20,8 +20,8 @@ func (unauthorizedAniList) Get(context.Context, int) (catalog.Manga, error) {
 func (unauthorizedAniList) TagVocabulary(context.Context) ([]string, []catalog.ContentTag, error) {
 	return nil, nil, nil
 }
-func (unauthorizedAniList) Related(context.Context, int, int) ([]catalog.Manga, error) {
-	return nil, nil
+func (unauthorizedAniList) Related(context.Context, int, int) ([]catalog.Manga, []catalog.Manga, error) {
+	return nil, nil, nil
 }
 func (unauthorizedAniList) Trending(context.Context, int) ([]catalog.Manga, error) {
 	return nil, nil
