@@ -282,6 +282,7 @@ struct SearchPage: Decodable {
 struct TagOption: Decodable, Identifiable, Hashable {
   var name: String
   var kind: String
+  var group: String?
   var id: String {
     name
   }

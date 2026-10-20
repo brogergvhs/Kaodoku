@@ -316,45 +316,32 @@ struct SearchFiltersSheet: View {
   @Binding var sort: String
   @Binding var dir: String
   @State private var options: [TagOption] = []
-  @State private var filter = ""
-
-  private var shown: [TagOption] {
-    filter.isEmpty ? options : options.filter { $0.name.localizedCaseInsensitiveContains(filter) }
-  }
 
   var body: some View {
     NavigationStack {
       List {
-        Section("Sort") {
-          Picker("Sort by", selection: $sort) {
-            Text("Relevance").tag("")
-            Text("Rating").tag("rating")
-            Text("Title").tag("title")
-            Text("Year").tag("year")
-            Text("Chapters").tag("chapters")
-          }
-          if !sort.isEmpty {
-            Picker("Direction", selection: $dir) {
-              Text("Descending").tag("desc")
-              Text("Ascending").tag("asc")
+        Group {
+          Section("Sort") {
+            Picker("Sort by", selection: $sort) {
+              Text("Relevance").tag("")
+              Text("Rating").tag("rating")
+              Text("Title").tag("title")
+              Text("Year").tag("year")
+              Text("Chapters").tag("chapters")
             }
-            .pickerStyle(.segmented)
-          }
-        }
-        Section("Genres & tags") {
-          TextField("Filter…", text: $filter)
-          ForEach(shown) { option in
-            HStack {
-              Text(option.name)
-              if option.kind == "genre" {
-                Text("genre").font(.caption2).foregroundStyle(.secondary)
+            if !sort.isEmpty {
+              Picker("Direction", selection: $dir) {
+                Text("Descending").tag("desc")
+                Text("Ascending").tag("asc")
               }
-              Spacer()
-              TagCycle(name: option.name, include: $includeTags, exclude: $excludeTags)
+              .pickerStyle(.segmented)
             }
           }
+          TagFilterSection(options: options, include: $includeTags, exclude: $excludeTags)
         }
+        .nordRows()
       }
+      .nordScreen()
       .navigationTitle("Filters")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -372,13 +359,94 @@ struct SearchFiltersSheet: View {
   }
 }
 
-/// TagCycle cycles a tag through neutral → include → exclude.
-struct TagCycle: View {
+struct TagFilterSection: View {
+  let options: [TagOption]
+  @Binding var include: Set<String>
+  @Binding var exclude: Set<String>
+  @State private var filter = ""
+
+  private var groups: [(title: String, tags: [String])] {
+    var order: [String] = []
+    var byGroup: [String: [String]] = [:]
+    for o in options {
+      let g = o.group ?? (o.kind == "genre" ? "Genres" : "Other")
+      if byGroup[g] == nil {
+        order.append(g)
+      }
+      byGroup[g, default: []].append(o.name)
+    }
+    if let i = order.firstIndex(of: "Genres") {
+      order.insert(order.remove(at: i), at: 0)
+    }
+    var out = order.map { (title: $0, tags: byGroup[$0] ?? []) }
+    let custom = include.union(exclude).subtracting(options.map(\.name)).sorted()
+    if !custom.isEmpty {
+      out.append((title: "Custom", tags: custom))
+    }
+    let q = filter.trimmingCharacters(in: .whitespaces)
+    guard !q.isEmpty else { return out }
+    return out.compactMap { g in
+      if g.title.localizedCaseInsensitiveContains(q) {
+        return g
+      }
+      let tags = g.tags.filter { $0.localizedCaseInsensitiveContains(q) }
+      return tags.isEmpty ? nil : (title: g.title, tags: tags)
+    }
+  }
+
+  private var summary: String {
+    var parts: [String] = []
+    if !include.isEmpty {
+      parts.append("\(include.count) included")
+    }
+    if !exclude.isEmpty {
+      parts.append("\(exclude.count) excluded")
+    }
+    return parts.isEmpty ? "Any tags" : parts.joined(separator: " · ")
+  }
+
+  var body: some View {
+    Section {
+      HStack {
+        TextField("Filter tags…", text: $filter)
+        Button("Reset") { include = []; exclude = [] }
+          .buttonStyle(.borderless)
+          .disabled(include.isEmpty && exclude.isEmpty)
+      }
+      let shown = groups
+      if shown.isEmpty {
+        Text("Nothing found.").foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity)
+      }
+      ForEach(shown, id: \.title) { group in
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(spacing: 8) {
+            Text(group.title).font(.headline)
+            Rectangle().fill(Theme.line).frame(height: 1)
+          }
+          WrapLayout(spacing: 8) {
+            ForEach(group.tags, id: \.self) { TagChip(name: $0, include: $include, exclude: $exclude) }
+          }
+        }
+        .padding(.vertical, 6)
+      }
+    } header: {
+      HStack {
+        Text("Tags & genres")
+        Spacer()
+        Text(summary).textCase(nil)
+      }
+    }
+  }
+}
+
+struct TagChip: View {
   let name: String
   @Binding var include: Set<String>
   @Binding var exclude: Set<String>
 
   var body: some View {
+    let tint: Color? = include.contains(name) ? Theme.success : exclude.contains(name) ? Theme.error : nil
     Button {
       if include.contains(name) {
         include.remove(name); exclude.insert(name)
@@ -388,13 +456,13 @@ struct TagCycle: View {
         include.insert(name)
       }
     } label: {
-      if include.contains(name) {
-        Image(systemName: "plus.circle.fill").foregroundStyle(.green)
-      } else if exclude.contains(name) {
-        Image(systemName: "minus.circle.fill").foregroundStyle(.red)
-      } else {
-        Image(systemName: "circle").foregroundStyle(.secondary)
-      }
+      Text(name)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 40)
+        .foregroundStyle(tint ?? .primary)
+        .background((tint ?? .clear).opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint ?? Theme.line))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
     }
     .buttonStyle(.plain)
   }

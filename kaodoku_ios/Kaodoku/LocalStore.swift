@@ -59,6 +59,7 @@ final class LocalStore {
     var id: Int64
     var name: String
     var cover: String?
+    var banner: String?
     var isAdult: Bool = false
     var detail: MangaDetail?
     var readCount: Int64 = 0
@@ -326,7 +327,15 @@ final class LocalStore {
     }
 
     var coverURL: URL? {
-      info.cover.map(LocalStore.root.appendingPathComponent).flatMap {
+      Self.existing(info.cover)
+    }
+
+    var bannerURL: URL? {
+      Self.existing(info.banner)
+    }
+
+    private static func existing(_ path: String?) -> URL? {
+      path.map(LocalStore.root.appendingPathComponent).flatMap {
         FileManager.default.fileExists(atPath: $0.path) ? $0 : nil
       }
     }
@@ -418,20 +427,18 @@ final class LocalStore {
 
   /// saveTitle snapshots the title card data and writes the cover image next
   /// to the chapters, so Downloads renders the web layout fully offline.
-  func saveTitle(_ info: TitleInfo, coverData: Data?) {
+  func saveTitle(_ info: TitleInfo, coverData: Data?, bannerData: Data? = nil) {
     var info = info
     let dir = dirName(titleId: info.id, titleName: info.name)
-    if let coverData {
-      let path = "\(dir)/cover.jpg"
-      try? FileManager.default.createDirectory(at: Self.root.appendingPathComponent(dir, isDirectory: true),
-                                               withIntermediateDirectories: true)
-      if (try? coverData.write(to: Self.root.appendingPathComponent(path), options: .atomic)) != nil {
-        info.cover = path
-      }
+    try? FileManager.default.createDirectory(at: Self.root.appendingPathComponent(dir, isDirectory: true),
+                                             withIntermediateDirectories: true)
+    func write(_ data: Data?, _ name: String) -> String? {
+      let path = "\(dir)/\(name)"
+      guard let data, (try? data.write(to: Self.root.appendingPathComponent(path), options: .atomic)) != nil else { return nil }
+      return path
     }
-    if info.cover == nil {
-      info.cover = titleInfo[info.id]?.cover
-    }
+    info.cover = write(coverData, "cover.jpg") ?? titleInfo[info.id]?.cover
+    info.banner = write(bannerData, "banner.jpg") ?? titleInfo[info.id]?.banner
     titleInfo[info.id] = info
     persistIndex()
   }

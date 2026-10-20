@@ -21,6 +21,8 @@ struct TitleDetailView: View {
   @State private var pollGen = 0
   @State private var order = ChapterOrder.number
   @State private var ascending = false
+  @State private var bannerRest: CGFloat?
+  @State private var bannerShift: CGFloat = 0
   @State private var page = 0
   private let perPage = 25
 
@@ -32,11 +34,10 @@ struct TitleDetailView: View {
     List {
       if let p = progress {
         Section {
-          VStack(spacing: 12) {
-            bigCover(p)
-            readButton(p)
-          }
-          .padding(.top, p.title.bannerImage == nil ? 0 : 70)
+          TitleTop(cover: Cover(path: p.title.coverImage, adult: p.title.isAdult, targetWidth: 140),
+                   name: p.title.displayTitle) { readButton(p) }
+            .padding(.top, p.title.bannerImage == nil ? 0 : 30)
+            .trackBanner(rest: $bannerRest, shift: $bannerShift)
         }
         .listRowBackground(Color.clear)
         .listRowInsets(EdgeInsets())
@@ -47,7 +48,7 @@ struct TitleDetailView: View {
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
         }
-        let sorted = ordered(p.chapters)
+        let sorted = order.sorted(p.chapters, ascending: ascending)
         let pages = max(1, (sorted.count + perPage - 1) / perPage)
         let current = min(page, pages - 1)
         Section {
@@ -71,34 +72,9 @@ struct TitleDetailView: View {
               }
             }
           }
-          if pages > 1 {
-            HStack {
-              Button { page = current - 1 } label: { Image(systemName: "chevron.left") }
-                .disabled(current == 0)
-              Spacer()
-              Text("\(current + 1) / \(pages)").font(.caption).foregroundStyle(.secondary)
-              Spacer()
-              Button { page = current + 1 } label: { Image(systemName: "chevron.right") }
-                .disabled(current == pages - 1)
-            }
-            .buttonStyle(.borderless)
-          }
+          PagerRow(page: $page, current: current, pages: pages)
         } header: {
-          HStack {
-            Text(volumes ? "Volumes" : "Chapters")
-            Spacer()
-            Picker("Sort by", selection: $order) {
-              ForEach(ChapterOrder.allCases, id: \.self) { Text($0.rawValue) }
-            }
-            .pickerStyle(.menu)
-            Button {
-              ascending.toggle()
-            } label: {
-              Image(systemName: ascending ? "arrow.up" : "arrow.down")
-            }
-            .accessibilityLabel(ascending ? "Ascending" : "Descending")
-          }
-          .textCase(nil)
+          ChapterListHeader(label: volumes ? "Volumes" : "Chapters", order: $order, ascending: $ascending)
         }
         .nordRows()
       } else {
@@ -108,12 +84,7 @@ struct TitleDetailView: View {
     .listSectionSpacing(.compact)
     .background(alignment: .top) {
       if let banner = progress?.title.bannerImage {
-        Color.clear
-          .frame(height: 320)
-          .overlay { ServerImage(path: banner, maxPixelSize: CGSize(width: 1600, height: 700)) }
-          .overlay(LinearGradient(colors: [.clear, Theme.bg], startPoint: .center, endPoint: .bottom))
-          .clipped()
-          .ignoresSafeArea(edges: .top)
+        TitleBanner(shift: bannerShift, path: banner)
       }
     }
     .nordScreen()
@@ -142,12 +113,26 @@ struct TitleDetailView: View {
     }
     .toolbar {
       if let p = progress {
-        Button {
-          toggleFavourite(p)
-        } label: {
-          Image(systemName: p.title.favourite ? "heart.fill" : "heart")
+        ToolbarItem {
+          HStack(spacing: 2) {
+            Button {
+              toggleFavourite(p)
+            } label: {
+              toolbarIcon(p.title.favourite ? "heart.fill" : "heart").foregroundStyle(Theme.error)
+            }
+            if canManage {
+              Button {
+                patch(["monitored": JSONValue.bool(!p.title.monitored)],
+                      done: p.title.monitored ? "Monitoring off" : "Monitoring on")
+              } label: {
+                toolbarIcon(p.title.monitored ? "bell.fill" : "bell").foregroundStyle(Theme.warning)
+              }
+              .accessibilityLabel(p.title.monitored ? "Stop monitoring" : "Monitor")
+            }
+            actionsMenu(p)
+          }
+          .buttonStyle(.plain)
         }
-        actionsMenu(p)
       }
     }
     .sheet(isPresented: $showRange) {
@@ -205,27 +190,8 @@ struct TitleDetailView: View {
     }
   }
 
-  private func ordered(_ chs: [ChapterProgress]) -> [ChapterProgress] {
-    let asc = chs.enumerated().sorted { a, b in
-      order.less(a.element, b.element) ?? (a.offset < b.offset)
-    }.map(\.element)
-    return ascending ? asc : asc.reversed()
-  }
-
-  private func bigCover(_ p: TitleReadProgress) -> some View {
-    HStack {
-      Spacer()
-      Cover(path: p.title.coverImage, adult: p.title.isAdult, targetWidth: 170).frame(width: 170)
-      Spacer()
-    }
-  }
-
   private func header(_ p: TitleReadProgress) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(p.title.displayTitle).font(.title2.bold())
-      if !p.title.monitored {
-        Label("Not monitored", systemImage: "bell.slash").font(.caption).foregroundStyle(.secondary)
-      }
       TitleProgressBlock(title: p.title)
       if let manga = p.manga {
         MangaDetailBlock(manga: manga)
@@ -289,15 +255,7 @@ struct TitleDetailView: View {
        let next = p.chapters.first(where: { $0.id == p.nextChapterId })
        ?? p.chapters.first(where: { volumes || $0.downloaded })
     {
-      Button {
-        readerChapter = next
-      } label: {
-        Text(readLabel(p))
-          .font(.headline)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 8)
-      }
-      .buttonStyle(.borderedProminent)
+      ReadButton(label: readLabel(p)) { readerChapter = next }
     }
   }
 
@@ -306,6 +264,13 @@ struct TitleDetailView: View {
       ? p.chapters.contains { $0.readPages > 0 || $0.completed }
       : p.readPages > 0
     return started ? "Continue reading" : "Read"
+  }
+
+  private func toolbarIcon(_ name: String) -> some View {
+    Image(systemName: name)
+      .font(.body)
+      .frame(width: 32, height: 36)
+      .contentShape(Rectangle())
   }
 
   private func actionsMenu(_ p: TitleReadProgress) -> some View {
@@ -359,12 +324,6 @@ struct TitleDetailView: View {
             post("/api/v1/anilist/sync", body: ["title_id": titleID], done: "AniList synced")
           }
         }
-        Button(p.title.monitored ? "Stop monitoring" : "Monitor",
-               systemImage: p.title.monitored ? "bell.slash" : "bell")
-        {
-          patch(["monitored": JSONValue.bool(!p.title.monitored)],
-                done: p.title.monitored ? "Monitoring off" : "Monitoring on")
-        }
         if p.title.linked {
           Button("Title settings…", systemImage: "gearshape") { showSettings = true }
         }
@@ -372,7 +331,7 @@ struct TitleDetailView: View {
         Button("Remove title…", systemImage: "trash", role: .destructive) { showRemove = true }
       }
     } label: {
-      Image(systemName: "ellipsis.circle")
+      toolbarIcon("ellipsis.circle").foregroundStyle(.tint)
     }
   }
 
@@ -392,11 +351,15 @@ struct TitleDetailView: View {
         app.store.clearPending(titleId: titleID)
       }
       let cover = try? await api.data("GET", p.title.coverImage)
+      var banner: Data?
+      if let path = p.title.bannerImage {
+        banner = try? await api.data("GET", path)
+      }
       app.store.saveTitle(LocalStore.TitleInfo(
         id: titleID, name: p.title.displayTitle, isAdult: p.title.isAdult, detail: p.manga,
         readCount: p.title.readCount, completedCount: p.title.completedCount,
         discoveredCount: p.title.discoveredCount, missingCount: p.title.missingCount
-      ), coverData: cover)
+      ), coverData: cover, bannerData: banner)
       app.store.beginPending(todo.map {
         LocalStore.Pending(id: $0.id, titleId: titleID,
                            label: volumes && !$0.title.isEmpty ? $0.title : $0.label,
@@ -707,11 +670,10 @@ struct TitleProgressBlock: View {
       if title.discoveredCount > 0 {
         BarView(read: pct(title.readCount, title.discoveredCount),
                 full: pct(title.completedCount, title.discoveredCount))
-        Text(line).font(.caption).foregroundStyle(.secondary)
+        StatsLine(left: line, right: humanBytes(title.sizeBytes))
       } else if title.volumeCount > 0 {
         BarView(read: pct(title.volumeReadCount, title.volumeCount), full: 1)
-        Text("\(title.volumeReadCount)/\(title.volumeCount) volumes read · \(humanBytes(title.volumeBytes))")
-          .font(.caption).foregroundStyle(.secondary)
+        StatsLine(left: "\(title.volumeReadCount)/\(title.volumeCount) volumes read", right: humanBytes(title.volumeBytes))
       }
     }
   }
@@ -724,7 +686,6 @@ struct TitleProgressBlock: View {
     if title.failedCount > 0 {
       parts.append("\(title.failedCount) failed")
     }
-    parts.append(humanBytes(title.sizeBytes))
     if title.volumeCount > 0 {
       parts.append("\(title.volumeReadCount)/\(title.volumeCount) vols")
     }
@@ -867,6 +828,13 @@ struct ChapterRow: View {
 enum ChapterOrder: String, CaseIterable {
   case number = "Number", name = "Name", read = "Read", missing = "Missing"
 
+  func sorted(_ chs: [ChapterProgress], ascending: Bool) -> [ChapterProgress] {
+    let asc = chs.enumerated().sorted { a, b in
+      less(a.element, b.element) ?? (a.offset < b.offset)
+    }.map(\.element)
+    return ascending ? asc : asc.reversed()
+  }
+
   func less(_ a: ChapterProgress, _ b: ChapterProgress) -> Bool? {
     switch self {
     case .number:
@@ -886,5 +854,132 @@ enum ChapterOrder: String, CaseIterable {
 private extension ChapterProgress {
   var readShare: Double {
     completed ? 1 : Double(readPages) / Double(max(totalPages, 1))
+  }
+}
+
+/// TitleTop is the title page head: cover with the name and read button beside it.
+struct TitleTop<Read: View>: View {
+  let cover: Cover
+  let name: String
+  @ViewBuilder let read: Read
+
+  var body: some View {
+    HStack(alignment: .bottom, spacing: 14) {
+      cover.frame(width: 140)
+      VStack(alignment: .leading, spacing: 10) {
+        Text(name).font(.title2.bold()).lineLimit(4)
+        read
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+}
+
+struct ReadButton: View {
+  let label: String
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(label)
+        .font(.headline)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+    .buttonStyle(.borderedProminent)
+    .buttonBorderShape(.roundedRectangle(radius: 8))
+  }
+}
+
+/// TitleBanner is the faded wide banner behind the title page, shifted up as the page scrolls.
+struct TitleBanner: View {
+  let shift: CGFloat
+  var path = ""
+  var local: URL?
+
+  var body: some View {
+    let pixels = CGSize(width: 1600, height: 700)
+    Color.clear
+      .frame(height: 320)
+      .overlay {
+        if let local {
+          LocalImage(url: local, maxPixelSize: pixels)
+        } else {
+          ServerImage(path: path, maxPixelSize: pixels)
+        }
+      }
+      .overlay(LinearGradient(colors: [.clear, Theme.bg], startPoint: .center, endPoint: .bottom))
+      .clipped()
+      .offset(y: shift)
+      .ignoresSafeArea(edges: .top)
+  }
+}
+
+extension View {
+  func trackBanner(rest: Binding<CGFloat?>, shift: Binding<CGFloat>) -> some View {
+    onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { y in
+      let start = rest.wrappedValue ?? y
+      rest.wrappedValue = start
+      shift.wrappedValue = min(0, y - start)
+    }
+  }
+}
+
+struct StatsLine: View {
+  let left: String
+  let right: String
+
+  var body: some View {
+    HStack {
+      Text(left)
+      Spacer()
+      Text(right)
+    }
+    .font(.caption).foregroundStyle(.secondary)
+  }
+}
+
+struct ChapterListHeader: View {
+  let label: String
+  @Binding var order: ChapterOrder
+  @Binding var ascending: Bool
+
+  var body: some View {
+    HStack {
+      Text(label)
+      Spacer()
+      Picker("Sort by", selection: $order) {
+        ForEach(ChapterOrder.allCases, id: \.self) { Text($0.rawValue) }
+      }
+      .pickerStyle(.menu)
+      Button {
+        ascending.toggle()
+      } label: {
+        Image(systemName: ascending ? "arrow.up" : "arrow.down")
+      }
+      .accessibilityLabel(ascending ? "Ascending" : "Descending")
+    }
+    .textCase(nil)
+  }
+}
+
+struct PagerRow: View {
+  @Binding var page: Int
+  let current: Int
+  let pages: Int
+
+  var body: some View {
+    if pages > 1 {
+      HStack {
+        Button { page = current - 1 } label: { Image(systemName: "chevron.left") }
+          .disabled(current == 0)
+        Spacer()
+        Text("\(current + 1) / \(pages)").font(.caption).foregroundStyle(.secondary)
+        Spacer()
+        Button { page = current + 1 } label: { Image(systemName: "chevron.right") }
+          .disabled(current == pages - 1)
+      }
+      .buttonStyle(.borderless)
+    }
   }
 }
