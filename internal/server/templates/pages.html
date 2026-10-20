@@ -1,27 +1,66 @@
 {{define "home"}}
-{{range .Rows}}
-<h2 class="mb-2 mt-6 first:mt-0 text-sm font-semibold uppercase tracking-wide text-base-content/60">{{.Heading}}</h2>
-<div class="flex gap-3 overflow-x-auto">
-  {{range .Cards}}
-  <a href="{{.Href}}" class="w-40 shrink-0">
-    <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300">
-      <img class="h-full w-full object-cover" src="{{.Cover}}" alt="" loading="lazy">
+{{with .Hero}}
+<section class="relative -mx-4 -mt-4 overflow-hidden bg-base-300 sm:mx-0 sm:mt-0 sm:rounded-2xl">
+  {{if .Banner}}<img class="absolute inset-0 h-full w-full object-cover" src="{{.Banner}}" alt="">
+  {{else}}<img class="absolute inset-0 h-full w-full scale-125 object-cover opacity-60 blur-2xl" src="{{.Cover}}" alt="">{{end}}
+  <div class="absolute inset-0 bg-linear-to-t from-base-100 via-base-100/75 to-base-100/10"></div>
+  <div class="relative flex items-end gap-5 p-5 pt-28 sm:p-8 sm:pt-36">
+    <a href="{{.Href}}" class="shrink-0"><img class="aspect-[5/7] w-28 rounded-xl object-cover shadow-2xl ring-1 ring-white/10 sm:w-40" src="{{.Cover}}" alt=""></a>
+    <div class="min-w-0 flex-1">
+      <p class="text-xs font-semibold uppercase tracking-widest text-primary">{{$.Eyebrow}}</p>
+      <h1 class="mt-1 line-clamp-2 text-2xl font-bold leading-tight sm:text-4xl">{{.Title}}</h1>
+      <p class="mt-1 text-sm text-base-content/70">{{.Sub}}</p>
+      {{if ge .Percent 0}}<div class="mt-3 max-w-xs">{{template "bar" bar .Percent 100}}</div>{{end}}
+      <a href="{{.Href}}" class="btn btn-primary mt-4 max-sm:btn-sm">{{$.Action}}</a>
     </div>
-    <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{.Title}}</div>
-    <div class="mt-0.5 text-xs text-base-content/50">{{.Sub}}</div>
-    {{if ge .Percent 0}}<div class="mt-1">{{template "bar" bar .Percent 100}}</div>{{end}}
-  </a>
-  {{end}}
+  </div>
+</section>
+{{end}}
+{{range .Rows}}
+<section class="mt-8 first:mt-0">
+  {{template "homeHeading" .}}
+  <div class="-mx-4 flex snap-x scroll-px-4 gap-3 overflow-x-auto px-4 pb-2 pt-1 sm:mx-0 sm:scroll-px-0 sm:px-0">
+    {{range .Cards}}
+    <a href="{{.Href}}" class="group w-36 shrink-0 snap-start sm:w-40">
+      <div class="relative aspect-[5/7] overflow-hidden rounded-xl bg-base-300 ring-1 ring-line/40 transition group-hover:ring-2 group-hover:ring-primary">
+        <img class="h-full w-full object-cover transition duration-300 group-hover:scale-105" src="{{.Cover}}" alt="" loading="lazy">
+        {{if ge .Percent 0}}
+        <div class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/85 to-transparent p-2 pt-10">
+          <div class="mb-1 text-xs font-semibold text-white">{{.Percent}}%</div>
+          {{template "bar" bar .Percent 100}}
+        </div>
+        {{end}}
+      </div>
+      <div class="mt-2 line-clamp-2 text-sm font-medium leading-tight transition group-hover:text-primary">{{.Title}}</div>
+      <div class="mt-0.5 text-xs text-base-content/50">{{.Sub}}</div>
+    </a>
+    {{end}}
+  </div>
+</section>
+{{end}}
+{{if and (not .Rows) (.User.Can "library.view")}}
+<div class="rounded-2xl border border-dashed border-line px-6 py-10 text-center">
+  <div class="mx-auto mb-3 grid size-12 place-items-center rounded-full bg-primary/15 text-primary">{{template "iconLibrary"}}</div>
+  <h2 class="text-lg font-bold">Your shelf is empty</h2>
+  <p class="mx-auto mt-1 max-w-sm text-sm text-base-content/60">Add manga and your reading activity will build this page.</p>
+  <div class="mt-4 flex justify-center gap-2">
+    {{if .User.Can "library.add"}}<a class="btn btn-primary btn-sm" href="/search">Search</a>{{end}}
+    {{if .User.Can "import.use"}}<a class="btn btn-sm" href="/import">Import</a>{{end}}
+  </div>
 </div>
 {{end}}
-{{if not .Rows}}
-{{if .User.Can "library.view"}}
-<p class="py-4 text-base-content/60">Nothing here yet — add manga from Search or Import, and your reading activity will build this page.</p>
+<section class="mt-8">
+  <h2 class="mb-3 flex items-center gap-2 text-lg font-bold"><span class="h-5 w-1 rounded-full bg-primary"></span>Suggested for you</h2>
+  <div hx-get="/ui/search/trending" hx-trigger="load" hx-swap="outerHTML">
+    <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading suggestions…</div>
+  </div>
+</section>
 {{end}}
-{{end}}
-<h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-base-content/60">Suggested for you</h2>
-<div hx-get="/ui/search/trending" hx-trigger="load" hx-swap="outerHTML">
-  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading suggestions…</div>
+
+{{define "homeHeading"}}
+<div class="mb-3 flex items-center justify-between gap-3">
+  <h2 class="flex items-center gap-2 text-lg font-bold"><span class="h-5 w-1 rounded-full bg-primary"></span>{{.Heading}}</h2>
+  {{with .Link}}<a href="{{.}}" class="flex items-center gap-1 text-sm text-base-content/60 transition hover:text-primary">See all {{template "iconChevron"}}</a>{{end}}
 </div>
 {{end}}
 

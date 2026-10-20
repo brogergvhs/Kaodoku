@@ -606,12 +606,18 @@ func (a *apiV1) tagOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type tagDTO struct {
-		Name string `json:"name"`
-		Kind string `json:"kind"`
+		Name  string `json:"name"`
+		Kind  string `json:"kind"`
+		Group string `json:"group"`
 	}
+	options = visibleTagOptions(r.Context(), options)
 	items := make([]tagDTO, 0, len(options))
 	for _, o := range options {
-		items = append(items, tagDTO{Name: o.Name, Kind: o.Kind})
+		group := "Genres"
+		if o.Kind != "genre" {
+			group = tagCategoryLabel(o.Category)
+		}
+		items = append(items, tagDTO{Name: o.Name, Kind: o.Kind, Group: group})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

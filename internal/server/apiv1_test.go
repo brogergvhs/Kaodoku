@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
+	"github.com/brogergvhs/kaodoku/internal/catalog"
 	chaptersPkg "github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/library"
@@ -747,5 +749,37 @@ func TestAPIV1TitleBanner(t *testing.T) {
 	}
 	if rec := do(t, api, http.MethodGet, fmt.Sprintf("/api/v1/banners/%d", plain), "", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("banner without image = %d, want 404", rec.Code)
+	}
+}
+
+func TestAPIV1TagsGrouped(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	db, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = catalog.NewRepository(db).ReplaceContentTags(context.Background(), []string{"Action"},
+		[]catalog.ContentTag{{Name: "Isekai", Kind: "tag", Category: "Theme-Fantasy"}, {Name: "Loner", Kind: "tag"}})
+	_ = db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Items []struct{ Name, Group string } `json:"items"`
+	}
+	_ = json.NewDecoder(do(t, New(svc, nil, nil), http.MethodGet, "/api/v1/tags", "", nil).Body).Decode(&got)
+	groups := map[string]string{}
+	for _, it := range got.Items {
+		groups[it.Name] = it.Group
+	}
+	want := map[string]string{"Action": "Genres", "Isekai": "Theme – Fantasy", "Loner": "Other"}
+	if !reflect.DeepEqual(groups, want) {
+		t.Fatalf("tag groups = %v, want %v", groups, want)
 	}
 }
