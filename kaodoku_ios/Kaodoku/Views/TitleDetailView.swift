@@ -27,6 +27,10 @@ struct TitleDetailView: View {
   var body: some View {
     List {
       if let p = progress {
+        if p.title.bannerImage != nil {
+          Section { bigCover(p).padding(.top, 70) }
+            .listRowBackground(Color.clear)
+        }
         Section { header(p) }
           .nordRows()
         Section { contentHeader(p) }
@@ -57,6 +61,16 @@ struct TitleDetailView: View {
         .nordRows()
       } else {
         ProgressView()
+      }
+    }
+    .background(alignment: .top) {
+      if let banner = progress?.title.bannerImage {
+        Color.clear
+          .frame(height: 320)
+          .overlay { ServerImage(path: banner, maxPixelSize: CGSize(width: 1600, height: 700)) }
+          .overlay(LinearGradient(colors: [.clear, Theme.bg], startPoint: .center, endPoint: .bottom))
+          .clipped()
+          .ignoresSafeArea(edges: .top)
       }
     }
     .nordScreen()
@@ -148,12 +162,18 @@ struct TitleDetailView: View {
 
   /// header mirrors the web title page on mobile: centered cover on top, then
   /// title, progress block, and the mangaDetail badges/description/genres.
+  private func bigCover(_ p: TitleReadProgress) -> some View {
+    HStack {
+      Spacer()
+      Cover(path: p.title.coverImage, adult: p.title.isAdult, targetWidth: 170).frame(width: 170)
+      Spacer()
+    }
+  }
+
   private func header(_ p: TitleReadProgress) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      HStack {
-        Spacer()
-        Cover(path: p.title.coverImage, adult: p.title.isAdult, targetWidth: 170).frame(width: 170)
-        Spacer()
+      if p.title.bannerImage == nil {
+        bigCover(p)
       }
       Text(p.title.displayTitle).font(.title2.bold())
       if !p.title.monitored {

@@ -2522,12 +2522,6 @@ func (s *JobService) Maintain(ctx context.Context) error {
 	return err
 }
 
-func (s *JobService) RunningJobs() int {
-	n := 0
-	s.running.Range(func(_, _ any) bool { n++; return true })
-	return n
-}
-
 // CancelJob aborts a job: a running job's context is cancelled; a queued or
 // awaiting-retry job is marked cancelled so it never runs.
 func (s *JobService) CancelJob(ctx context.Context, id int64) error {

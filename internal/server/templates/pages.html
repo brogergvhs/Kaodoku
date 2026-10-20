@@ -459,9 +459,17 @@
 </div>
 {{end}}
 
+{{define "titleBanner"}}{{if .}}
+<div class="relative -mx-4 -mt-4 mb-4 h-56 overflow-hidden bg-base-300 sm:mx-0 sm:mt-0 sm:h-64 sm:rounded-lg">
+  <img class="h-full w-full object-cover" src="{{.}}" alt="">
+  <div class="absolute inset-0 bg-linear-to-t from-base-100 to-transparent"></div>
+</div>
+{{end}}{{end}}
+
 {{define "catalogManga"}}
+{{template "titleBanner" .Manga.BannerImage}}
 <div class="flex gap-5 mb-4 max-lg:flex-col">
-  <figure class="shrink-0 max-lg:self-center"><img class="h-72 w-48 rounded-lg bg-base-300 object-cover" src="{{.Manga.CoverImage}}" alt="" loading="lazy"></figure>
+  <figure class="shrink-0 max-lg:self-center{{if .Manga.BannerImage}} relative -mt-28 lg:ml-4{{end}}"><img class="h-72 w-48 rounded-lg bg-base-300 object-cover" src="{{.Manga.CoverImage}}" alt="" loading="lazy"></figure>
   <div class="flex min-w-0 flex-1 flex-col gap-3">
     <h1 class="text-2xl font-bold text-balance">{{mangaTitle .Manga}}</h1>
     {{template "mangaDetail" .Manga}}
@@ -475,8 +483,9 @@
 {{end}}
 
 {{define "title"}}
+{{template "titleBanner" .Title.BannerImage}}
 <div class="flex gap-5 mb-4 max-lg:flex-col">
-  <figure class="shrink-0 max-lg:self-center"><img class="rounded-lg bg-base-300" src="{{.Title.CoverImage}}" alt="" loading="lazy"></figure>
+  <figure class="shrink-0 max-lg:self-center{{if .Title.BannerImage}} relative -mt-28 lg:ml-4{{end}}"><img class="rounded-lg bg-base-300" src="{{.Title.CoverImage}}" alt="" loading="lazy"></figure>
   <div class="flex min-w-0 flex-1 flex-col gap-3">
     <div class="flex items-start justify-between gap-3">
       <h1 class="text-2xl font-bold text-balance">{{.Title.DisplayTitle}}</h1>

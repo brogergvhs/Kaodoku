@@ -15,6 +15,7 @@ type Title struct {
 	SourceURL       string
 	DisplayTitle    string
 	CoverImage      string
+	BannerImage     string
 	CustomCover     bool
 	OutputPath      string
 	Monitored       bool

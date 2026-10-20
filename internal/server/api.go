@@ -240,6 +240,7 @@ func gzipCompressible(p string) bool {
 		"/api/v1/reader/chapters/",
 		"/api/v1/reader/volumes/",
 		"/api/v1/covers/",
+		"/api/v1/banners/",
 		"/api/v1/volumes/",
 		"/opds/v1.2/image/",
 		"/opds/v1.2/download/",

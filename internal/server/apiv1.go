@@ -59,6 +59,7 @@ func registerAPIV1(mux *http.ServeMux, svc *service.JobService, runJobs func(con
 	mux.HandleFunc("GET /api/v1/library", a.libraryList)
 	mux.HandleFunc("GET /api/v1/library/{id}", a.libraryGet)
 	mux.HandleFunc("GET /api/v1/covers/{id}", a.titleCover)
+	mux.HandleFunc("GET /api/v1/banners/{id}", a.titleBanner)
 	mux.HandleFunc("GET /api/v1/volumes/{id}/cover", func(w http.ResponseWriter, r *http.Request) { serveVolumeCover(w, r, svc) })
 
 	mux.HandleFunc("GET /api/v1/reader/titles/{id}", a.readerTitle)
@@ -421,23 +422,41 @@ func serveTitleCover(w http.ResponseWriter, r *http.Request, svc *service.JobSer
 		_, _ = w.Write(blob)
 		return
 	}
-	if !strings.HasPrefix(t.CoverImage, "https://") {
+	proxyRemoteImage(w, r, t.CoverImage)
+}
+
+func (a *apiV1) titleBanner(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, t.CoverImage, nil)
+	t, err := a.svc.GetTitle(r.Context(), id)
+	if err != nil || !contentAllowed(r.Context(), t.IsAdult, t.ContentTags) {
+		http.NotFound(w, r)
+		return
+	}
+	proxyRemoteImage(w, r, t.BannerImage)
+}
+
+func proxyRemoteImage(w http.ResponseWriter, r *http.Request, url string) {
+	if !strings.HasPrefix(url, "https://") {
+		http.NotFound(w, r)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	resp, err := coverClient.Do(req)
 	if err != nil {
-		http.Error(w, "cover fetch failed", http.StatusBadGateway)
+		http.Error(w, "image fetch failed", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "cover unavailable", http.StatusBadGateway)
+		http.Error(w, "image unavailable", http.StatusBadGateway)
 		return
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {

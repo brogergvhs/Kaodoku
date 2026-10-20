@@ -471,7 +471,7 @@ func TestAPIV1RequiresAuth(t *testing.T) {
 
 	routes := []string{
 		"GET /api/v1/me", "DELETE /api/v1/auth/token",
-		"GET /api/v1/library", "GET /api/v1/library/1", "GET /api/v1/covers/1", "GET /api/v1/volumes/1/cover",
+		"GET /api/v1/library", "GET /api/v1/library/1", "GET /api/v1/covers/1", "GET /api/v1/banners/1", "GET /api/v1/volumes/1/cover",
 		"GET /api/v1/reader/titles/1", "GET /api/v1/reader/titles/1/manifest",
 		"GET /api/v1/reader/chapters/1/pages/1", "GET /api/v1/reader/volumes/1/pages/1",
 		"POST /api/v1/reader/chapters/1/pages", "POST /api/v1/reader/chapters/1/complete",
@@ -713,5 +713,39 @@ func TestAPIV1LibraryAndJobsPaginateInSQL(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&jl)
 	if len(jl.Items) != 0 {
 		t.Fatalf("done jobs = %+v", jl.Items)
+	}
+}
+
+func TestAPIV1TitleBanner(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	plain := seedTitle(t, dbPath, "https://x.test/plain", "Plain", 1)
+	withBanner := seedTitle(t, dbPath, "https://x.test/banner", "Banner", 1)
+	db, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO catalog_manga(provider, provider_id, banner_image) VALUES ('anilist', '1', 'https://img.test/b.jpg')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE titles SET catalog_manga_id = (SELECT id FROM catalog_manga) WHERE id = ?`, withBanner); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	api := New(svc, nil, nil)
+
+	for id, want := range map[int64]string{plain: "", withBanner: fmt.Sprintf("/api/v1/banners/%d", withBanner)} {
+		var dto titleDTO
+		_ = json.NewDecoder(do(t, api, http.MethodGet, fmt.Sprintf("/api/v1/library/%d", id), "", nil).Body).Decode(&dto)
+		if dto.BannerImage != want {
+			t.Fatalf("title %d banner_image = %q, want %q", id, dto.BannerImage, want)
+		}
+	}
+	if rec := do(t, api, http.MethodGet, fmt.Sprintf("/api/v1/banners/%d", plain), "", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("banner without image = %d, want 404", rec.Code)
 	}
 }

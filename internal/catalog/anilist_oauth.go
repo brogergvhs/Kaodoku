@@ -123,7 +123,7 @@ func (c *AniListClient) UserList(ctx context.Context, anilistUserID int) ([]AniL
 			MediaListCollection(userId: $userId, type: MANGA) {
 				lists { entries { progress status media {
 					id title { romaji english native } description(asHtml: false)
-					coverImage { large } status format chapters volumes synonyms genres averageScore startDate { year } isAdult tags { name }
+					coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult tags { name }
 				} } }
 			}
 		}`, map[string]any{"userId": anilistUserID}, &resp); err != nil {

@@ -103,7 +103,7 @@ func searchQueryVars(query string, limit int, f SearchFilter) (string, map[strin
 				pageInfo { hasNextPage }
 				media(%s) {
 					id title { romaji english native } description(asHtml: false)
-					coverImage { large } status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name } staff(sort: RELEVANCE, perPage: 8) { edges { role node { name { full } } } }
+					coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name } staff(sort: RELEVANCE, perPage: 8) { edges { role node { name { full } } } }
 				}
 			}
 		}`, varDefs, mediaArgs)
@@ -162,11 +162,11 @@ func (c *AniListClient) Related(ctx context.Context, id int, limit int) ([]Manga
 			Media(id: $id, type: MANGA) {
 				relations { edges { relationType node {
 					id type title { romaji english native } description(asHtml: false)
-					coverImage { large } status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name }
+					coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name }
 				} } }
 				recommendations(perPage: 12, sort: RATING_DESC) { nodes { mediaRecommendation {
 					id type title { romaji english native } description(asHtml: false)
-					coverImage { large } status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name }
+					coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name }
 				} } }
 			}
 		}`, map[string]any{"id": id}, &resp); err != nil {
@@ -212,7 +212,7 @@ func (c *AniListClient) Trending(ctx context.Context, limit int) ([]Manga, error
 			Page(page: 1, perPage: $perPage) {
 				media(type: MANGA, format: MANGA, sort: TRENDING_DESC) {
 					id title { romaji english native } description(asHtml: false)
-					coverImage { large } status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name } staff(sort: RELEVANCE, perPage: 8) { edges { role node { name { full } } } }
+					coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name } staff(sort: RELEVANCE, perPage: 8) { edges { role node { name { full } } } }
 				}
 			}
 		}`, map[string]any{"perPage": limit}, &resp); err != nil {
@@ -222,7 +222,7 @@ func (c *AniListClient) Trending(ctx context.Context, limit int) ([]Manga, error
 }
 
 const mediaFields = `id title { romaji english native } description(asHtml: false)
-	coverImage { large } status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name } staff(sort: RELEVANCE, perPage: 8) { edges { role node { name { full } } } }`
+	coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult countryOfOrigin tags { name } staff(sort: RELEVANCE, perPage: 8) { edges { role node { name { full } } } }`
 
 // Get returns one AniList manga by ID.
 func (c *AniListClient) Get(ctx context.Context, id int) (Manga, error) {
@@ -428,6 +428,7 @@ type anilistMedia struct {
 	CoverImage      struct {
 		Large string `json:"large"`
 	} `json:"coverImage"`
+	BannerImage  string   `json:"bannerImage"`
 	Status       string   `json:"status"`
 	Format       string   `json:"format"`
 	Chapters     *int     `json:"chapters"`
@@ -472,6 +473,7 @@ func anilistMediaToManga(media []anilistMedia) ([]Manga, error) {
 			TitleNative:  item.Title.Native,
 			Description:  item.Description,
 			CoverImage:   item.CoverImage.Large,
+			BannerImage:  item.BannerImage,
 			Status:       item.Status,
 			Format:       item.Format,
 			Chapters:     item.Chapters,

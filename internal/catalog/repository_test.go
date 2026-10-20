@@ -35,12 +35,13 @@ func TestRepositoryStoresWantedMangaAndMatches(t *testing.T) {
 		TitleEnglish: "Demo Manga",
 		Chapters:     &chapters,
 		Synonyms:     []string{"Demo", "Demo"},
+		BannerImage:  "https://img.test/banner.jpg",
 		Wanted:       true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manga.Wanted || len(manga.Synonyms) != 1 {
+	if !manga.Wanted || len(manga.Synonyms) != 1 || manga.BannerImage != "https://img.test/banner.jpg" {
 		t.Fatalf("manga = %#v", manga)
 	}
 

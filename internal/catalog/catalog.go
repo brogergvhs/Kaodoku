@@ -13,6 +13,7 @@ type Manga struct {
 	TitleNative  string    `json:"title_native"`
 	Description  string    `json:"description"`
 	CoverImage   string    `json:"cover_image"`
+	BannerImage  string    `json:"banner_image,omitempty"`
 	Status       string    `json:"status"`
 	Format       string    `json:"format"`
 	Chapters     *int      `json:"chapters,omitempty"`

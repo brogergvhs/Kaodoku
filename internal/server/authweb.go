@@ -127,7 +127,7 @@ func requiredPerm(r *http.Request) string {
 		return auth.PermLibraryView
 	case strings.HasPrefix(p, "/api/v1/library") && r.Method != http.MethodGet:
 		return auth.PermLibraryManage
-	case strings.HasPrefix(p, "/api/v1/library") || strings.HasPrefix(p, "/api/v1/covers/") ||
+	case strings.HasPrefix(p, "/api/v1/library") || strings.HasPrefix(p, "/api/v1/covers/") || strings.HasPrefix(p, "/api/v1/banners/") ||
 		strings.HasPrefix(p, "/api/v1/volumes/") || strings.HasPrefix(p, "/api/v1/collections") ||
 		strings.HasPrefix(p, "/api/v1/screens") || p == "/api/v1/sources":
 		return auth.PermLibraryView

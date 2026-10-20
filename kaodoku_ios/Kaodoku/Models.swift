@@ -62,6 +62,7 @@ struct Title: Decodable, Identifiable, Hashable {
   var sourceUrl: String
   var displayTitle: String
   var coverImage: String
+  var bannerImage: String?
   var monitored: Bool
   var refreshInterval: String
   var isAdult: Bool
