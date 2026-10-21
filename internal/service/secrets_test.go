@@ -52,6 +52,7 @@ func TestEncryptLegacyTokens(t *testing.T) {
 	}
 	defer closeDB()
 
+	tagsSynced(svc)
 	if _, err := svc.db.ExecContext(ctx, `INSERT INTO tracker_accounts (user_id, provider, access_token, remote_user_id, remote_name) VALUES (1, 'anilist', 'legacy-plain', '7', 'x')`); err != nil {
 		t.Fatal(err)
 	}

@@ -117,7 +117,14 @@ func openTestJobs(t *testing.T) (*JobService, context.Context) {
 		t.Fatal(err)
 	}
 	t.Cleanup(closeDB)
+	tagsSynced(svc)
 	return svc, ctx
+}
+
+func tagsSynced(svc *JobService) {
+	for _, name := range providerOrder {
+		svc.vocabReady.Store(name, true)
+	}
 }
 
 func connect(t *testing.T, svc *JobService, ctx context.Context, provider string, created time.Time) {
@@ -472,5 +479,48 @@ func TestTrackerPrefsDriveLinkingSyncAndRelated(t *testing.T) {
 	}
 	if _, recs, _ := svc.RelatedManga(uctx, nativeWork.ID, 10); len(recs) != 1 {
 		t.Fatalf("recommendations missing once turned on: %v", recs)
+	}
+}
+
+type recommendingProvider struct {
+	*fakeProvider
+	lists, related int
+}
+
+func (r *recommendingProvider) ListEntries(ctx context.Context) ([]catalog.Entry, error) {
+	r.lists++
+	return r.fakeProvider.ListEntries(ctx)
+}
+func (r *recommendingProvider) Related(ctx context.Context, id string, limit int) ([]catalog.Manga, []catalog.Manga, error) {
+	r.related++
+	return r.fakeProvider.Related(ctx, id, limit)
+}
+func (r *recommendingProvider) Recommendations(context.Context, string, int) ([]catalog.Manga, error) {
+	return []catalog.Manga{{Provider: catalog.MangaUpdatesProvider, ProviderID: "8", TitleRomaji: "Stub", IsAdult: true}}, nil
+}
+
+func TestSuggestionsShareOneListDownloadAndUseCheapRecommendations(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	mu := &recommendingProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
+	mu.entries["1"] = catalog.Entry{Status: "CURRENT"}
+	svc.catalog.providers[catalog.MangaUpdatesProvider] = mu
+	connect(t, svc, ctx, catalog.MangaUpdatesProvider, time.Now())
+	if _, err := svc.catalog.repo.UpsertManga(ctx, catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "8", TitleRomaji: "Known", Genres: []string{"Drama"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.TrackerSuggestions(ctx, catalog.MangaUpdatesProvider)
+	got, ok := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider)
+	if !ok || len(got) != 1 || got[0].TitleRomaji != "Known" || got[0].IsAdult {
+		t.Fatalf("suggestions = %+v, want the stub filled from the stored record", got)
+	}
+	if mu.lists != 1 || mu.related != 0 {
+		t.Fatalf("list downloads = %d, Related calls = %d; want 1 and 0", mu.lists, mu.related)
+	}
+	svc.invalidateRecs(1)
+	svc.TrackerSuggestions(ctx, catalog.MangaUpdatesProvider)
+	if mu.lists != 2 {
+		t.Fatal("a sync must drop the cached list")
 	}
 }

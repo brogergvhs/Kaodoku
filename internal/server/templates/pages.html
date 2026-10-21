@@ -161,10 +161,14 @@
               {{template "viewButtons" .Controls.View}}
             </div>
           </div>
+          <div class="fieldset"><span class="fieldset-legend">Library</span>
+            <label class="flex h-10 cursor-pointer items-center gap-2 text-sm">
+              <input type="hidden" name="hide_library" value="false">
+              <input type="checkbox" class="toggle" name="hide_library" value="true" {{if .Controls.HideLibrary}}checked{{end}}>Hide titles in my library
+            </label>
+          </div>
         </div>
-        <div class="filter-panel grid grid-cols-1 items-start gap-2 sm:grid-cols-2">
-          {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
-        </div>
+        {{template "searchTags" .}}
       </div>
       <div class="modal-action m-0 shrink-0 border-t border-line/40 px-4 py-3"><button type="button" class="btn btn-primary" onclick="this.closest('dialog').close()">Done</button></div>
     </div>
@@ -176,6 +180,13 @@
 <div id="search-results"><div hx-post="/ui/search" hx-include="#search-form" hx-trigger="load" hx-swap="outerHTML">
   <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading…</div>
 </div></div>
+{{end}}
+
+{{define "searchTags"}}
+<div id="search-tags" class="filter-panel grid grid-cols-1 items-start gap-2 sm:grid-cols-2"{{if .OOB}} hx-swap-oob="true"{{end}}>
+  <input type="hidden" name="tags_for" value="{{.Controls.Provider}}">
+  {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
+</div>
 {{end}}
 
 {{define "library"}}

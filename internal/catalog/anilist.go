@@ -290,7 +290,7 @@ func (c *AniListClient) Resolve(ctx context.Context, provider, id string) (strin
 }
 
 // TagVocabulary returns AniList's global genre and tag name lists.
-func (c *AniListClient) TagVocabulary(ctx context.Context) (genres []string, tags []ContentTag, err error) {
+func (c *AniListClient) TagVocabulary(ctx context.Context) ([]ContentTag, error) {
 	var resp struct {
 		Data struct {
 			GenreCollection    []string `json:"GenreCollection"`
@@ -303,14 +303,18 @@ func (c *AniListClient) TagVocabulary(ctx context.Context) (genres []string, tag
 		} `json:"data"`
 	}
 	if err := c.do(ctx, `query { GenreCollection MediaTagCollection { name category description isAdult } }`, nil, &resp); err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	var tags []ContentTag
+	for _, g := range resp.Data.GenreCollection {
+		tags = append(tags, ContentTag{Name: g, Kind: "genre"})
 	}
 	for _, t := range resp.Data.MediaTagCollection {
 		if t.Name != "" {
 			tags = append(tags, ContentTag{Name: t.Name, Kind: "tag", Category: t.Category, Description: t.Description, IsAdult: t.IsAdult})
 		}
 	}
-	return resp.Data.GenreCollection, tags, nil
+	return tags, nil
 }
 
 // send paces the request through the client limiter and, when AniList still

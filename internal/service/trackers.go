@@ -763,11 +763,7 @@ func (s *JobService) TrackerSuggestions(ctx context.Context, provider string) []
 		if provider != "" && name != provider {
 			continue
 		}
-		p, actx, ok := s.trackerSession(ctx, uid, name)
-		if !ok {
-			continue
-		}
-		entries, err := p.ListEntries(actx)
+		entries, err := s.cachedEntries(ctx, uid, name)
 		if err != nil {
 			continue
 		}
@@ -780,6 +776,35 @@ func (s *JobService) TrackerSuggestions(ctx context.Context, provider string) []
 		lists = append(lists, list)
 	}
 	return mergeManga(lists, nil, 0)
+}
+
+type cachedList struct {
+	entries []catalog.Entry
+	expires time.Time
+}
+
+// cachedEntries shares one list download between the search page's suggestion boxes until the next sync.
+// ponytail: one lock serializes every user's list fetch; per-key locks if many users connect trackers.
+func (s *JobService) cachedEntries(ctx context.Context, uid int64, provider string) ([]catalog.Entry, error) {
+	key := fmt.Sprintf("%d:%s", uid, provider)
+	s.listMu.Lock()
+	defer s.listMu.Unlock()
+	if c, ok := s.listCache[key]; ok && time.Now().Before(c.expires) {
+		return c.entries, nil
+	}
+	p, actx, ok := s.trackerSession(ctx, uid, provider)
+	if !ok {
+		return nil, fmt.Errorf("%s is not connected", provider)
+	}
+	entries, err := p.ListEntries(actx)
+	if err != nil {
+		return nil, err
+	}
+	if s.listCache == nil {
+		s.listCache = map[string]cachedList{}
+	}
+	s.listCache[key] = cachedList{entries, time.Now().Add(recommendationTTL)}
+	return entries, nil
 }
 
 // ProviderSuggestions approximates a backend's own suggestions from community
@@ -797,7 +822,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 	if !ok {
 		return nil, false
 	}
-	entries, err := p.ListEntries(actx)
+	entries, err := s.cachedEntries(ctx, uid, provider)
 	if err != nil {
 		return nil, false
 	}
@@ -824,11 +849,24 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 	}
 	var lists [][]catalog.Manga
 	for _, id := range seeds {
-		if _, recs, err := s.relatedCached(ctx, p, id, 24); err == nil {
+		var recs []catalog.Manga
+		if r, ok := p.(catalog.Recommender); ok {
+			recs, err = r.Recommendations(actx, id, 24)
+		} else {
+			_, recs, err = s.relatedCached(ctx, p, id, 24)
+		}
+		if err == nil {
 			lists = append(lists, recs)
 		}
 	}
 	items := mergeManga(lists, exclude, 0)
+	for i, m := range items {
+		if len(m.Genres) == 0 && len(m.Tags) == 0 {
+			if stored, ok, _ := s.catalog.repo.MangaByProvider(ctx, m.Provider, m.ProviderID); ok && len(stored.Genres) > 0 {
+				items[i] = stored
+			}
+		}
+	}
 	s.recMu.Lock()
 	if s.sugCache == nil {
 		s.sugCache = map[string]cachedRecs{}

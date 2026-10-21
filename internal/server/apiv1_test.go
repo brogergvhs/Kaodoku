@@ -763,8 +763,8 @@ func TestAPIV1TagsGrouped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = catalog.NewRepository(db).ReplaceContentTags(context.Background(), []string{"Action"},
-		[]catalog.ContentTag{{Name: "Isekai", Kind: "tag", Category: "Theme-Fantasy"}, {Name: "Loner", Kind: "tag"}})
+	err = catalog.NewRepository(db).ReplaceContentTags(context.Background(), catalog.AniListProvider,
+		[]catalog.ContentTag{{Name: "Action", Kind: "genre"}, {Name: "Isekai", Kind: "tag", Category: "Theme-Fantasy"}, {Name: "Loner", Kind: "tag"}})
 	_ = db.Close()
 	if err != nil {
 		t.Fatal(err)

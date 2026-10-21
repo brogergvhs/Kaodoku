@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,11 +132,10 @@ func (d kitsuDoc) manga(r kitsuResource) Manga {
 	}
 	for _, ref := range r.refs("categories") {
 		if cat, ok := d.find(ref); ok {
-			var ca struct {
-				Title string `json:"title"`
-			}
+			var ca kitsuCategory
 			if json.Unmarshal(cat.Attributes, &ca) == nil && ca.Title != "" {
 				m.Genres = append(m.Genres, ca.Title)
+				m.IsAdult = m.IsAdult || ca.NSFW || AdultName(ca.Title)
 			}
 		}
 	}
@@ -185,12 +185,42 @@ func (c *KitsuClient) Search(ctx context.Context, query string, limit int, f Sea
 		limit = 10
 	}
 	q := url.Values{"page[limit]": {strconv.Itoa(min(limit, 20))}, "page[offset]": {strconv.Itoa(max(f.Page-1, 0) * limit)}, "include": {"categories"}}
+	if in := slices.Concat(f.GenreIn, f.TagIn); len(in) > 0 {
+		q.Set("filter[categories]", strings.Join(in, ","))
+	}
 	if query = strings.TrimSpace(query); query != "" {
 		q.Set("filter[text]", query)
 	} else {
 		q.Set("sort", "-userCount")
 	}
 	return c.list(ctx, "/manga", q)
+}
+
+type kitsuCategory struct {
+	Title       string `json:"title"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	NSFW        bool   `json:"nsfw"`
+}
+
+// TagVocabulary pages through Kitsu's categories; search filters take their slugs.
+func (c *KitsuClient) TagVocabulary(ctx context.Context) ([]ContentTag, error) {
+	var out []ContentTag
+	for offset := 0; ; offset += 20 {
+		var doc kitsuDoc
+		if err := c.do(ctx, http.MethodGet, "/categories?"+url.Values{"page[limit]": {"20"}, "page[offset]": {strconv.Itoa(offset)}}.Encode(), nil, &doc); err != nil {
+			return nil, err
+		}
+		for _, r := range doc.resources() {
+			var ca kitsuCategory
+			if json.Unmarshal(r.Attributes, &ca) == nil && ca.Title != "" {
+				out = append(out, ContentTag{Name: ca.Title, Kind: "genre", Slug: ca.Slug, Description: ca.Description, IsAdult: ca.NSFW})
+			}
+		}
+		if doc.Links.Next == "" {
+			return out, nil
+		}
+	}
 }
 
 func (c *KitsuClient) Trending(ctx context.Context, limit int) ([]Manga, error) {

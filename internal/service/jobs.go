@@ -50,11 +50,14 @@ type JobService struct {
 	recMu      sync.Mutex
 	recCache   map[int64]cachedRecs // user ID -> recommendation grid
 	sugCache   map[string]cachedRecs
+	listMu     sync.Mutex
+	listCache  map[string]cachedList
 	relMu      sync.Mutex
 	relCache   map[string]cachedRelated
 	adultMu    sync.Mutex
 	adultTags  []string // vocabulary names flagged adult, briefly cached
 	adultExp   time.Time
+	vocabReady sync.Map
 	kotMu      sync.Mutex
 	kotSources []kotatsu.Source
 	kotExp     time.Time
@@ -408,13 +411,6 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 	go func() {
 		if _, err := svc.lib.ScanDownloads(ctx, nil, 0); err != nil && ctx.Err() == nil {
 			log.Printf("startup download stats scan failed: %v", err)
-		}
-	}()
-	go func() {
-		if tags, err := svc.catalog.repo.ContentTags(ctx); err == nil && !hasAdultTag(tags) {
-			if err := svc.refreshTagVocabulary(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("startup tag vocabulary refresh failed: %v", err)
-			}
 		}
 	}()
 	return svc, func() { _ = db.Close() }, nil
@@ -844,47 +840,73 @@ func statusRank(status string) int {
 
 func errs2err(errs []error) error { return errors.Join(errs...) }
 
-func hasAdultTag(tags []catalog.ContentTag) bool {
-	for _, t := range tags {
-		if t.IsAdult {
-			return true
+// refreshTagVocabulary re-fetches every configured provider's genre and tag lists.
+func (s *JobService) refreshTagVocabulary(ctx context.Context) error {
+	var errs []error
+	for _, name := range providerOrder {
+		if s.providerConfigured(ctx, name) {
+			errs = append(errs, s.syncVocabulary(ctx, name))
 		}
 	}
-	return false
+	return errors.Join(errs...)
 }
 
-// refreshTagVocabulary re-fetches AniList's global genre/tag lists, the
-// shared content-guard vocabulary.
-func (s *JobService) refreshTagVocabulary(ctx context.Context) error {
-	vocab, ok := s.catalog.providers[catalog.AniListProvider].(catalog.Vocabulary)
+// SyncPendingVocabularies fetches the tag lists of configured providers that have none yet; they stay unavailable until then.
+func (s *JobService) SyncPendingVocabularies(ctx context.Context) {
+	for _, name := range providerOrder {
+		if s.providerConfigured(ctx, name) && s.vocabPending(name) {
+			if err := s.syncVocabulary(ctx, name); err != nil && ctx.Err() == nil {
+				log.Printf("%s tag sync failed: %v", name, err)
+			}
+		}
+	}
+}
+
+func (s *JobService) syncVocabulary(ctx context.Context, name string) error {
+	vocab, ok := s.catalog.providers[name].(catalog.Vocabulary)
 	if !ok {
 		return nil
 	}
-	genres, tags, err := vocab.TagVocabulary(ctx)
+	tags, err := vocab.TagVocabulary(ctx)
 	if err != nil {
-		return fmt.Errorf("tag vocabulary: %w", err)
+		return fmt.Errorf("%s tag vocabulary: %w", name, err)
 	}
-	if len(genres) == 0 && len(tags) == 0 {
-		return fmt.Errorf("tag vocabulary: anilist returned nothing; keeping the stored one")
+	if len(tags) == 0 {
+		return fmt.Errorf("%s tag vocabulary: provider returned nothing; keeping the stored one", name)
 	}
-	if err := s.catalog.repo.ReplaceContentTags(ctx, genres, tags); err != nil {
+	if err := s.catalog.repo.ReplaceContentTags(ctx, name, tags); err != nil {
 		return err
 	}
+	s.vocabReady.Store(name, true)
 	s.adultMu.Lock()
 	s.adultExp = time.Time{}
 	s.adultMu.Unlock()
 	return nil
 }
 
-// StoredContentTags returns the stored vocabulary without remote fetching.
-func (s *JobService) StoredContentTags(ctx context.Context) ([]catalog.ContentTag, error) {
-	return s.catalog.repo.ContentTags(ctx)
+func (s *JobService) vocabPending(name string) bool {
+	if _, ok := s.catalog.providers[name].(catalog.Vocabulary); !ok {
+		return false
+	}
+	if _, ok := s.vocabReady.Load(name); ok {
+		return false
+	}
+	if s.catalog.repo.HasProviderTags(context.Background(), name) {
+		s.vocabReady.Store(name, true)
+		return false
+	}
+	return true
 }
 
-// seedAdultTags guards non-adult users before the live vocabulary loads or when
-// AniList is unreachable; mirrors MediaTagCollection.isAdult.
+// ProviderTags is one provider's genre and tag vocabulary, for its search filters.
+func (s *JobService) ProviderTags(ctx context.Context, provider string) ([]catalog.ContentTag, error) {
+	return s.catalog.repo.ProviderTags(ctx, provider)
+}
+
+// seedAdultTags guards non-adult users before provider vocabularies load: AniList's
+// isAdult tags plus the explicit genres of MyAnimeList, Kitsu and MangaUpdates.
 var seedAdultTags = []string{
-	"Hentai",
+	"Hentai", "Adult", "Smut", "Erotica", "Lolicon", "Shotacon",
 	"Ahegao", "Amputation", "Anal Sex", "Armpits", "Ashikoki", "Asphyxiation",
 	"Bondage", "Boobjob", "Cervix Penetration", "Cheating", "Cumflation",
 	"Cunnilingus", "DILF", "Deepthroat", "Defloration", "Double Penetration",
@@ -899,8 +921,8 @@ var seedAdultTags = []string{
 	"Threesome", "Virginity", "Vore", "Voyeur", "Watersports", "Zoophilia",
 }
 
-// AdultTagNames returns the seed plus any stored adult names, fetching the
-// vocabulary when empty; it never returns nil, so the guard fails closed.
+// AdultTagNames returns the seed plus every provider's stored adult names; it
+// never returns nil, so the guard fails closed.
 func (s *JobService) AdultTagNames(ctx context.Context) []string {
 	s.adultMu.Lock()
 	if time.Now().Before(s.adultExp) && s.adultTags != nil {
@@ -910,11 +932,6 @@ func (s *JobService) AdultTagNames(ctx context.Context) []string {
 	s.adultMu.Unlock()
 
 	tags, err := s.catalog.repo.ContentTags(ctx)
-	if (err != nil || len(tags) == 0) && ctx.Err() == nil {
-		if refreshErr := s.refreshTagVocabulary(ctx); refreshErr == nil {
-			tags, err = s.catalog.repo.ContentTags(ctx)
-		}
-	}
 
 	names := make(map[string]bool, len(seedAdultTags)+len(tags))
 	for _, n := range seedAdultTags {
@@ -941,16 +958,8 @@ func (s *JobService) AdultTagNames(ctx context.Context) []string {
 	return out
 }
 
-// ContentTagOptions returns the stored tag/genre vocabulary for pickers,
-// fetching it once from AniList when nothing is stored yet.
+// ContentTagOptions returns every provider's merged vocabulary for pickers; WatchProviders keeps it filled.
 func (s *JobService) ContentTagOptions(ctx context.Context) ([]catalog.ContentTag, error) {
-	tags, err := s.catalog.repo.ContentTags(ctx)
-	if err != nil || len(tags) > 0 {
-		return tags, err
-	}
-	if err := s.refreshTagVocabulary(ctx); err != nil {
-		return nil, err
-	}
 	return s.catalog.repo.ContentTags(ctx)
 }
 
@@ -1009,14 +1018,22 @@ func (s *JobService) cacheRecs(uid int64, items []catalog.Manga) {
 
 // invalidateRecs drops a user's cached recommendations on tracker changes.
 func (s *JobService) invalidateRecs(userID int64) {
+	prefix := fmt.Sprintf("%d:", userID)
 	s.recMu.Lock()
 	delete(s.recCache, userID)
 	for key := range s.sugCache {
-		if strings.HasPrefix(key, fmt.Sprintf("%d:", userID)) {
+		if strings.HasPrefix(key, prefix) {
 			delete(s.sugCache, key)
 		}
 	}
 	s.recMu.Unlock()
+	s.listMu.Lock()
+	for key := range s.listCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.listCache, key)
+		}
+	}
+	s.listMu.Unlock()
 }
 
 // MangaByIDs returns catalog manga keyed by ID in one query.

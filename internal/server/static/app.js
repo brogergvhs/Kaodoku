@@ -408,6 +408,7 @@ document.addEventListener("click", function (e) {
   updateFilterCounts();
 });
 updateFilterCounts();
+document.body.addEventListener("htmx:oobAfterSwap", updateFilterCounts);
 
 // Tag picker: keep the "N selected" summary in sync with the checkboxes.
 document.addEventListener("change", function (e) {

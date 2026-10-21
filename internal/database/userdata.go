@@ -43,6 +43,7 @@ var restoreClearOnlyTables = []string{
 	"title_source_matches",
 	"catalog_relations",
 	"content_tags",
+	"provider_tags",
 }
 
 func BackupUserData(ctx context.Context, dbPath, outPath string) error {

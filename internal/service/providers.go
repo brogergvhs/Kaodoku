@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -60,17 +61,21 @@ func (s *JobService) providerEnabled(ctx context.Context, name string) bool {
 	return s.providerConfigured(ctx, name) && s.ProviderOutage(name) == ""
 }
 
-// ProviderOutage is the last outage a provider reported, empty while it is reachable.
+// ProviderOutage is why a provider is unusable right now: its last reported outage, or a tag list still to sync.
 func (s *JobService) ProviderOutage(name string) string {
-	if h, ok := s.catalog.providers[name].(interface{ Outage() string }); ok {
+	if h, ok := s.catalog.providers[name].(interface{ Outage() string }); ok && h.Outage() != "" {
 		return h.Outage()
+	}
+	if s.vocabPending(name) {
+		return "syncing its tags and genres"
 	}
 	return ""
 }
 
-// WatchProviders pings providers in outage every minute and the rest every ten, so outages switch them off server-wide.
+// WatchProviders syncs missing tag lists, pings providers in outage every minute and the rest every ten, so outages switch them off server-wide.
 func (s *JobService) WatchProviders(ctx context.Context) {
 	for tick := 0; ; tick++ {
+		s.SyncPendingVocabularies(ctx)
 		for _, name := range providerOrder {
 			if s.providerConfigured(ctx, name) && (tick%10 == 0 || s.ProviderOutage(name) != "") {
 				pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -156,6 +161,22 @@ func (s *JobService) SearchManga(ctx context.Context, provider, query string, li
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return nil, false, err
+	}
+	if tags, _ := s.catalog.repo.ProviderTags(ctx, p.Name()); len(tags) > 0 {
+		keys := map[string]string{}
+		for _, t := range tags {
+			keys[strings.ToLower(t.Name)] = cmp.Or(t.Slug, t.Name)
+		}
+		known := func(names []string) []string {
+			var out []string
+			for _, n := range names {
+				if k, ok := keys[strings.ToLower(strings.TrimSpace(n))]; ok {
+					out = append(out, k)
+				}
+			}
+			return out
+		}
+		filter.GenreIn, filter.TagIn, filter.GenreNotIn, filter.TagNotIn = known(filter.GenreIn), known(filter.TagIn), known(filter.GenreNotIn), known(filter.TagNotIn)
 	}
 	return s.catalog.Search(ctx, p, query, limit, filter)
 }

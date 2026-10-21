@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -206,34 +207,30 @@ func (r *Repository) CollectionEdges(ctx context.Context) ([][2]string, error) {
 	return out, rows.Err()
 }
 
-// ContentTag is one AniList genre or tag name, for content-guard pickers.
+// ContentTag is one provider genre or tag name, for filters and content-guard pickers.
 type ContentTag struct {
 	Name        string
 	Kind        string // "genre" or "tag"
-	Category    string // AniList tag category, e.g. "Theme-Fantasy"; empty for genres
+	Category    string // tag group, e.g. AniList's "Theme-Fantasy"; empty for genres
 	Description string
+	Slug        string // provider filter key when it differs from Name
 	IsAdult     bool
 }
 
-// ReplaceContentTags swaps the stored tag/genre vocabulary.
-func (r *Repository) ReplaceContentTags(ctx context.Context, genres []string, tags []ContentTag) error {
+// ReplaceContentTags swaps one provider's stored vocabulary.
+func (r *Repository) ReplaceContentTags(ctx context.Context, provider string, tags []ContentTag) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM content_tags`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM provider_tags WHERE provider = ?`, provider); err != nil {
 		return err
-	}
-	for _, name := range cleanStrings(genres) {
-		adult := strings.EqualFold(name, "Hentai")
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_tags (name, kind, is_adult) VALUES (?, 'genre', ?)`, name, adult); err != nil {
-			return err
-		}
 	}
 	for _, t := range tags {
 		if name := strings.TrimSpace(t.Name); name != "" {
-			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_tags (name, kind, category, description, is_adult) VALUES (?, 'tag', ?, ?, ?)`, name, t.Category, t.Description, t.IsAdult); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO provider_tags (provider, name, kind, category, description, slug, is_adult) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				provider, name, cmp.Or(t.Kind, "tag"), t.Category, t.Description, t.Slug, t.IsAdult || AdultName(name)); err != nil {
 				return err
 			}
 		}
@@ -241,9 +238,25 @@ func (r *Repository) ReplaceContentTags(ctx context.Context, genres []string, ta
 	return tx.Commit()
 }
 
-// ContentTags lists the stored vocabulary, genres first, alphabetical within.
+// ContentTags merges every provider's vocabulary by name; a name adult anywhere stays adult.
 func (r *Repository) ContentTags(ctx context.Context) ([]ContentTag, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT name, kind, category, description, is_adult FROM content_tags ORDER BY kind = 'genre' DESC, category COLLATE NOCASE, name COLLATE NOCASE`)
+	return r.contentTags(ctx, `SELECT name, MIN(kind), MAX(category), MAX(description), '', MAX(is_adult) FROM provider_tags
+		GROUP BY name COLLATE NOCASE ORDER BY MIN(kind) = 'genre' DESC, MAX(category) COLLATE NOCASE, name COLLATE NOCASE`)
+}
+
+// ProviderTags lists one provider's vocabulary, genres first.
+func (r *Repository) ProviderTags(ctx context.Context, provider string) ([]ContentTag, error) {
+	return r.contentTags(ctx, `SELECT name, kind, category, description, slug, is_adult FROM provider_tags WHERE provider = ?
+		ORDER BY kind = 'genre' DESC, category COLLATE NOCASE, name COLLATE NOCASE`, provider)
+}
+
+func (r *Repository) HasProviderTags(ctx context.Context, provider string) bool {
+	var one int
+	return r.db.QueryRowContext(ctx, `SELECT 1 FROM provider_tags WHERE provider = ? LIMIT 1`, provider).Scan(&one) == nil
+}
+
+func (r *Repository) contentTags(ctx context.Context, query string, args ...any) ([]ContentTag, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +264,7 @@ func (r *Repository) ContentTags(ctx context.Context) ([]ContentTag, error) {
 	var out []ContentTag
 	for rows.Next() {
 		var t ContentTag
-		if err := rows.Scan(&t.Name, &t.Kind, &t.Category, &t.Description, &t.IsAdult); err != nil {
+		if err := rows.Scan(&t.Name, &t.Kind, &t.Category, &t.Description, &t.Slug, &t.IsAdult); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

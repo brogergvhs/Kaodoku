@@ -87,6 +87,16 @@ CREATE TABLE IF NOT EXISTS content_tags (
 	name TEXT PRIMARY KEY,
 	kind TEXT NOT NULL DEFAULT 'tag'
 );
+CREATE TABLE IF NOT EXISTS provider_tags (
+	provider TEXT NOT NULL,
+	name TEXT NOT NULL,
+	kind TEXT NOT NULL DEFAULT 'tag',
+	category TEXT NOT NULL DEFAULT '',
+	description TEXT NOT NULL DEFAULT '',
+	slug TEXT NOT NULL DEFAULT '',
+	is_adult INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (provider, name)
+);
 CREATE TABLE IF NOT EXISTS catalog_relations (
 	from_id TEXT NOT NULL,
 	to_id TEXT NOT NULL,
@@ -522,6 +532,10 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if _, err = tx.ExecContext(ctx, `UPDATE sources SET domains_json = '[]' WHERE scraper LIKE 'kotatsu:%'`); err != nil {
 			return fmt.Errorf("clear kotatsu snapshot domains: %w", err)
 		}
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO provider_tags (provider, name, kind, category, description, is_adult)
+		SELECT 'anilist', name, kind, category, description, is_adult FROM content_tags; DELETE FROM content_tags`); err != nil {
+		return fmt.Errorf("migrate content tags: %w", err)
 	}
 	if err = migrateAniListAccounts(ctx, tx); err != nil {
 		return fmt.Errorf("migrate anilist accounts: %w", err)

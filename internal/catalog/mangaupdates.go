@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -66,8 +67,6 @@ type muSeries struct {
 
 const muRelatedDetails = 12
 
-var muAdultGenres = map[string]bool{"adult": true, "hentai": true, "smut": true, "lolicon": true, "shotacon": true}
-
 func (s muSeries) manga() Manga {
 	year, _ := strconv.Atoi(string(s.Year))
 	m := Manga{
@@ -91,7 +90,7 @@ func (s muSeries) manga() Manga {
 	}
 	for _, g := range s.Genres {
 		m.Genres = append(m.Genres, g.Genre)
-		if muAdultGenres[strings.ToLower(g.Genre)] {
+		if AdultName(g.Genre) {
 			m.IsAdult = true
 		}
 	}
@@ -117,6 +116,12 @@ func (c *MangaUpdatesClient) Search(ctx context.Context, query string, limit int
 	} else {
 		body["orderby"] = "rating"
 	}
+	if in := slices.Concat(f.GenreIn, f.TagIn); len(in) > 0 {
+		body["genre"] = in
+	}
+	if out := slices.Concat(f.GenreNotIn, f.TagNotIn); len(out) > 0 {
+		body["exclude_genre"] = out
+	}
 	var resp struct {
 		TotalHits int `json:"total_hits"`
 		Results   []struct {
@@ -131,6 +136,21 @@ func (c *MangaUpdatesClient) Search(ctx context.Context, query string, limit int
 		out = append(out, r.Record.manga())
 	}
 	return out, page*limit < resp.TotalHits, nil
+}
+
+func (c *MangaUpdatesClient) TagVocabulary(ctx context.Context) ([]ContentTag, error) {
+	var genres []struct {
+		Genre       string `json:"genre"`
+		Description string `json:"description"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/genres", nil, &genres); err != nil {
+		return nil, err
+	}
+	out := make([]ContentTag, 0, len(genres))
+	for _, g := range genres {
+		out = append(out, ContentTag{Name: g.Genre, Kind: "genre", Description: g.Description})
+	}
+	return out, nil
 }
 
 func (c *MangaUpdatesClient) Trending(ctx context.Context, limit int) ([]Manga, error) {
@@ -174,13 +194,27 @@ func (c *MangaUpdatesClient) Related(ctx context.Context, id string, limit int) 
 		m.RelationType = normRelation(r.RelationType)
 		relations = append(relations, m)
 	}
+	return relations, s.recommendations(limit), nil
+}
+
+func (c *MangaUpdatesClient) Recommendations(ctx context.Context, id string, limit int) ([]Manga, error) {
+	s, err := c.series(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.recommendations(limit), nil
+}
+
+// recommendations come without genres, so they stay adult until their details load.
+func (s muSeries) recommendations(limit int) []Manga {
+	var out []Manga
 	for _, r := range s.Recommendations {
-		if limit > 0 && len(recommendations) >= limit {
+		if limit > 0 && len(out) >= limit {
 			break
 		}
-		recommendations = append(recommendations, Manga{Provider: MangaUpdatesProvider, ProviderID: strconv.FormatInt(r.SeriesID, 10), TitleRomaji: r.SeriesName, CoverImage: r.SeriesImage.URL.Original, IsAdult: true})
+		out = append(out, Manga{Provider: MangaUpdatesProvider, ProviderID: strconv.FormatInt(r.SeriesID, 10), TitleRomaji: r.SeriesName, CoverImage: r.SeriesImage.URL.Original, IsAdult: true})
 	}
-	return relations, recommendations, nil
+	return out
 }
 
 func (c *MangaUpdatesClient) Viewer(ctx context.Context) (string, string, error) {

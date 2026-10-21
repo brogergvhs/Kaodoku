@@ -78,9 +78,20 @@ type Favouriter interface {
 	ToggleFavourite(ctx context.Context, id string) error
 }
 
-type Vocabulary interface {
-	TagVocabulary(ctx context.Context) (genres []string, tags []ContentTag, err error)
+// Vocabulary lists a provider's own genre and tag names, the ones its search filters and manga use.
+// Recommender returns community recommendations alone, cheaper than Related when relations need extra requests.
+type Recommender interface {
+	Recommendations(ctx context.Context, id string, limit int) ([]Manga, error)
 }
+
+type Vocabulary interface {
+	TagVocabulary(ctx context.Context) ([]ContentTag, error)
+}
+
+var adultNames = map[string]bool{"adult": true, "hentai": true, "smut": true, "erotica": true, "lolicon": true, "shotacon": true}
+
+// AdultName reports genre names that mark explicit content on any provider.
+func AdultName(name string) bool { return adultNames[strings.ToLower(strings.TrimSpace(name))] }
 
 type Resolver interface {
 	Resolve(ctx context.Context, provider, id string) (string, bool, error)

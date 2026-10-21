@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -584,11 +585,10 @@ func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 	if term == "" && filter.Sort == "" {
 		filter.Sort = "POPULARITY_DESC"
 	}
-	if len(include) > 0 || len(exclude) > 0 {
-		if options, err := a.svc.ContentTagOptions(r.Context()); err == nil && len(options) > 0 {
-			filter.GenreIn, filter.TagIn = splitByKind(include, options)
-			filter.GenreNotIn, filter.TagNotIn = splitByKind(exclude, options)
-		}
+	if options, err := a.svc.ProviderTags(r.Context(), cmp.Or(q.Get("provider"), a.svc.DefaultProvider(r.Context()))); err == nil && len(options) > 0 {
+		filter.GenreIn, filter.TagIn = splitByKind(include, options)
+		filter.GenreNotIn, filter.TagNotIn = splitByKind(exclude, options)
+		excludeBlocked(r.Context(), &filter, options)
 	}
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page < 1 {
@@ -654,9 +654,12 @@ func (a *apiV1) libraryAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toTitleDTO(title))
 }
 
-// tagOptions lists the genre/tag vocabulary for search filter pickers.
+// tagOptions lists the genre/tag vocabulary for filter pickers: one provider's with ?provider=, else all merged.
 func (a *apiV1) tagOptions(w http.ResponseWriter, r *http.Request) {
 	options, err := a.svc.ContentTagOptions(r.Context())
+	if p := r.URL.Query().Get("provider"); p != "" {
+		options, err = a.svc.ProviderTags(r.Context(), p)
+	}
 	if err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return

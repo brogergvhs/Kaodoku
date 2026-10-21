@@ -3,6 +3,7 @@ package server
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"context"
 	"embed"
 	"encoding/json"
@@ -625,6 +626,14 @@ func (u *webUI) guardedBrowse(ctx context.Context, c searchControls) mangaResult
 	return u.mangaResultsView(ctx, "", c.View, items)
 }
 
+// excludeBlocked asks the provider to leave out the acting user's blocked and adult tags, so pages aren't emptied by the local guard.
+func excludeBlocked(ctx context.Context, filter *catalog.SearchFilter, options []catalog.ContentTag) {
+	if usr := auth.FromContext(ctx); usr != nil {
+		genres, tags := splitByKind(usr.BlockedTags, options)
+		filter.GenreNotIn, filter.TagNotIn = append(filter.GenreNotIn, genres...), append(filter.TagNotIn, tags...)
+	}
+}
+
 // guardedBrowseManga is a popularity browse pre-filtered by the acting user's
 // tag guards, shared by the web and v1 trending fallbacks.
 func guardedBrowseManga(ctx context.Context, svc *service.JobService, provider, sort, dir string) []catalog.Manga {
@@ -633,12 +642,12 @@ func guardedBrowseManga(ctx context.Context, svc *service.JobService, provider, 
 		filter.Sort = "POPULARITY_DESC"
 	}
 	if usr := auth.FromContext(ctx); usr != nil {
-		if options, err := svc.ContentTagOptions(ctx); err == nil && len(options) > 0 {
+		if options, err := svc.ProviderTags(ctx, cmp.Or(provider, svc.DefaultProvider(ctx))); err == nil && len(options) > 0 {
 			genres, tags := splitByKind(usr.AllowedTags, options)
 			if len(genres) == 0 || len(tags) == 0 {
 				filter.GenreIn, filter.TagIn = genres, tags
 			}
-			filter.GenreNotIn, filter.TagNotIn = splitByKind(usr.BlockedTags, options)
+			excludeBlocked(ctx, &filter, options)
 		}
 	}
 	items, _, err := svc.SearchManga(ctx, provider, "", 18, filter)
@@ -811,10 +820,7 @@ func (u *webUI) libraryPage(w http.ResponseWriter, r *http.Request) {
 	}
 	view.OpenEditor = values.Get("new-screen") == "1" || (view.Screen != nil && values.Get("edit") == "1")
 	view.ShowEditor = view.Screen != nil || view.OpenEditor
-	view.TagOptions, _ = u.svc.StoredContentTags(r.Context())
-	if len(view.TagOptions) == 0 && view.ShowEditor {
-		view.TagOptions, _ = u.svc.ContentTagOptions(r.Context())
-	}
+	view.TagOptions, _ = u.svc.ContentTagOptions(r.Context())
 	view.TagOptions = visibleTagOptions(r.Context(), view.TagOptions)
 	view.Controls = libraryControlsFrom(screenDefaults(values, view.Screen))
 	view.SourceOptions = u.librarySourceOptions(r.Context())
@@ -2966,6 +2972,7 @@ type searchView struct {
 	Controls   searchControls
 	TagOptions []catalog.ContentTag
 	Providers  []catalog.Provider
+	OOB        bool
 }
 
 type searchControls struct {
@@ -2976,6 +2983,7 @@ type searchControls struct {
 	View        string
 	IncludeTags []string
 	ExcludeTags []string
+	HideLibrary bool
 }
 
 func searchControlsFrom(values url.Values) searchControls {
@@ -2987,6 +2995,7 @@ func searchControlsFrom(values url.Values) searchControls {
 		View:        values.Get("view"),
 		IncludeTags: tagList(values["include_tags"]),
 		ExcludeTags: tagList(values["exclude_tags"]),
+		HideLibrary: len(values["hide_library"]) == 0 || values["hide_library"][len(values["hide_library"])-1] == "true",
 	}
 	switch c.Sort {
 	case "rating", "title", "year", "chapters":
@@ -3090,7 +3099,7 @@ func (u *webUI) searchPage(w http.ResponseWriter, r *http.Request) {
 	if view.Controls.Provider == "" {
 		view.Controls.Provider = u.svc.DefaultProvider(r.Context())
 	}
-	options, _ := u.svc.StoredContentTags(r.Context())
+	options, _ := u.svc.ProviderTags(r.Context(), view.Controls.Provider)
 	view.TagOptions = visibleTagOptions(r.Context(), options)
 	u.page(w, r, "search", "Search", view)
 }
@@ -3101,6 +3110,7 @@ type searchResultsView struct {
 	Controls  searchControls
 	View      string
 	NextPage  int  // 0 = no further pages
+	Skip      int  // results of NextPage already shown
 	RetryPage int  // set with Error: the page to retry
 	Append    bool // page 2+: suppress the empty-state text
 	Error     bool
@@ -3111,6 +3121,14 @@ const searchPerPage = 18
 func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	c := searchControlsFrom(r.Form)
+	if c.Provider == "" {
+		c.Provider = u.svc.DefaultProvider(r.Context())
+	}
+	options, _ := u.svc.ProviderTags(r.Context(), c.Provider)
+	if tagsFor := r.FormValue("tags_for"); tagsFor != "" && tagsFor != c.Provider {
+		c.IncludeTags, c.ExcludeTags = nil, nil
+		u.frag(w, "searchTags", searchView{Controls: c, TagOptions: visibleTagOptions(r.Context(), options), OOB: true})
+	}
 	filtered := len(c.IncludeTags) > 0 || len(c.ExcludeTags) > 0
 	page, _ := strconv.Atoi(r.FormValue("page"))
 	if page < 1 {
@@ -3121,23 +3139,19 @@ func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 		filter.Sort = "POPULARITY_DESC"
 	}
 	if filtered {
-		if options, err := u.svc.ContentTagOptions(r.Context()); err == nil && len(options) > 0 {
-			filter.GenreIn, filter.TagIn = splitByKind(c.IncludeTags, options)
-			filter.GenreNotIn, filter.TagNotIn = splitByKind(c.ExcludeTags, options)
-		}
+		filter.GenreIn, filter.TagIn = splitByKind(c.IncludeTags, options)
+		filter.GenreNotIn, filter.TagNotIn = splitByKind(c.ExcludeTags, options)
 	}
+	excludeBlocked(r.Context(), &filter, options)
 	view := searchResultsView{Controls: c, View: c.View, Append: page > 1}
 	if c.Q == "" && !filtered && c.Sort == "" {
-		provider := c.Provider
-		if provider == "" {
-			provider = u.svc.DefaultProvider(r.Context())
-		}
-		if pool, ok := u.svc.ProviderSuggestions(r.Context(), provider); ok && len(pool) > 0 {
+		pool, _ := u.svc.ProviderSuggestions(r.Context(), c.Provider)
+		if pool = allowedManga(r.Context(), pool); len(pool) > 0 {
 			start := min((page-1)*searchPerPage, len(pool))
 			end := min(start+searchPerPage, len(pool))
 			view.Results = u.mangaResultsView(r.Context(), "", view.View, pool[start:end])
 			if page == 1 {
-				view.Results.Heading = "Suggested from your " + u.svc.ProviderLabel(provider) + " list"
+				view.Results.Heading = "Suggested from your " + u.svc.ProviderLabel(c.Provider) + " list"
 			}
 			if end < len(pool) {
 				view.NextPage = page + 1
@@ -3146,28 +3160,59 @@ func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var items []catalog.Manga
-	more, last := false, page
-	for scan := 0; scan < 3; scan++ {
-		last = page + scan
-		filter.Page = last
-		fetched, m, err := u.svc.SearchManga(r.Context(), c.Provider, c.Q, searchPerPage, filter)
-		if err != nil {
-			log.Printf("%s search failed: %v", c.Provider, err)
-			view.Error, view.RetryPage = true, page
-			u.frag(w, "searchResults", view)
-			return
+	inLibrary := u.svc.LibraryIndex(r.Context())
+	skip, _ := strconv.Atoi(r.FormValue("skip"))
+	items, next, nextSkip, err := fillPage(page, skip, func(p int) ([]catalog.Manga, bool, error) {
+		filter.Page = p
+		fetched, more, err := u.svc.SearchManga(r.Context(), c.Provider, c.Q, searchPerPage, filter)
+		kept := allowedManga(r.Context(), filterManga(fetched, c))
+		if c.HideLibrary {
+			kept = slices.DeleteFunc(kept, func(x catalog.Manga) bool {
+				return slices.ContainsFunc(catalog.Keys(x), func(k string) bool { return inLibrary[k] > 0 })
+			})
 		}
-		items, more = filterManga(fetched, c), m
-		if len(items) > 0 || !more {
+		return kept, more, err
+	})
+	if err != nil {
+		log.Printf("%s search failed: %v", c.Provider, err)
+		view.Error, view.RetryPage, view.Skip = true, page, skip
+		u.frag(w, "searchResults", view)
+		return
+	}
+	view.NextPage, view.Skip = next, nextSkip
+	view.Results = u.mangaResultsView(r.Context(), "", view.View, items)
+	u.frag(w, "searchResults", view)
+}
+
+// fillPage gathers exactly searchPerPage results from up to three provider pages,
+// skipping the ones of the first page already shown; next is 0 at the end.
+func fillPage(page, skip int, fetch func(page int) ([]catalog.Manga, bool, error)) (items []catalog.Manga, next, nextSkip int, err error) {
+	more, last, start, kept := false, page, 0, 0
+	for scan := 0; scan < 3 && len(items) < searchPerPage; scan++ {
+		got, m, err := fetch(page + scan)
+		if err != nil && len(items) == 0 {
+			return nil, 0, 0, err
+		}
+		if err != nil {
+			more = true
+			break
+		}
+		start = 0
+		if scan == 0 {
+			start = min(skip, len(got))
+		}
+		items, more, last, kept = append(items, got[start:]...), m, page+scan, len(got)-start
+		if !more {
 			break
 		}
 	}
-	view.Results = u.mangaResultsView(r.Context(), "", view.View, items)
-	if more {
-		view.NextPage = last + 1
+	if extra := len(items) - searchPerPage; extra > 0 {
+		return items[:searchPerPage], last, start + kept - extra, nil
 	}
-	u.frag(w, "searchResults", view)
+	if more {
+		return items, last + 1, 0, nil
+	}
+	return items, 0, 0, nil
 }
 
 func (u *webUI) addToLibrary(w http.ResponseWriter, r *http.Request) {
@@ -4017,6 +4062,9 @@ func (u *webUI) settingsSave(w http.ResponseWriter, r *http.Request) {
 			u.fail(w, err)
 			return
 		}
+	}
+	if r.FormValue(service.SettingMALClientID) != "" {
+		go u.svc.SyncPendingVocabularies(context.WithoutCancel(r.Context()))
 	}
 	// Appearance changes need a reload to re-render with the new theme.
 	if themeAfter, _ := u.theme(r.Context()); themeAfter != themeBefore || r.FormValue(service.SettingUITheme) == "custom" {

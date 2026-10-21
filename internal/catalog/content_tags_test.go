@@ -22,12 +22,13 @@ func TestContentTagsAdultRoundTrip(t *testing.T) {
 	}
 
 	repo := NewRepository(db)
-	genres := []string{"Action", "Hentai"}
 	tags := []ContentTag{
+		{Name: "Action", Kind: "genre"},
+		{Name: "Hentai", Kind: "genre"},
 		{Name: "Kids", Kind: "tag"},
 		{Name: "Bondage", Kind: "tag", IsAdult: true},
 	}
-	if err := repo.ReplaceContentTags(ctx, genres, tags); err != nil {
+	if err := repo.ReplaceContentTags(ctx, AniListProvider, tags); err != nil {
 		t.Fatalf("ReplaceContentTags() error = %v", err)
 	}
 	stored, err := repo.ContentTags(ctx)
@@ -47,6 +48,24 @@ func TestContentTagsAdultRoundTrip(t *testing.T) {
 	if adult["Action"] || adult["Kids"] {
 		t.Error("Action and Kids must not be adult")
 	}
+
+	if err := repo.ReplaceContentTags(ctx, KitsuProvider, []ContentTag{{Name: "action", Kind: "genre", Slug: "action"}, {Name: "Smut", Kind: "genre"}, {Name: "Space", Kind: "genre", Slug: "space"}}); err != nil {
+		t.Fatal(err)
+	}
+	merged, _ := repo.ContentTags(ctx)
+	kitsu, _ := repo.ProviderTags(ctx, KitsuProvider)
+	if len(merged) != 6 || len(kitsu) != 3 || kitsu[2].Slug != "space" || !kitsu[1].IsAdult {
+		t.Fatalf("merged=%+v kitsu=%+v", merged, kitsu)
+	}
+	if !repo.HasProviderTags(ctx, KitsuProvider) || repo.HasProviderTags(ctx, MALProvider) {
+		t.Fatal("HasProviderTags wrong")
+	}
+	if err := repo.ReplaceContentTags(ctx, KitsuProvider, []ContentTag{{Name: "Space", Kind: "genre"}}); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := repo.ContentTags(ctx); len(again) != 5 {
+		t.Fatalf("replacing one provider touched another: %+v", again)
+	}
 }
 
 func TestContentTagsCategoryRoundTrip(t *testing.T) {
@@ -62,7 +81,8 @@ func TestContentTagsCategoryRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := NewRepository(db)
-	if err := repo.ReplaceContentTags(ctx, []string{"Action"}, []ContentTag{
+	if err := repo.ReplaceContentTags(ctx, AniListProvider, []ContentTag{
+		{Name: "Action", Kind: "genre"},
 		{Name: "Time Travel", Kind: "tag", Category: "Setting-Time", Description: "Moves through time"},
 	}); err != nil {
 		t.Fatalf("ReplaceContentTags() error = %v", err)

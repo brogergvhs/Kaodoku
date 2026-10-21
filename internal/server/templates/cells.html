@@ -561,6 +561,7 @@
 <form class="py-2 text-center text-sm" hx-post="/ui/search" hx-target="this" hx-swap="outerHTML" hx-indicator="#search-spin">
   {{template "searchResultsState" .}}
   <input type="hidden" name="page" value="{{.RetryPage}}">
+  <input type="hidden" name="skip" value="{{.Skip}}">
   <span class="text-error">Search failed.</span>
   <button type="submit" class="btn btn-xs btn-outline">Retry</button>
 </form>
@@ -573,6 +574,7 @@
 <form class="py-2 text-center" hx-post="/ui/search" hx-target="this" hx-swap="outerHTML" hx-indicator="#search-spin">
   {{template "searchResultsState" .}}
   <input type="hidden" name="page" value="{{.NextPage}}">
+  <input type="hidden" name="skip" value="{{.Skip}}">
   <button type="submit" class="btn btn-sm btn-outline">Show more</button>
 </form>
 {{end}}

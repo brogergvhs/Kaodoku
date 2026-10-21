@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brogergvhs/kaodoku/internal/catalog"
 	chaptersPkg "github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/library"
@@ -381,5 +382,46 @@ func TestMeAndServerPagesSplitSettings(t *testing.T) {
 	}
 	if !strings.Contains(me, "Content preferences") || !allow(true) || allow(false) || !strings.Contains(get("/me"), `value="kitsu" checked`) {
 		t.Fatal("content preferences do not round-trip on /me")
+	}
+}
+
+func TestSearchSwapsTagPickerWithBackend(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	svc, closeDB, err := service.OpenJobs(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	db, err := database.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := catalog.NewRepository(db)
+	if err := repo.ReplaceContentTags(ctx, catalog.MALProvider, []catalog.ContentTag{{Name: "Gourmet", Kind: "genre"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceContentTags(ctx, catalog.AniListProvider, []catalog.ContentTag{{Name: "Isekai", Kind: "tag"}}); err != nil {
+		t.Fatal(err)
+	}
+	api := New(svc, func(context.Context) (service.RunSummary, error) { return service.RunSummary{}, nil },
+		func(context.Context, string) (service.SourceVerifyResult, error) {
+			return service.SourceVerifyResult{}, nil
+		})
+	search := func(form url.Values) string {
+		req := httptest.NewRequest(http.MethodPost, "/ui/search", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	swapped := search(url.Values{"provider": {"mal"}, "tags_for": {"anilist"}, "include_tags": {"Isekai"}})
+	if !strings.Contains(swapped, `id="search-tags" class="filter-panel grid grid-cols-1 items-start gap-2 sm:grid-cols-2" hx-swap-oob="true"`) ||
+		!strings.Contains(swapped, `data-tag-name="Gourmet"`) || strings.Contains(swapped, "Isekai") || !strings.Contains(swapped, `name="tags_for" value="mal"`) {
+		t.Fatalf("backend switch should swap in MAL's tags and drop AniList picks:\n%s", swapped)
+	}
+	if same := search(url.Values{"provider": {"mal"}, "tags_for": {"mal"}}); strings.Contains(same, "hx-swap-oob") {
+		t.Fatal("tag picker re-sent without a backend change")
 	}
 }
