@@ -139,7 +139,7 @@
       <div class="filter-modal-body">
         <div class="search-filter-controls filter-display-controls">
           {{if gt (len .Providers) 1}}<div class="fieldset"><span class="fieldset-legend">Backend</span>
-            <select name="provider" class="select w-full" aria-label="Search backend">{{range .Providers}}<option value="{{.Name}}" {{if eq .Name $.Controls.Provider}}selected{{end}}>{{.Label}}</option>{{end}}</select>
+            <select name="provider" class="select w-full" aria-label="Search backend">{{range .Providers}}<option value="{{.Name}}" {{if eq .Name $.Controls.Provider}}selected{{end}}{{with outage .Name}} disabled title="Temporarily unavailable: {{.}}"{{end}}>{{.Label}}{{if outage .Name}} (unavailable){{end}}</option>{{end}}</select>
           </div>{{end}}
           <div class="fieldset filter-sort"><span class="fieldset-legend">Sort</span>
             <div class="flex items-center gap-1.5">
@@ -750,7 +750,7 @@
   <div class="flex items-center gap-2">
     {{if gt (len .Providers) 1}}<select name="provider" class="select select-sm w-auto shrink-0" aria-label="Search backend"
       hx-post="/ui/import/{{pathEscape .Folder}}/search" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML" hx-trigger="change">
-      {{range .Providers}}<option value="{{.Name}}" {{if eq .Name $.Provider}}selected{{end}}>{{.Label}}</option>{{end}}</select>
+      {{range .Providers}}<option value="{{.Name}}" {{if eq .Name $.Provider}}selected{{end}}{{with outage .Name}} disabled title="Temporarily unavailable: {{.}}"{{end}}>{{.Label}}{{if outage .Name}} (unavailable){{end}}</option>{{end}}</select>
     {{else}}<input type="hidden" name="provider" value="{{.Provider}}">{{end}}
     <input name="q" class="input input-sm w-full" value="{{.Query}}" placeholder="Refine search…"
       hx-post="/ui/import/{{pathEscape .Folder}}/search" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML" hx-trigger="keyup changed delay:500ms">
@@ -854,8 +854,18 @@
 {{end}}
 
 {{define "settings"}}
+{{if .Personal}}
 <div hx-get="/ui/account" hx-trigger="load" hx-swap="outerHTML"></div>
 {{if .Trackers.Cards}}{{template "trackerCards" .Trackers}}{{end}}
+{{with .Content}}
+<form class="card bg-base-100 card-body p-4 gap-3 mb-4" hx-post="/ui/account/content" hx-target="#toast">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Content preferences</h2>
+  {{template "contentGuards" .}}
+  <button class="btn btn-primary btn-sm">Save preferences</button>
+</form>
+{{end}}
+{{end}}
+{{if .Groups}}
 <form class="grid gap-4" hx-put="/ui/settings" hx-target="#toast">
   {{range .Groups}}
   {{if eq .Title "Appearance"}}
@@ -895,6 +905,15 @@
       {{template "settingInput" .}}
     </div>
     {{end}}
+    {{range .Apps}}
+    <div class="flex items-center justify-between gap-4 py-3 border-b border-base-200 last:border-0">
+      <div class="min-w-0">
+        <div class="font-medium">{{.Label}}</div>
+        <div class="text-sm text-base-content/60">{{if .Configured}}App connected. Users can connect their {{.Label}} accounts.{{else}}No app set up. Users can't connect {{.Label}} accounts yet.{{end}}</div>
+      </div>
+      <button type="button" class="btn btn-sm {{if .Configured}}btn-outline{{else}}btn-primary{{end}} shrink-0" onclick="document.getElementById('app-{{.Provider}}').showModal()">{{if .Configured}}{{template "iconEdit"}}Edit{{else}}{{template "iconPlus"}}Connect{{end}}</button>
+    </div>
+    {{end}}
   </div>
   {{end}}
   {{end}}
@@ -902,6 +921,27 @@
     <button class="w-full btn btn-primary btn-sm">Save settings</button>
   </div>
 </form>
+{{range .Groups}}{{range .Apps}}
+<dialog id="app-{{.Provider}}" class="modal">
+  <form class="modal-box grid max-w-md gap-3" hx-put="/ui/settings" hx-target="#toast" hx-on::after-request="if (event.detail.successful) location.reload()">
+    <div class="flex items-start justify-between gap-2">
+      <h3 class="text-lg font-bold">{{.Label}} app</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+    </div>
+    <p class="text-sm text-base-content/60">Register an app on {{.Label}} with this redirect URL:</p>
+    <code class="rounded bg-base-200 px-2 py-1 text-xs break-all select-all">{{.Redirect}}</code>
+    {{range .Fields}}
+    <label class="fieldset"><span class="fieldset-legend">{{.Label}}</span>
+      <input class="input input-sm w-full" name="{{.Key}}" value="{{.Value}}"{{if eq .Kind "secret"}} type="password" autocomplete="off"{{end}}>
+      <span class="label whitespace-normal">{{.Desc}}</span>
+    </label>
+    {{end}}
+    <button class="btn btn-sm btn-primary">Save</button>
+  </form>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{{end}}{{end}}
+{{end}}
 {{end}}
 
 {{define "settingInput"}}
@@ -1225,14 +1265,7 @@
         <input class="input w-full" name="oidc_subject" value="{{.User.OIDCSubject}}" placeholder="IdP subject (sub claim); blank unlinks">
         <span class="text-xs text-base-content/50">Links this account to your identity provider for SSO sign-in.</span></label>
       {{end}}
-      {{template "tagPicker" tagPicker .TagOptions .User.BlockedTags "blocked_tags" "Blocked tags/genres" "Matching manga are hidden from this user everywhere."}}
-      {{template "tagPicker" tagPicker .TagOptions .User.AllowedTags "allowed_tags" "Include tags/genres (only)" "When set, only manga carrying at least one of these are shown."}}
-      {{template "providerBlocks" providerBlocks .ProviderOptions .User.BlockedProviders}}
-      <label class="label cursor-pointer justify-start gap-2">
-        <input type="checkbox" class="checkbox checkbox-sm" name="allow_adult"{{if .User.AllowAdult}} checked{{end}}>
-        <span><span class="text-sm font-medium">Allow adult content</span>
-        <span class="block text-xs text-base-content/50">Adult-flagged manga appear in search, the library and suggestions.</span></span>
-      </label>
+      {{template "contentGuards" .}}
       <div class="modal-action">
         <button type="button" class="btn btn-ghost" onclick="document.getElementById('user-edit-modal').remove()">Cancel</button>
         <button class="btn btn-primary">Save</button>
@@ -1241,6 +1274,17 @@
   </div>
   <div class="modal-backdrop" onclick="document.getElementById('user-edit-modal').remove()"></div>
 </dialog>
+{{end}}
+
+{{define "contentGuards"}}
+{{template "tagPicker" tagPicker .TagOptions .User.BlockedTags "blocked_tags" "Blocked tags/genres" "Matching manga are hidden from this user everywhere."}}
+{{template "tagPicker" tagPicker .TagOptions .User.AllowedTags "allowed_tags" "Include tags/genres (only)" "When set, only manga carrying at least one of these are shown."}}
+{{template "providerBlocks" providerBlocks .ProviderOptions .User.BlockedProviders}}
+<label class="label cursor-pointer justify-start gap-2">
+  <input type="checkbox" class="checkbox checkbox-sm" name="allow_adult"{{if .User.AllowAdult}} checked{{end}}>
+  <span><span class="text-sm font-medium">Allow adult content</span>
+  <span class="block text-xs text-base-content/50">Adult-flagged manga appear in search, the library and suggestions.</span></span>
+</label>
 {{end}}
 
 {{define "roleEditModal"}}

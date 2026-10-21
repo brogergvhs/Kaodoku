@@ -141,8 +141,10 @@ func requiredPerm(r *http.Request) string {
 		return auth.PermUsersManage + "|" + auth.PermUsersApprove
 	case p == "/users" || strings.HasPrefix(p, "/ui/users"):
 		return auth.PermUsersManage
-	case p == "/settings" || p == "/ui/settings":
+	case p == "/settings" || p == "/me" || p == "/ui/settings":
 		return ""
+	case p == "/server":
+		return auth.PermSettingsManage
 	case p == "/sources" || strings.HasPrefix(p, "/ui/sources"):
 		return auth.PermSourcesManage
 	case p == "/ui/health":

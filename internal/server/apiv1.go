@@ -175,6 +175,7 @@ type trackerDTO struct {
 	Name      string `json:"name,omitempty"`
 	ExpiresAt string `json:"expires_at,omitempty"`
 	LastError string `json:"last_error,omitempty"`
+	Outage    string `json:"unavailable,omitempty"`
 }
 
 type meUserDTO struct {

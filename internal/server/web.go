@@ -179,11 +179,20 @@ func titleSourceView(title library.Title, active, failed bool, msg string, match
 
 type settingsView struct {
 	Groups   []settingGroup
+	Personal bool
 	Trackers trackersView
+	Content  *userEditView
 }
 type settingGroup struct {
 	Title  string
 	Fields []settingField
+	Apps   []settingApp
+}
+
+type settingApp struct {
+	Provider, Label, Redirect string
+	Configured                bool
+	Fields                    []settingField
 }
 type settingField struct {
 	Key, Label, Desc, Value string
@@ -326,7 +335,9 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /import", u.importPage)
 	mux.HandleFunc("GET /sources", u.sourcesPage)
 	mux.HandleFunc("GET /backups", u.backupsPage)
-	mux.HandleFunc("GET /settings", u.settingsPage)
+	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/me", http.StatusMovedPermanently) })
+	mux.HandleFunc("GET /me", u.mePage)
+	mux.HandleFunc("GET /server", u.serverPage)
 
 	mux.HandleFunc("POST /ui/search", u.search)
 	mux.HandleFunc("POST /ui/library/add", u.addToLibrary)
@@ -439,6 +450,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/library/{id}/providers/search", u.titleProviderSearch)
 	mux.HandleFunc("POST /ui/library/{id}/providers/set", u.titleProviderSet)
 	mux.HandleFunc("GET /ui/account", u.accountFrag)
+	mux.HandleFunc("POST /ui/account/content", u.accountContent)
 	mux.HandleFunc("POST /ui/account/password", u.accountPassword)
 	mux.HandleFunc("POST /ui/account/sessions/revoke", u.accountRevokeSessions)
 	mux.HandleFunc("POST /ui/account/tokens", u.accountTokenCreate)
@@ -2905,20 +2917,29 @@ func (u *webUI) backupDownload(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, p)
 }
 
-func (u *webUI) settingsPage(w http.ResponseWriter, r *http.Request) {
+func (u *webUI) mePage(w http.ResponseWriter, r *http.Request) {
 	view := u.settings(r.Context())
-	view.Trackers = u.trackerCards(r)
-	for _, g := range view.Groups {
-		for i, f := range g.Fields {
-			switch f.Key {
-			case service.SettingAniListClientID:
-				g.Fields[i].Desc += " Redirect URL: " + trackerRedirectURL(r, catalog.AniListProvider)
-			case service.SettingMALClientID:
-				g.Fields[i].Desc += " Redirect URL: " + trackerRedirectURL(r, catalog.MALProvider)
-			}
+	view.Groups = slices.DeleteFunc(view.Groups, func(g settingGroup) bool { return g.Title != "Appearance" })
+	view.Personal, view.Trackers = true, u.trackerCards(r)
+	if user := userFrom(r.Context()); user.Can(auth.PermUsersManage) {
+		if me, err := u.svc.Auth().GetUser(r.Context(), user.ID); err == nil && me != nil {
+			opts, _ := u.svc.ContentTagOptions(r.Context())
+			view.Content = &userEditView{User: *me, TagOptions: opts, ProviderOptions: u.providerOptions()}
 		}
 	}
-	u.page(w, r, "settings", "Settings", view)
+	u.page(w, r, "settings", "My settings", view)
+}
+
+func (u *webUI) serverPage(w http.ResponseWriter, r *http.Request) {
+	view := u.settings(r.Context())
+	view.Groups = slices.DeleteFunc(view.Groups, func(g settingGroup) bool { return g.Title == "Appearance" })
+	for _, g := range view.Groups {
+		for i := range g.Apps {
+			g.Apps[i].Redirect = trackerRedirectURL(r, g.Apps[i].Provider)
+			g.Apps[i].Configured = g.Apps[i].Fields[0].Value != ""
+		}
+	}
+	u.page(w, r, "settings", "Server", view)
 }
 
 // --- search & add ---
@@ -3065,7 +3086,7 @@ func filterSortManga(items []catalog.Manga, c searchControls) []catalog.Manga {
 }
 
 func (u *webUI) searchPage(w http.ResponseWriter, r *http.Request) {
-	view := searchView{Controls: searchControlsFrom(r.URL.Query()), Providers: u.svc.Providers(r.Context())}
+	view := searchView{Controls: searchControlsFrom(r.URL.Query()), Providers: u.svc.Trackers(r.Context())}
 	if view.Controls.Provider == "" {
 		view.Controls.Provider = u.svc.DefaultProvider(r.Context())
 	}
@@ -3450,7 +3471,7 @@ func (u *webUI) importSearch(w http.ResponseWriter, r *http.Request) {
 		u.fail(w, err)
 		return
 	}
-	u.frag(w, "importPicker", importPickerView{Folder: folder, Query: query, Provider: provider, Providers: u.svc.Providers(r.Context()), Results: allowedManga(r.Context(), items)})
+	u.frag(w, "importPicker", importPickerView{Folder: folder, Query: query, Provider: provider, Providers: u.svc.Trackers(r.Context()), Results: allowedManga(r.Context(), items)})
 }
 
 func (u *webUI) importDo(w http.ResponseWriter, r *http.Request) {
@@ -4090,10 +4111,10 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 				service.SettingBrowserDownloaderEnabled, service.SettingBrowserDownloaderEndpoint,
 				service.SettingBrowserDownloaderTimeoutSeconds, service.SettingServicesHealthInterval)},
 			settingGroup{Title: "Sources", Fields: fields(service.SettingSourceRegistryURL)},
-			settingGroup{Title: "Metadata & tracking", Fields: fields(
-				service.SettingProvidersDefault, service.SettingProvidersDisabled,
-				service.SettingAniListClientID, service.SettingAniListClientSecret,
-				service.SettingMALClientID, service.SettingMALClientSecret)},
+			settingGroup{Title: "Metadata & tracking", Fields: fields(service.SettingProvidersDefault, service.SettingProvidersDisabled), Apps: []settingApp{
+				{Provider: catalog.AniListProvider, Label: "AniList", Fields: fields(service.SettingAniListClientID, service.SettingAniListClientSecret)},
+				{Provider: catalog.MALProvider, Label: "MyAnimeList", Fields: fields(service.SettingMALClientID, service.SettingMALClientSecret)},
+			}},
 		)
 	}
 	return settingsView{Groups: groups}
@@ -4253,8 +4274,10 @@ func navFor(path string) string {
 		return "backups"
 	case strings.HasPrefix(path, "/users"):
 		return "users"
-	case strings.HasPrefix(path, "/settings"):
-		return "settings"
+	case strings.HasPrefix(path, "/me"):
+		return "me"
+	case strings.HasPrefix(path, "/server"):
+		return "server"
 	}
 	return ""
 }
@@ -4266,6 +4289,12 @@ func pathID(r *http.Request) (int64, error) {
 func (u *webUI) funcs() template.FuncMap {
 	return template.FuncMap{
 		"assetVer": func() string { return u.assetVer },
+		"outage": func(provider string) string {
+			if u.svc == nil {
+				return ""
+			}
+			return u.svc.ProviderOutage(provider)
+		},
 		"chname":   chapters.DisplayName,
 		"desc":     util.PlainDescription,
 		"jobLabel": jobLabel,

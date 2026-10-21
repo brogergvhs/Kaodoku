@@ -701,7 +701,7 @@ func (s *JobService) SetProgressiveSync(ctx context.Context, titleID int64, prov
 func (s *JobService) progressiveTrackers(ctx context.Context, userID, titleID int64) []string {
 	var out []string
 	for _, a := range s.TrackerAccounts(ctx, userID) {
-		if _, err := s.Provider(ctx, a.Provider); err != nil {
+		if !s.providerConfigured(ctx, a.Provider) || !auth.FromContext(ctx).ProviderAllowed(a.Provider) {
 			continue
 		}
 		on := a.AutoProgressive

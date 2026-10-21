@@ -589,8 +589,8 @@ func fillBlanks(dst *catalog.Manga, src catalog.Manga) {
 }
 
 type ProviderLink struct {
-	Provider, Label, ID, Method, URL, Cover string
-	Confirmed, Primary, Connected, Syncing  bool
+	Provider, Label, ID, Method, URL, Cover, Outage string
+	Confirmed, Primary, Connected, Syncing          bool
 }
 
 func (s *JobService) TitleLinks(ctx context.Context, titleID int64) ([]ProviderLink, error) {
@@ -599,16 +599,19 @@ func (s *JobService) TitleLinks(ctx context.Context, titleID int64) ([]ProviderL
 		return nil, fmt.Errorf("title has no catalog entry")
 	}
 	maps := s.mappings(ctx, m)
-	connected := s.connectedTrackers(ctx, auth.UserID(ctx))
+	var connected []string
+	for _, a := range s.TrackerAccounts(ctx, auth.UserID(ctx)) {
+		connected = append(connected, a.Provider)
+	}
 	syncing := s.progressiveTrackers(ctx, auth.UserID(ctx), titleID)
 	link := func(name, label string) ProviderLink {
 		e := maps[name]
-		return ProviderLink{Provider: name, Label: label, ID: e.ProviderID, Method: e.Method, Confirmed: e.Confirmed, Primary: name == m.Provider, Connected: slices.Contains(connected, name), Syncing: slices.Contains(syncing, name), URL: catalog.MangaURL(name, e.ProviderID)}
+		return ProviderLink{Provider: name, Label: label, ID: e.ProviderID, Method: e.Method, Confirmed: e.Confirmed, Primary: name == m.Provider, Connected: slices.Contains(connected, name), Syncing: slices.Contains(syncing, name), URL: catalog.MangaURL(name, e.ProviderID), Outage: s.ProviderOutage(name)}
 	}
 	primary := link(m.Provider, s.ProviderLabel(m.Provider))
 	primary.Cover = m.CoverImage
 	out := []ProviderLink{primary}
-	for _, p := range s.Providers(ctx) {
+	for _, p := range s.Trackers(ctx) {
 		if p.Name() == m.Provider {
 			continue
 		}

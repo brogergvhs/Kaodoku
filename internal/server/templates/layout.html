@@ -59,13 +59,21 @@
         {{if .User.Can "sources.manage"}}<li><a href="/sources" class="{{if eq .Nav "sources"}}menu-active{{end}}">{{template "iconSources"}}Sources</a></li>{{end}}
         {{if or (.User.Can "users.manage") (.User.Can "users.approve")}}<li><a href="/users" class="{{if eq .Nav "users"}}menu-active{{end}}">{{template "iconUsers"}}Users{{if .PendingUsers}}<span class="badge badge-warning badge-sm ml-auto">{{.PendingUsers}}</span>{{end}}</a></li>{{end}}
       </ul>
-      <ul class="menu w-full px-4 pb-4">
+      <ul class="menu w-full px-4 pb-1">
         {{if or (or (.User.Can "reader.use") (.User.Can "stats.view")) (.User.Can "metrics.users")}}<li><a href="/metrics" class="{{if eq .Nav "metrics"}}menu-active{{end}}">{{template "iconChart"}}Metrics</a></li>{{end}}
         {{if or (or (.User.Can "stats.view") (.User.Can "services.view")) (or (.User.Can "sessions.view") (.User.Can "jobs.view"))}}<li><a href="/management" class="{{if eq .Nav "management"}}menu-active{{end}}">{{template "iconGauge"}}Management</a></li>{{end}}
         {{if .User.Can "settings.manage"}}<li><a href="/backups" class="{{if eq .Nav "backups"}}menu-active{{end}}">{{template "iconDatabase"}}Backups</a></li>{{end}}
-        {{if or (.User.Can "settings.appearance") (.User.Can "settings.manage")}}<li><a href="/settings" class="{{if eq .Nav "settings"}}menu-active{{end}}">{{template "iconSettings"}}Settings</a></li>{{end}}
-        {{if .User}}<li><button hx-post="/logout" hx-swap="none" title="Sign out">{{template "iconLogout"}}<span class="truncate">{{.User.Username}}</span></button></li>{{end}}
+        {{if .User.Can "settings.manage"}}<li><a href="/server" class="{{if eq .Nav "server"}}menu-active{{end}}">{{template "iconSettings"}}Server</a></li>{{end}}
       </ul>
+      {{if .User}}
+      <div class="px-4 pb-4"><details class="dropdown dropdown-top block">
+        <summary class="btn btn-ghost w-full justify-between px-3 font-normal {{if eq .Nav "me"}}bg-primary/15 text-primary{{end}}" aria-label="Account menu"><span class="min-w-0 truncate">{{.User.Username}}</span>{{template "iconDots"}}</summary>
+        <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-full p-2 shadow-lg border border-base-300">
+          <li><a href="/me">{{template "iconSettings"}}My settings</a></li>
+          <li><button class="text-error" hx-post="/logout" hx-swap="none">{{template "iconLogout"}}Log out</button></li>
+        </ul>
+      </details></div>
+      {{end}}
     </div>
   </div>
 </div>

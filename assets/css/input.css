@@ -669,6 +669,10 @@
     left: auto;
     right: 0;
   }
+  .dropdown-top .dropdown-content {
+    top: auto;
+    bottom: calc(100% + 4px);
+  }
 
   /* ---- tooltip ---- */
   .tip {

@@ -848,12 +848,13 @@
     <div class="divide-y divide-line/25">
       {{range .Links}}
       {{$linked := and .ID .Confirmed}}
-      <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+      <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0{{if .Outage}} opacity-60{{end}}">
         {{if .Cover}}<img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{.Cover}}" alt="" loading="lazy">{{end}}
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2 text-sm font-medium">
             {{.Label}}
             <div class="flex gap-1">
+              {{with .Outage}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Temporarily unavailable: {{.}}" aria-label="Temporarily unavailable">{{template "iconPower"}}</span>{{end}}
               {{if .Primary}}<span class="badge badge-sm badge-primary badge-soft tip" tabindex="0" data-tip="Metadata source" aria-label="Metadata source">{{template "iconDatabase"}}</span>{{end}}
               {{if $linked}}{{if .Syncing}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Progressive sync" aria-label="Progressive sync">{{template "iconRefresh"}}</span>{{else if not .Primary}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Linked" aria-label="Linked">{{template "iconLink"}}</span>{{end}}
               {{else if .ID}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Suggested match" aria-label="Suggested match">{{template "iconAlert"}}</span>
@@ -861,10 +862,11 @@
             </div>
           </div>
           {{if .URL}}<a class="text-xs text-base-content/50 link-hover" href="{{.URL}}" target="_blank" rel="noreferrer noopener">#{{.ID}} ↗</a>{{end}}
-          {{if and $linked (not .Connected)}}<div class="text-xs text-base-content/50"><a class="link" href="/settings">Connect {{.Label}}</a> to sync your progress</div>{{end}}
+          {{if and $linked (not .Connected)}}<div class="text-xs text-base-content/50"><a class="link" href="/me">Connect {{.Label}}</a> to sync your progress</div>{{end}}
         </div>
         {{$sync := and $linked .Connected}}
-        {{if or $.CanManage $sync}}
+        {{if .Outage}}<button type="button" class="btn btn-ghost btn-sm btn-square shrink-0" disabled aria-label="{{.Label}} is temporarily unavailable">{{template "iconDots"}}</button>
+        {{else if or $.CanManage $sync}}
         <details class="dropdown dropdown-end shrink-0">
           <summary class="btn btn-ghost btn-sm btn-square" aria-label="{{.Label}} actions">{{template "iconDots"}}</summary>
           <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-max whitespace-nowrap p-2 shadow-lg border border-base-300">
@@ -887,7 +889,7 @@
       </div>
       {{end}}
     </div>
-    {{if .CanManage}}{{range .Links}}
+    {{if .CanManage}}{{range .Links}}{{if not .Outage}}
     <dialog id="picker-{{$.TitleID}}-{{.Provider}}" class="modal">
       <div class="modal-box flex max-w-lg flex-col gap-2 overflow-hidden">
         <div class="flex items-start justify-between gap-2">
@@ -906,7 +908,7 @@
       </div>
       <form method="dialog" class="modal-backdrop"><button>close</button></form>
     </dialog>
-    {{end}}{{end}}
+    {{end}}{{end}}{{end}}
   </div>
 </div>
 {{end}}
@@ -931,9 +933,14 @@
 
 {{define "providerBlocks"}}
 <div class="fieldset"><span class="fieldset-legend">Blocked metadata &amp; tracking backends</span>
-  <div class="flex flex-wrap gap-x-4 gap-y-1">
-    {{range .Options}}<label class="label cursor-pointer gap-2"><input type="checkbox" class="checkbox checkbox-sm" name="blocked_providers" value="{{.Name}}" {{if has $.Blocked .Name}}checked{{end}}><span class="text-sm">{{.Label}}</span></label>{{end}}
-  </div>
+  <details class="dropdown w-full" data-keep-open>
+    <summary class="select select-sm w-full flex cursor-pointer items-center" data-tag-count>{{with .Blocked}}{{len .}} selected{{else}}None selected{{end}}</summary>
+    <div class="dropdown-content z-30 mt-1 w-full rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
+      <div class="grid gap-y-1" data-tag-list>
+        {{range .Options}}<label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="blocked_providers" value="{{.Name}}" {{if has $.Blocked .Name}}checked{{end}}><span>{{.Label}}</span></label>{{end}}
+      </div>
+    </div>
+  </details>
   <span class="label">This user can't search, link or sync with blocked backends.</span>
 </div>
 {{end}}
@@ -950,7 +957,7 @@
     {{range .Cards}}{{if .Account}}{{$c := .}}{{with .Account}}
     <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
       <div class="min-w-0 flex-1">
-        <div class="text-sm font-medium">{{.Label}} <span class="font-normal text-base-content/50">({{.Name}})</span></div>
+        <div class="text-sm font-medium{{if $c.Outage}} text-base-content/50{{end}}">{{.Label}} <span class="font-normal text-base-content/50">({{.Name}})</span></div>
         {{if .ExpiresAt}}<div class="text-xs {{if .ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.ExpiresAt}}</div>{{end}}
         {{if $c.Outage}}<div class="text-xs text-warning">Temporarily unavailable: {{$c.Outage}}</div>
         {{else if .LastError}}<div class="text-xs text-error">{{.LastError}}</div>{{end}}
@@ -978,7 +985,7 @@
     </div>
     <select class="select select-sm w-full" aria-label="Tracker" onchange="trackerConnectPick(this)">
       <option value="" selected disabled>Pick a tracker…</option>
-      {{range .Cards}}{{if and (not .Account) .Login (not .Outage)}}<option value="{{.Provider}}">{{.Label}}</option>{{end}}{{end}}
+      {{range .Cards}}{{if and (not .Account) .Login}}<option value="{{.Provider}}"{{with .Outage}} disabled title="Temporarily unavailable: {{.}}"{{end}}>{{.Label}}{{if .Outage}} (unavailable){{end}}</option>{{end}}{{end}}
     </select>
     {{range .Cards}}{{if and (not .Account) .Login (not .Outage)}}
     <div class="grid gap-2" data-connect="{{.Provider}}" hidden>

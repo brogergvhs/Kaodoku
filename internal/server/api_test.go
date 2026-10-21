@@ -66,7 +66,7 @@ func TestSettingsPageRedactsAniListSecret(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/server", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("settings status = %d; body=%s", rec.Code, rec.Body.String())
 	}
@@ -118,7 +118,7 @@ func TestSettingsToggleSelectAndMultiSave(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/server", nil))
 	body := rec.Body.String()
 	for _, want := range []string{`class="toggle" id="set-ratelimit.disabled" name="ratelimit.disabled" value="true" checked`, `value="kitsu" checked`, `data-empty-label="None">2 selected</summary>`, `<option value="mangaupdates" selected>MangaUpdates</option>`} {
 		if !strings.Contains(body, want) {
@@ -333,5 +333,53 @@ func requestJSON(t *testing.T, handler http.Handler, method, path string, body a
 		if err := json.NewDecoder(rec.Body).Decode(out); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestMeAndServerPagesSplitSettings(t *testing.T) {
+	ctx := context.Background()
+	svc, closeDB, err := service.OpenJobs(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	api := New(svc, func(context.Context) (service.RunSummary, error) { return service.RunSummary{}, nil },
+		func(context.Context, string) (service.SourceVerifyResult, error) {
+			return service.SourceVerifyResult{}, nil
+		})
+	get := func(path string) string {
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec.Body.String()
+	}
+	me, server := get("/me"), get("/server")
+	if !strings.Contains(me, "/ui/account") || !strings.Contains(me, `name="ui.theme"`) || strings.Contains(me, "Scheduling") {
+		t.Fatalf("/me should hold account and appearance only:\n%s", me)
+	}
+	if !strings.Contains(server, `id="app-anilist"`) || !strings.Contains(server, "getElementById('app-mal').showModal()") || !strings.Contains(server, "/trackers/mal/callback") {
+		t.Fatal("/server is missing the tracker app rows and modals")
+	}
+	if strings.Contains(server, "/ui/account") || strings.Contains(server, `name="ui.theme"`) || !strings.Contains(server, "Scheduling") {
+		t.Fatalf("/server should hold server settings only:\n%s", server)
+	}
+	if !strings.Contains(me, `href="/me"`) || !strings.Contains(me, "Log out") || !strings.Contains(me, `href="/server"`) {
+		t.Fatal("account menu or Server link missing")
+	}
+	allow := func(on bool) bool {
+		form := url.Values{"blocked_providers": {"kitsu"}}
+		if on {
+			form.Set("allow_adult", "on")
+		}
+		req := httptest.NewRequest(http.MethodPost, "/ui/account/content", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		if !strings.Contains(rec.Body.String(), "Saved") {
+			t.Fatalf("content save: %s", rec.Body.String())
+		}
+		return strings.Contains(get("/me"), `name="allow_adult" checked`)
+	}
+	if !strings.Contains(me, "Content preferences") || !allow(true) || allow(false) || !strings.Contains(get("/me"), `value="kitsu" checked`) {
+		t.Fatal("content preferences do not round-trip on /me")
 	}
 }

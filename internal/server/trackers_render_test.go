@@ -45,13 +45,18 @@ func TestTrackerTemplatesRender(t *testing.T) {
 		t.Fatal("Connect button shown with nothing left to connect")
 	}
 	expect(render("trackerCards", trackersView{CanConnect: true, Cards: []trackerCardView{{Provider: "kitsu", Label: "Kitsu", Login: "password"}}}), "No trackers here yet.", "tracker_connect_modal.showModal()")
-	down := render("trackerCards", trackersView{Cards: []trackerCardView{
+	down := render("trackerCards", trackersView{CanConnect: true, Cards: []trackerCardView{
 		{Provider: "mal", Label: "MyAnimeList", Login: "oauth", Outage: "maintenance", Account: &service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", Name: "me"}},
 		{Provider: "kitsu", Label: "Kitsu", Login: "password", Outage: "down"},
 	}})
-	expect(down, "Temporarily unavailable: maintenance")
-	if strings.Contains(down, "/ui/trackers/mal/sync") || strings.Contains(down, `value="kitsu"`) {
-		t.Fatalf("unavailable tracker still offers sync or connect:\n%s", down)
+	expect(down, "Temporarily unavailable: maintenance", `<option value="kitsu" disabled title="Temporarily unavailable: down">Kitsu (unavailable)</option>`)
+	if strings.Contains(down, "/ui/trackers/mal/sync") {
+		t.Fatalf("unavailable tracker still offers sync:\n%s", down)
+	}
+	downPanel := render("providerPanel", providerPanelView{TitleID: 4, CanManage: true, Links: []service.ProviderLink{{Provider: "mal", Label: "MyAnimeList", ID: "2", Confirmed: true, Connected: true, Outage: "maintenance"}}})
+	expect(downPanel, "opacity-60", `data-tip="Temporarily unavailable: maintenance"`, `disabled aria-label="MyAnimeList is temporarily unavailable"`)
+	if strings.Contains(downPanel, "Relink") || strings.Contains(downPanel, "Connect MyAnimeList") {
+		t.Fatalf("unavailable tracker still offers actions:\n%s", downPanel)
 	}
 	prefs := render("trackerPrefs", trackerPrefsView{
 		TrackerAccount: service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", TrackerPrefs: service.TrackerPrefs{AutoLink: true, Recommendations: true}},

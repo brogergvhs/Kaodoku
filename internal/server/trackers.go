@@ -81,7 +81,7 @@ func (u *webUI) trackerCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.kick()
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+	http.Redirect(w, r, "/me", http.StatusSeeOther)
 }
 
 func (u *webUI) trackerLogin(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +220,7 @@ func (u *webUI) trackerCards(r *http.Request) trackersView {
 			card.Account = &a
 		}
 		out.Cards = append(out.Cards, card)
-		out.CanConnect = out.CanConnect || card.Account == nil && card.Login != "" && card.Outage == ""
+		out.CanConnect = out.CanConnect || card.Account == nil && card.Login != ""
 	}
 	return out
 }
