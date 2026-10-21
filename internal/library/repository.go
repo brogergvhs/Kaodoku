@@ -1129,14 +1129,18 @@ func (r *Repository) GetChapterReadStatus(ctx context.Context, chapterID int64) 
 	return chapters[0], nil
 }
 
-// TitlesByProvider maps a catalog provider's manga IDs to tracked title IDs,
-// for marking search results that are already in the library.
+// TitlesByProvider maps a provider's manga IDs (native or confirmed mapping)
+// to tracked title IDs, for marking search results already in the library.
 func (r *Repository) TitlesByProvider(ctx context.Context, provider string) (map[string]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT m.provider_id, t.id FROM titles t
 		JOIN catalog_manga m ON m.id = t.catalog_manga_id
 		WHERE m.provider = ?
-	`, provider)
+		UNION ALL
+		SELECT e.provider_id, t.id FROM titles t
+		JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id
+		WHERE e.provider = ? AND e.confirmed = 1 AND e.provider_id != ''
+	`, provider, provider)
 	if err != nil {
 		return nil, fmt.Errorf("list titles by provider: %w", err)
 	}
@@ -1148,9 +1152,16 @@ func (r *Repository) TitlesByProvider(ctx context.Context, provider string) (map
 		if err := rows.Scan(&providerID, &titleID); err != nil {
 			return nil, fmt.Errorf("scan provider title: %w", err)
 		}
-		out[providerID] = titleID
+		if _, ok := out[providerID]; !ok {
+			out[providerID] = titleID
+		}
 	}
 	return out, rows.Err()
+}
+
+func (r *Repository) SetTitleCatalog(ctx context.Context, titleID, catalogID int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE titles SET catalog_manga_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, catalogID, titleID)
+	return err
 }
 
 // FindByCatalog returns the tracked title for a catalog manga, if any.

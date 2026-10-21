@@ -3,6 +3,7 @@ package auth
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -47,18 +48,19 @@ const (
 )
 
 type User struct {
-	ID          int64
-	Username    string
-	Origin      string // env|local
-	RoleID      int64
-	RoleName    string
-	OIDCSubject string
-	Pending     bool // provisioned but awaiting admin approval
-	AllowAdult  bool
-	BlockedTags []string // tags/genres this user must not see
-	AllowedTags []string // when set, only manga carrying one of these are shown
-	Perms       map[string]bool
-	CreatedAt   time.Time
+	ID               int64
+	Username         string
+	Origin           string // env|local
+	RoleID           int64
+	RoleName         string
+	OIDCSubject      string
+	Pending          bool // provisioned but awaiting admin approval
+	AllowAdult       bool
+	BlockedTags      []string // tags/genres this user must not see
+	AllowedTags      []string // when set, only manga carrying one of these are shown
+	BlockedProviders []string
+	Perms            map[string]bool
+	CreatedAt        time.Time
 }
 
 // Can reports whether the user holds a permission.
@@ -67,6 +69,10 @@ func (u *User) Can(perm string) bool {
 		return false
 	}
 	return u.Perms[perm]
+}
+
+func (u *User) ProviderAllowed(name string) bool {
+	return u == nil || !slices.Contains(u.BlockedProviders, name)
 }
 
 // IsEnvAdmin reports whether this is the env-provisioned admin (undeletable,

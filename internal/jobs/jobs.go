@@ -7,7 +7,7 @@ const (
 	TypeRefreshTitle    = "refresh_title"
 	TypeScanDownloads   = "scan_downloads"
 	TypeDownloadMissing = "download_missing"
-	TypeSyncAniList     = "sync_anilist"
+	TypeSyncTrackers    = "sync_trackers"
 	TypeCatalogRefresh  = "catalog_refresh"
 	TypeAttachVolumes   = "attach_volumes"
 	TypeVerifySource    = "verify_source"

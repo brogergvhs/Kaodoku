@@ -278,14 +278,36 @@ CREATE TABLE IF NOT EXISTS user_settings (
 	PRIMARY KEY (user_id, key)
 );
 
-CREATE TABLE IF NOT EXISTS user_anilist (
-	user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS tracker_accounts (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
 	access_token TEXT NOT NULL,
-	anilist_user_id INTEGER NOT NULL DEFAULT 0,
-	anilist_name TEXT NOT NULL DEFAULT '',
+	refresh_token TEXT NOT NULL DEFAULT '',
+	remote_user_id TEXT NOT NULL DEFAULT '',
+	remote_name TEXT NOT NULL DEFAULT '',
 	expires_at TEXT NOT NULL DEFAULT '',
-	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+	last_error TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (user_id, provider)
 );
+
+CREATE TABLE IF NOT EXISTS tracker_title_sync (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
+	PRIMARY KEY (user_id, title_id, provider)
+);
+
+CREATE TABLE IF NOT EXISTS catalog_external_ids (
+	catalog_manga_id INTEGER NOT NULL REFERENCES catalog_manga(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
+	provider_id TEXT NOT NULL DEFAULT '',
+	method TEXT NOT NULL DEFAULT '',
+	confirmed INTEGER NOT NULL DEFAULT 0,
+	checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (catalog_manga_id, provider)
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_external_lookup ON catalog_external_ids(provider, provider_id) WHERE confirmed = 1;
 
 CREATE TABLE IF NOT EXISTS api_tokens (
 	token_hash TEXT PRIMARY KEY,
@@ -409,6 +431,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"users", "allow_adult", "INTEGER NOT NULL DEFAULT 0"},
 		{"users", "blocked_tags", "TEXT NOT NULL DEFAULT '[]'"},
 		{"users", "allowed_tags", "TEXT NOT NULL DEFAULT '[]'"},
+		{"users", "blocked_providers", "TEXT NOT NULL DEFAULT '[]'"},
 		{"content_tags", "is_adult", "INTEGER NOT NULL DEFAULT 0"},
 		{"content_tags", "category", "TEXT NOT NULL DEFAULT ''"},
 		{"content_tags", "description", "TEXT NOT NULL DEFAULT ''"},
@@ -495,10 +518,33 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("clear kotatsu snapshot domains: %w", err)
 		}
 	}
+	if err = migrateAniListAccounts(ctx, tx); err != nil {
+		return fmt.Errorf("migrate anilist accounts: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}
 
+	return nil
+}
+
+func migrateAniListAccounts(ctx context.Context, tx *sql.Tx) error {
+	if _, exists, err := txHasColumn(ctx, tx, "user_anilist", "user_id"); err != nil || !exists {
+		return err
+	}
+	for _, stmt := range []string{
+		`INSERT OR IGNORE INTO tracker_accounts (user_id, provider, access_token, remote_user_id, remote_name, expires_at, created_at)
+			SELECT user_id, 'anilist', access_token, CAST(anilist_user_id AS TEXT), anilist_name, expires_at, created_at FROM user_anilist`,
+		`INSERT OR IGNORE INTO tracker_title_sync (user_id, title_id, provider)
+			SELECT DISTINCT rp.user_id, c.title_id, 'anilist' FROM chapter_read_progress rp
+			JOIN chapters c ON c.id = rp.chapter_id JOIN user_anilist ua ON ua.user_id = rp.user_id`,
+		`DROP TABLE user_anilist`,
+		`UPDATE jobs SET type = 'sync_trackers' WHERE type = 'sync_anilist'`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
