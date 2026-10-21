@@ -132,7 +132,7 @@ type activityView struct {
 	Failed        bool
 	Error         string
 	User          *auth.User
-	AniList       service.AniListConnection
+	Trackers      []service.TrackerAccount
 	Content       titleContentView
 	Screen        int64
 }
@@ -160,6 +160,7 @@ type matchView struct {
 	PollURL   string
 	Matches   []catalog.Match
 	Active    bool
+	Queued    bool
 	Failed    bool
 	Error     string
 	TitleID   int64  // link target for "Use this source"
@@ -176,10 +177,8 @@ func titleSourceView(title library.Title, active, failed bool, msg string, match
 }
 
 type settingsView struct {
-	Groups        []settingGroup
-	AniList       service.AniListConnection
-	RedirectURL   string
-	AppConfigured bool
+	Groups   []settingGroup
+	Trackers []trackerCardView
 }
 type settingGroup struct {
 	Title  string
@@ -197,10 +196,10 @@ func settingMeta(key string) (label, desc string) {
 		return token, ""
 	}
 	switch key {
-	case service.SettingServeAniListSyncEvery:
-		return "AniList sync", "How often connected accounts sync reading progress with AniList (e.g. 12h). Empty disables."
+	case service.SettingServeTrackerSyncEvery:
+		return "Tracker sync", "How often connected tracker accounts sync reading progress (e.g. 12h). Empty disables."
 	case service.SettingServeCatalogEvery:
-		return "Catalog refresh", "How often cached AniList metadata (tags, release status) is re-fetched for tracked titles. Empty disables."
+		return "Catalog refresh", "How often cached metadata (tags, release status) is re-fetched for tracked titles. Empty disables."
 	case service.SettingRateLimitIntervalMS:
 		return "Request pacing (ms)", "Minimum milliseconds between page requests to the same site. Image downloads are exempt. Lower is faster; too low risks bans."
 	case service.SettingRateLimitBurst:
@@ -211,6 +210,14 @@ func settingMeta(key string) (label, desc string) {
 		return "AniList client ID", "From your AniList developer application."
 	case service.SettingAniListClientSecret:
 		return "AniList client secret", "Kept server-side; used to exchange login codes for tokens."
+	case service.SettingMALClientID:
+		return "MyAnimeList client ID", "Create an app at myanimelist.net/apiconfig with redirect URL https://<this server>/trackers/mal/callback. Enables MyAnimeList search, metadata and tracking."
+	case service.SettingMALClientSecret:
+		return "MyAnimeList client secret", "Only for MAL apps registered as \"web\"; leave empty for \"other\" apps."
+	case service.SettingProvidersDefault:
+		return "Default metadata backend", "Used for search and new titles when a user has no tracker connected: " + strings.Join(service.ProviderNames(), ", ") + "."
+	case service.SettingProvidersDisabled:
+		return "Disabled backends", "Comma-separated backends hidden from everyone, e.g. kitsu, mangaupdates. Block per user in Users."
 	case service.SettingUITheme:
 		return "Theme", "Interface color theme. Pick custom to use the colors below."
 	case service.SettingServeRefreshEvery:
@@ -310,6 +317,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /library", u.libraryPage)
 	mux.HandleFunc("GET /library/{id}", u.titlePage)
 	mux.HandleFunc("GET /manga/{id}", u.catalogMangaPage)
+	mux.HandleFunc("GET /manga/{provider}/{id}", u.catalogMangaPage)
 	mux.HandleFunc("GET /reader/{id}", u.readerPage)
 	mux.HandleFunc("GET /import", u.importPage)
 	mux.HandleFunc("GET /sources", u.sourcesPage)
@@ -411,13 +419,20 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/import/titles", u.importTitleOptions)
 	mux.HandleFunc("GET /ui/library/{id}/related", u.relatedManga)
 	mux.HandleFunc("GET /ui/search/trending", u.trendingManga)
-	mux.HandleFunc("GET /anilist/connect", u.anilistConnect)
-	mux.HandleFunc("GET /anilist/callback", u.anilistCallback)
-	mux.HandleFunc("POST /ui/anilist/disconnect", u.anilistDisconnect)
-	mux.HandleFunc("GET /ui/anilist/library", u.anilistLibrary)
-	mux.HandleFunc("POST /ui/anilist/sync", u.anilistSyncNow)
-	mux.HandleFunc("GET /ui/anilist/suggestions", u.anilistSuggestions)
-	mux.HandleFunc("POST /ui/library/{id}/anilist-sync", u.anilistSyncTitle)
+	mux.HandleFunc("GET /anilist/connect", u.trackerConnect)
+	mux.HandleFunc("GET /anilist/callback", u.trackerCallback)
+	mux.HandleFunc("GET /trackers/{provider}/connect", u.trackerConnect)
+	mux.HandleFunc("GET /trackers/{provider}/callback", u.trackerCallback)
+	mux.HandleFunc("POST /ui/trackers/{provider}/login", u.trackerLogin)
+	mux.HandleFunc("POST /ui/trackers/{provider}/disconnect", u.trackerDisconnect)
+	mux.HandleFunc("POST /ui/trackers/{provider}/sync", u.trackerSyncNow)
+	mux.HandleFunc("GET /ui/trackers/{provider}/library", u.trackerLibrary)
+	mux.HandleFunc("GET /ui/trackers/suggestions", u.trackerSuggestions)
+	mux.HandleFunc("POST /ui/library/{id}/tracker-sync", u.trackerSyncTitle)
+	mux.HandleFunc("POST /ui/library/{id}/providers/progressive", u.titleProgressiveSync)
+	mux.HandleFunc("GET /ui/library/{id}/providers", u.titleProviders)
+	mux.HandleFunc("POST /ui/library/{id}/providers/search", u.titleProviderSearch)
+	mux.HandleFunc("POST /ui/library/{id}/providers/set", u.titleProviderSet)
 	mux.HandleFunc("GET /ui/account", u.accountFrag)
 	mux.HandleFunc("POST /ui/account/password", u.accountPassword)
 	mux.HandleFunc("POST /ui/account/sessions/revoke", u.accountRevokeSessions)
@@ -465,6 +480,7 @@ type mangaResults struct {
 	Items         []searchResultView
 	CanAdd        bool
 	ShowRelations bool
+	ShowProvider  bool
 }
 
 // resultView picks the search results layout from the request.
@@ -479,23 +495,34 @@ func resultView(r *http.Request) string {
 
 func (u *webUI) mangaResultsView(ctx context.Context, heading, view string, items []catalog.Manga) mangaResults {
 	user := userFrom(ctx)
-	return mangaResults{Heading: heading, View: view, Items: u.stripItems(ctx, items), CanAdd: user.Can(auth.PermLibraryAdd)}
+	views := u.stripItems(ctx, items)
+	mixed := false
+	for _, v := range views {
+		mixed = mixed || v.Provider != views[0].Provider
+	}
+	return mangaResults{Heading: heading, View: view, Items: views, CanAdd: user.Can(auth.PermLibraryAdd), ShowProvider: mixed}
 }
 
 func (u *webUI) stripItems(ctx context.Context, items []catalog.Manga) []searchResultView {
 	return stripItems(ctx, u.svc, items)
 }
 
-// stripItems guards manga for the acting user and maps tracked ones to their
-// library title id.
+// stripItems guards manga for the acting user and maps tracked ones (by any
+// mapped provider id) to their library title id.
 func stripItems(ctx context.Context, svc *service.JobService, items []catalog.Manga) []searchResultView {
-	inLibrary, _ := svc.TitlesByProvider(ctx, catalog.AniListProvider)
+	inLibrary := svc.LibraryIndex(ctx)
 	views := make([]searchResultView, 0, len(items))
 	for _, m := range items {
 		if !contentAllowed(ctx, m.IsAdult, mangaContentTags(m)) {
 			continue
 		}
-		views = append(views, searchResultView{Manga: m, TitleID: inLibrary[m.ProviderID]})
+		v := searchResultView{Manga: m}
+		for _, k := range catalog.Keys(m) {
+			if v.TitleID == 0 {
+				v.TitleID = inLibrary[k]
+			}
+		}
+		views = append(views, v)
 	}
 	return views
 }
@@ -505,21 +532,16 @@ type catalogMangaView struct {
 	CanAdd bool
 }
 
-// catalogMangaPage shows an AniList manga that is not (yet) in the library:
+// catalogMangaPage shows a catalog manga that is not (yet) in the library:
 // cover, title, description and stats, with a single Add to Library action.
 func (u *webUI) catalogMangaPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	pid := r.PathValue("id")
-	if inLib, _ := u.svc.TitlesByProvider(ctx, catalog.AniListProvider); inLib[pid] > 0 {
+	provider, pid := pathProvider(r), r.PathValue("id")
+	if inLib, _ := u.svc.TitlesByProvider(ctx, provider); inLib[pid] > 0 {
 		http.Redirect(w, r, fmt.Sprintf("/library/%d", inLib[pid]), http.StatusSeeOther)
 		return
 	}
-	id, err := strconv.Atoi(pid)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	m, err := u.svc.CatalogMangaByAniList(ctx, id)
+	m, err := u.svc.CatalogManga(ctx, provider, pid)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -582,13 +604,13 @@ func (u *webUI) trendingManga(w http.ResponseWriter, r *http.Request) {
 // guardedBrowse fills an empty suggestions grid with a popularity browse
 // pre-filtered by the acting user's tag guards.
 func (u *webUI) guardedBrowse(ctx context.Context, c searchControls) mangaResults {
-	items := guardedBrowseManga(ctx, u.svc, c.Sort, c.Dir)
+	items := guardedBrowseManga(ctx, u.svc, c.Provider, c.Sort, c.Dir)
 	return u.mangaResultsView(ctx, "", c.View, items)
 }
 
 // guardedBrowseManga is a popularity browse pre-filtered by the acting user's
 // tag guards, shared by the web and v1 trending fallbacks.
-func guardedBrowseManga(ctx context.Context, svc *service.JobService, sort, dir string) []catalog.Manga {
+func guardedBrowseManga(ctx context.Context, svc *service.JobService, provider, sort, dir string) []catalog.Manga {
 	filter := catalog.SearchFilter{Sort: anilistSort(sort, dir)}
 	if filter.Sort == "" {
 		filter.Sort = "POPULARITY_DESC"
@@ -602,7 +624,7 @@ func guardedBrowseManga(ctx context.Context, svc *service.JobService, sort, dir 
 			filter.GenreNotIn, filter.TagNotIn = splitByKind(usr.BlockedTags, options)
 		}
 	}
-	items, _, err := svc.SearchAniList(ctx, "", 18, filter)
+	items, _, err := svc.SearchManga(ctx, provider, "", 18, filter)
 	if err != nil {
 		return nil
 	}
@@ -1354,7 +1376,8 @@ func relationCollections(titles []library.Title, mangas map[int64]catalog.Manga,
 		if t.CatalogMangaID == nil {
 			continue
 		}
-		if pid := mangas[*t.CatalogMangaID].ProviderID; pid != "" {
+		if m := mangas[*t.CatalogMangaID]; m.ProviderID != "" {
+			pid := catalog.RelKey(m.Provider, m.ProviderID)
 			if _, ok := byProvider[pid]; !ok {
 				pids = append(pids, pid)
 			}
@@ -1998,7 +2021,7 @@ var globalJobTypes = []string{
 	jobs.TypeDownloadMissing,
 	jobs.TypeDetectCrops,
 	jobs.TypeCatalogRefresh,
-	jobs.TypeSyncAniList,
+	jobs.TypeSyncTrackers,
 	jobs.TypeBackupUserData,
 }
 
@@ -2093,7 +2116,7 @@ func (u *webUI) titlePage(w http.ResponseWriter, r *http.Request) {
 	view.Title = title
 	view.User = userFrom(r.Context())
 	if title.CatalogMangaID != nil {
-		view.AniList = u.svc.AniListConnectionFor(r.Context(), auth.UserID(r.Context()))
+		view.Trackers = u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context()))
 	}
 	view.Content = u.buildTitleContent(r, title, r.URL.Query().Get("tab"))
 	view.RefreshEvery = u.svc.Setting(r.Context(), service.SettingServeRefreshEvery, service.SettingDefault(service.SettingServeRefreshEvery))
@@ -2460,12 +2483,12 @@ func (u *webUI) chapterRead(read bool) http.HandlerFunc {
 		if read {
 			_, err = u.svc.MarkChapterRead(r.Context(), chapterID)
 			if err == nil {
-				u.svc.PushAniListEntry(r.Context(), auth.UserID(r.Context()), titleID)
+				u.svc.PushTrackers(r.Context(), auth.UserID(r.Context()), titleID)
 			}
 		} else {
 			_, err = u.svc.MarkChapterUnread(r.Context(), chapterID)
 			if err == nil {
-				u.svc.PushAniListEntryExact(r.Context(), auth.UserID(r.Context()), titleID)
+				u.svc.PushTrackersExact(r.Context(), auth.UserID(r.Context()), titleID)
 			}
 		}
 		if err != nil {
@@ -2494,12 +2517,12 @@ func (u *webUI) chapterRangeRead(w http.ResponseWriter, r *http.Request) {
 	case "read":
 		_, err = u.svc.MarkChapterRangeRead(r.Context(), titleID, r.FormValue("from"), r.FormValue("to"))
 		if err == nil {
-			u.svc.PushAniListEntry(r.Context(), auth.UserID(r.Context()), titleID)
+			u.svc.PushTrackers(r.Context(), auth.UserID(r.Context()), titleID)
 		}
 	case "unread":
 		_, err = u.svc.MarkChapterRangeUnread(r.Context(), titleID, r.FormValue("from"), r.FormValue("to"))
 		if err == nil {
-			u.svc.PushAniListEntryExact(r.Context(), auth.UserID(r.Context()), titleID)
+			u.svc.PushTrackersExact(r.Context(), auth.UserID(r.Context()), titleID)
 		}
 	default:
 		err = fmt.Errorf("unknown read action")
@@ -2718,9 +2741,17 @@ func (u *webUI) sourceView(ctx context.Context, title library.Title, linked map[
 		return titleSourceView(title, false, false, "", nil)
 	}
 	cid := *title.CatalogMangaID
-	active, failed, msg := u.jobStateFor(ctx, jobs.TypeMatchSources, service.JobPayload{CatalogID: cid})
-	if active {
-		return titleSourceView(title, true, false, "", nil)
+	want, _ := json.Marshal(service.JobPayload{CatalogID: cid})
+	var active, failed bool
+	var msg string
+	if list, _ := u.svc.FindJobs(ctx, jobs.Filter{Type: jobs.TypeMatchSources, Payload: string(want), Limit: 1}); len(list) > 0 {
+		active, failed = jobState(list[0].Status)
+		msg = list[0].LastError
+		if active {
+			v := titleSourceView(title, true, false, "", nil)
+			v.Queued = list[0].Status != "running"
+			return v
+		}
 	}
 	matches, _ := u.svc.ListMatches(ctx, cid)
 	// Only offer sources that are currently usable: stored candidates from
@@ -2871,9 +2902,7 @@ func (u *webUI) backupDownload(w http.ResponseWriter, r *http.Request) {
 
 func (u *webUI) settingsPage(w http.ResponseWriter, r *http.Request) {
 	view := u.settings(r.Context())
-	view.AniList = u.svc.AniListConnectionFor(r.Context(), auth.UserID(r.Context()))
-	view.RedirectURL = anilistRedirectURL(r)
-	view.AppConfigured = u.svc.Setting(r.Context(), service.SettingAniListClientID, "") != ""
+	view.Trackers = u.trackerCards(r)
 	u.page(w, r, "settings", "Settings", view)
 }
 
@@ -2900,9 +2929,11 @@ func (v searchResultView) RelationLabel() string {
 type searchView struct {
 	Controls   searchControls
 	TagOptions []catalog.ContentTag
+	Providers  []catalog.Provider
 }
 
 type searchControls struct {
+	Provider    string
 	Q           string
 	Sort        string // "" relevance, rating, title, year, chapters
 	Dir         string
@@ -2913,6 +2944,7 @@ type searchControls struct {
 
 func searchControlsFrom(values url.Values) searchControls {
 	c := searchControls{
+		Provider:    values.Get("provider"),
 		Q:           strings.TrimSpace(values.Get("q")),
 		Sort:        values.Get("sort"),
 		Dir:         values.Get("dir"),
@@ -3018,7 +3050,10 @@ func filterSortManga(items []catalog.Manga, c searchControls) []catalog.Manga {
 }
 
 func (u *webUI) searchPage(w http.ResponseWriter, r *http.Request) {
-	view := searchView{Controls: searchControlsFrom(r.URL.Query())}
+	view := searchView{Controls: searchControlsFrom(r.URL.Query()), Providers: u.svc.Providers(r.Context())}
+	if view.Controls.Provider == "" {
+		view.Controls.Provider = u.svc.DefaultProvider(r.Context())
+	}
 	options, _ := u.svc.StoredContentTags(r.Context())
 	view.TagOptions = visibleTagOptions(r.Context(), options)
 	u.page(w, r, "search", "Search", view)
@@ -3041,10 +3076,6 @@ func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	c := searchControlsFrom(r.Form)
 	filtered := len(c.IncludeTags) > 0 || len(c.ExcludeTags) > 0
-	if c.Q == "" && !filtered {
-		u.trendingManga(w, r)
-		return
-	}
 	page, _ := strconv.Atoi(r.FormValue("page"))
 	if page < 1 {
 		page = 1
@@ -3060,14 +3091,33 @@ func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	view := searchResultsView{Controls: c, View: c.View, Append: page > 1}
+	if c.Q == "" && !filtered && c.Sort == "" {
+		provider := c.Provider
+		if provider == "" {
+			provider = u.svc.DefaultProvider(r.Context())
+		}
+		if pool, ok := u.svc.ProviderSuggestions(r.Context(), provider); ok && len(pool) > 0 {
+			start := min((page-1)*searchPerPage, len(pool))
+			end := min(start+searchPerPage, len(pool))
+			view.Results = u.mangaResultsView(r.Context(), "", view.View, pool[start:end])
+			if page == 1 {
+				view.Results.Heading = "Suggested from your " + u.svc.ProviderLabel(provider) + " list"
+			}
+			if end < len(pool) {
+				view.NextPage = page + 1
+			}
+			u.frag(w, "searchResults", view)
+			return
+		}
+	}
 	var items []catalog.Manga
 	more, last := false, page
 	for scan := 0; scan < 3; scan++ {
 		last = page + scan
 		filter.Page = last
-		fetched, m, err := u.svc.SearchAniList(r.Context(), c.Q, searchPerPage, filter)
+		fetched, m, err := u.svc.SearchManga(r.Context(), c.Provider, c.Q, searchPerPage, filter)
 		if err != nil {
-			log.Printf("anilist search failed: %v", err)
+			log.Printf("%s search failed: %v", c.Provider, err)
 			view.Error, view.RetryPage = true, page
 			u.frag(w, "searchResults", view)
 			return
@@ -3085,12 +3135,12 @@ func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *webUI) addToLibrary(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.FormValue("provider_id"))
-	if err != nil {
+	id := strings.TrimSpace(r.FormValue("provider_id"))
+	if id == "" {
 		u.fail(w, fmt.Errorf("invalid id"))
 		return
 	}
-	title, err := u.svc.AddCatalogTitle(r.Context(), id)
+	title, err := u.svc.AddCatalogTitle(r.Context(), r.FormValue("provider"), id)
 	if err != nil {
 		u.fail(w, err)
 		return
@@ -3279,7 +3329,7 @@ func (u *webUI) libRemove(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if _, err := u.svc.RemoveTitleFiles(r.Context(), id, r.FormValue("delete_files") == "on", r.FormValue("delete_anilist") == "on"); err != nil {
+	if _, err := u.svc.RemoveTitleFiles(r.Context(), id, r.FormValue("delete_files") == "on", r.FormValue("delete_remote") == "on"); err != nil {
 		u.fail(w, err)
 		return
 	}
@@ -3290,9 +3340,9 @@ func (u *webUI) libRemove(w http.ResponseWriter, r *http.Request) {
 // titleDialogView backs the shared remove/settings modals used from list views,
 // where per-card modals would collide on id.
 type titleDialogView struct {
-	Title            library.Title
-	AniListConnected bool
-	RefreshEvery     string
+	Title             library.Title
+	TrackersConnected bool
+	RefreshEvery      string
 }
 
 func (u *webUI) titleDialog(r *http.Request) (titleDialogView, error) {
@@ -3305,9 +3355,9 @@ func (u *webUI) titleDialog(r *http.Request) (titleDialogView, error) {
 		return titleDialogView{}, fmt.Errorf("title not found")
 	}
 	return titleDialogView{
-		Title:            t,
-		AniListConnected: u.svc.AniListConnectionFor(r.Context(), auth.UserID(r.Context())).Connected,
-		RefreshEvery:     u.svc.Setting(r.Context(), service.SettingServeRefreshEvery, service.SettingDefault(service.SettingServeRefreshEvery)),
+		Title:             t,
+		TrackersConnected: len(u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context()))) > 0,
+		RefreshEvery:      u.svc.Setting(r.Context(), service.SettingServeRefreshEvery, service.SettingDefault(service.SettingServeRefreshEvery)),
 	}, nil
 }
 
@@ -3332,9 +3382,11 @@ func (u *webUI) titleSettingsDialog(w http.ResponseWriter, r *http.Request) {
 // --- import & source linking ---
 
 type importPickerView struct {
-	Folder  string
-	Query   string
-	Results []catalog.Manga
+	Folder    string
+	Query     string
+	Provider  string
+	Providers []catalog.Provider
+	Results   []catalog.Manga
 }
 
 func (u *webUI) importPage(w http.ResponseWriter, r *http.Request) {
@@ -3374,25 +3426,30 @@ func (u *webUI) importSearch(w http.ResponseWriter, r *http.Request) {
 	if query == "" {
 		query = importQuery(folder)
 	}
-	items, _, err := u.svc.SearchAniList(r.Context(), query, 10, catalog.SearchFilter{})
+	provider := r.FormValue("provider")
+	if provider == "" {
+		provider = u.svc.DefaultProvider(r.Context())
+	}
+	items, _, err := u.svc.SearchManga(r.Context(), provider, query, 10, catalog.SearchFilter{})
 	if err != nil {
 		u.fail(w, err)
 		return
 	}
-	u.frag(w, "importPicker", importPickerView{Folder: folder, Query: query, Results: allowedManga(r.Context(), items)})
+	u.frag(w, "importPicker", importPickerView{Folder: folder, Query: query, Provider: provider, Providers: u.svc.Providers(r.Context()), Results: allowedManga(r.Context(), items)})
 }
 
 func (u *webUI) importDo(w http.ResponseWriter, r *http.Request) {
-	anilistID, err := strconv.Atoi(r.FormValue("anilist_id"))
-	if err != nil {
-		u.fail(w, fmt.Errorf("select an AniList match first"))
+	provider, id := r.FormValue("provider"), strings.TrimSpace(r.FormValue("provider_id"))
+	if id == "" {
+		u.fail(w, fmt.Errorf("select a catalog match first"))
 		return
 	}
 	var title library.Title
+	var err error
 	if r.FormValue("kind") == "volumes" {
-		title, err = u.svc.ImportVolumesFolder(r.Context(), r.FormValue("folder"), anilistID)
+		title, err = u.svc.ImportVolumesFolder(r.Context(), r.FormValue("folder"), provider, id)
 	} else {
-		title, err = u.svc.ImportFolder(r.Context(), r.FormValue("folder"), anilistID)
+		title, err = u.svc.ImportFolder(r.Context(), r.FormValue("folder"), provider, id)
 	}
 	if err != nil {
 		u.fail(w, err)
@@ -3427,7 +3484,9 @@ func (u *webUI) findSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.kick()
-	u.frag(w, "matches", titleSourceView(title, true, false, "", nil))
+	v := titleSourceView(title, true, false, "", nil)
+	v.Queued = true
+	u.frag(w, "matches", v)
 }
 
 func (u *webUI) titleSources(w http.ResponseWriter, r *http.Request) {
@@ -3881,7 +3940,7 @@ func (u *webUI) settingsSave(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		value := strings.TrimSpace(r.FormValue(key))
-		if key == service.SettingAniListClientSecret && value == redactedSecret {
+		if secretSetting(key) && value == redactedSecret {
 			continue
 		}
 		// Personal appearance values are always stored explicitly: "equals the
@@ -3952,9 +4011,9 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 			f.Kind, f.Options = "select", service.UIThemes()
 		case strings.HasPrefix(key, "ui.custom."):
 			f.Kind = "color"
-		case key == service.SettingAniListClientID, key == service.SettingAniListClientSecret:
+		case key == service.SettingAniListClientID, key == service.SettingMALClientID, secretSetting(key):
 			f.Kind = "secret"
-			if key == service.SettingAniListClientSecret && f.Value != "" {
+			if secretSetting(key) && f.Value != "" {
 				f.Value = redactedSecret
 			}
 		}
@@ -3982,7 +4041,7 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 				service.SettingServeRefreshEvery, service.SettingServeScanEvery,
 				service.SettingServeDownloadEvery, service.SettingServeSourceVerifyEvery,
 				service.SettingServeBackupEvery, service.SettingServeRunEvery,
-				service.SettingServeAniListSyncEvery,
+				service.SettingServeTrackerSyncEvery,
 				service.SettingServeCatalogEvery)},
 			settingGroup{Title: "Jobs & downloads", Fields: fields(
 				service.SettingJobsMaxAttempts, service.SettingJobsTimeout,
@@ -3996,11 +4055,24 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 				service.SettingBrowserDownloaderEnabled, service.SettingBrowserDownloaderEndpoint,
 				service.SettingBrowserDownloaderTimeoutSeconds, service.SettingServicesHealthInterval)},
 			settingGroup{Title: "Sources", Fields: fields(service.SettingSourceRegistryURL)},
-			settingGroup{Title: "AniList application", Fields: fields(
-				service.SettingAniListClientID, service.SettingAniListClientSecret)},
+			settingGroup{Title: "Metadata & tracking", Fields: fields(
+				service.SettingProvidersDefault, service.SettingProvidersDisabled,
+				service.SettingAniListClientID, service.SettingAniListClientSecret,
+				service.SettingMALClientID, service.SettingMALClientSecret)},
 		)
 	}
 	return settingsView{Groups: groups}
+}
+
+func secretSetting(key string) bool {
+	return key == service.SettingAniListClientSecret || key == service.SettingMALClientSecret
+}
+
+func mangaURL(m catalog.Manga) string {
+	if m.Provider == catalog.AniListProvider || m.Provider == "" {
+		return "/manga/" + m.ProviderID
+	}
+	return "/manga/" + m.Provider + "/" + m.ProviderID
 }
 
 // effectiveSetting returns the in-effect value for env-backed settings so the
@@ -4213,7 +4285,21 @@ func (u *webUI) funcs() template.FuncMap {
 			}
 			return false
 		},
-		"mangaTitle": mangaTitle,
+		"mangaTitle":  mangaTitle,
+		"mangaURL":    mangaURL,
+		"providerURL": catalog.MangaURL,
+		"providerLabel": func(name string) string {
+			if u.svc == nil {
+				return name
+			}
+			return u.svc.ProviderLabel(name)
+		},
+		"banner": func(image, cover string) map[string]string {
+			return map[string]string{"Image": image, "Cover": cover}
+		},
+		"providerBlocks": func(options []providerOption, blocked []string) map[string]any {
+			return map[string]any{"Options": options, "Blocked": blocked}
+		},
 		"sub": func(a, b int64) int64 {
 			if a < b {
 				return 0
@@ -4383,8 +4469,8 @@ func mangaTitle(m catalog.Manga) string {
 
 func jobLabel(typ string) string {
 	switch typ {
-	case jobs.TypeSyncAniList:
-		return "AniList sync"
+	case jobs.TypeSyncTrackers:
+		return "Tracker sync"
 	case jobs.TypeCatalogRefresh:
 		return "Catalog refresh"
 	case jobs.TypeAttachVolumes:

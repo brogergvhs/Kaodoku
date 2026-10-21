@@ -7,7 +7,7 @@
 {{define "matches"}}
 {{if .Active}}
 <div id="{{.DomID}}" class="flex items-center gap-2 py-2" hx-get="{{.PollURL}}" hx-trigger="load delay:1200ms" hx-swap="outerHTML">
-  <span class="loading loading-spinner loading-sm"></span> <span class="text-sm text-base-content/60">Searching sources…</span>
+  {{if .Queued}}<span class="text-sm text-base-content/60">Search queued</span>{{else}}<span class="loading loading-spinner loading-sm"></span> <span class="text-sm text-base-content/60">Searching sources…</span>{{end}}
 </div>
 {{else}}
 <div id="{{.DomID}}">

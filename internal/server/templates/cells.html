@@ -75,8 +75,8 @@
   {{if .Description}}<p class="text-sm text-base-content/70 leading-relaxed whitespace-pre-line">{{desc .Description}}</p>{{end}}
   <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-base-content/50">
     {{if .Authors}}<span>By {{range $i, $a := .Authors}}{{if $i}}, {{end}}{{$a}}{{end}}</span>{{end}}
-    {{if .Chapters}}<span>{{.Chapters}} chapters (AniList)</span>{{end}}
-    {{if .Volumes}}<span>{{.Volumes}} volumes (AniList)</span>{{end}}
+    {{if .Chapters}}<span>{{.Chapters}} chapters (catalog)</span>{{end}}
+    {{if .Volumes}}<span>{{.Volumes}} volumes (catalog)</span>{{end}}
   </div>
   {{if .Genres}}<div class="flex flex-wrap gap-1.5">{{range .Genres}}<a href="/library?include_tags={{. | urlquery}}" class="badge badge-outline badge-sm transition-colors hover:border-primary hover:text-primary">{{.}}</a>{{end}}</div>{{end}}
 </div>
@@ -392,13 +392,7 @@
     <span><span class="text-sm font-medium">Also delete downloaded files from disk</span>
     <span class="block text-xs text-base-content/50">Leave unchecked to keep the folder — it will show up on the Import page for re-importing later.</span></span>
   </label>
-  {{if .AniListConnected}}
-  <label class="label cursor-pointer justify-start gap-2">
-    <input type="checkbox" class="checkbox checkbox-sm" name="delete_anilist">
-    <span><span class="text-sm font-medium">Also delete from AniList</span>
-    <span class="block text-xs text-base-content/50">Removes this manga from your AniList list entirely. Left unchecked, it is set to Dropped instead.</span></span>
-  </label>
-  {{end}}
+  {{if .TrackersConnected}}{{template "removeRemoteOption"}}{{end}}
   <div class="modal-action">
     <button type="button" class="btn btn-ghost" onclick="lib_title_dialog.close()">Cancel</button>
     <button class="btn btn-error">Remove title</button>
@@ -527,11 +521,19 @@
 </div>
 {{end}}
 
-{{define "anilistSuggestions"}}
+{{define "removeRemoteOption"}}
+<label class="label cursor-pointer justify-start gap-2">
+  <input type="checkbox" class="checkbox checkbox-sm" name="delete_remote">
+  <span><span class="text-sm font-medium">Also delete from your trackers</span>
+  <span class="block text-xs text-base-content/50">Removes this manga from the trackers it has progressive sync on. Left unchecked, it is set to Dropped there instead.</span></span>
+</label>
+{{end}}
+
+{{define "trackerSuggestions"}}
 {{if .Items}}
 <div class="collapse collapse-arrow bg-base-100 mt-4 mb-4">
   <input type="checkbox">
-  <div class="collapse-title font-semibold">From your AniList <span class="badge badge-sm badge-ghost">{{len .Items}} not in library</span></div>
+  <div class="collapse-title font-semibold">From your lists <span class="badge badge-sm badge-ghost">{{len .Items}} not in library</span></div>
   <div class="collapse-content">{{template "mangaResults" .}}</div>
 </div>
 {{end}}
@@ -613,14 +615,14 @@
     <tbody>
       {{$canAdd := .CanAdd}}{{range .Items}}
       <tr {{if .IsAdult}}class="outline outline-1 -outline-offset-1 outline-error"{{end}}>
-        <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}/manga/{{.ProviderID}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a></td>
+        <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a></td>
         <td class="min-w-0">
-          <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}/manga/{{.ProviderID}}{{end}}">{{mangaTitle .Manga}}</a>
-          <div class="text-xs text-base-content/50">{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
+          <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}">{{mangaTitle .Manga}}</a>
+          <div class="text-xs text-base-content/50">{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
         </td>
         <td class="whitespace-nowrap text-right">
           {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
-          {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
+          {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
         </td>
       </tr>
       {{end}}
@@ -634,14 +636,14 @@
     <div class="flex gap-5 max-sm:flex-col">
       <figure class="shrink-0 max-sm:self-center">
         {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a>
-        {{else}}<a href="/manga/{{.ProviderID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
+        {{else}}<a href="{{mangaURL .Manga}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
       </figure>
       <div class="flex min-w-0 flex-1 flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}</h3>
+          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}{{if $.ShowProvider}} <span class="badge badge-ghost badge-sm align-middle">{{providerLabel .Provider}}</span>{{end}}</h3>
           <div class="shrink-0">
             {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
-            {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
+            {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
           </div>
         </div>
         {{template "mangaSummary" .Manga}}
@@ -656,7 +658,8 @@
   <div class="flex min-w-0 flex-col">
     <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
       {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>
-      {{else}}<a href="/manga/{{.ProviderID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
+      {{else}}<a href="{{mangaURL .Manga}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
+      {{if $.ShowProvider}}<span class="pointer-events-none badge badge-sm absolute left-2 top-2 bg-base-100">{{providerLabel .Provider}}</span>{{end}}
       {{if $.ShowRelations}}<div class="pointer-events-none absolute inset-x-2 bottom-2 flex">
         <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
       </div>{{end}}
@@ -667,7 +670,7 @@
       <span class="shrink-0">{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
     </div>
     {{if .TitleID}}<a class="btn btn-xs btn-success btn-soft mt-auto w-full pt-0.5" href="/library/{{.TitleID}}">✓ In library</a>
-    {{else if $canAdd}}<button class="btn btn-xs btn-outline mt-auto w-full" hx-post="/ui/library/add" hx-vals='{"provider_id":"{{.ProviderID}}","card":"1"}' hx-target="this" hx-swap="outerHTML">Add</button>
+    {{else if $canAdd}}<button class="btn btn-xs btn-outline mt-auto w-full" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}","card":"1"}' hx-target="this" hx-swap="outerHTML">Add</button>
     {{else}}<div class="mt-auto"></div>{{end}}
   </div>
   {{end}}
@@ -834,5 +837,151 @@
   </dialog>
   {{end}}
   {{end}}
+</div>
+{{end}}
+
+{{define "providerPanel"}}
+<div id="providers-{{.TitleID}}" class="collapse collapse-arrow bg-base-100 mt-4 overflow-visible">
+  <input type="checkbox" {{if .Open}}checked{{end}}>
+  <div class="collapse-title font-semibold">Metadata &amp; trackers</div>
+  <div class="collapse-content">
+    <div class="divide-y divide-line/25">
+      {{range .Links}}
+      {{$linked := and .ID .Confirmed}}
+      <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+        {{if .Cover}}<img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{.Cover}}" alt="" loading="lazy">{{end}}
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-center gap-2 text-sm font-medium">
+            {{.Label}}
+            <div class="flex gap-1">
+              {{if .Primary}}<span class="badge badge-sm badge-primary badge-soft tip" tabindex="0" data-tip="Metadata source" aria-label="Metadata source">{{template "iconDatabase"}}</span>{{end}}
+              {{if $linked}}{{if .Syncing}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Progressive sync" aria-label="Progressive sync">{{template "iconRefresh"}}</span>{{else if not .Primary}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Linked" aria-label="Linked">{{template "iconLink"}}</span>{{end}}
+              {{else if .ID}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Suggested match" aria-label="Suggested match">{{template "iconAlert"}}</span>
+              {{else}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Not linked" aria-label="Not linked">{{template "iconUnlink"}}</span>{{end}}
+            </div>
+          </div>
+          {{if .URL}}<a class="text-xs text-base-content/50 link-hover" href="{{.URL}}" target="_blank" rel="noreferrer noopener">#{{.ID}} ↗</a>{{end}}
+          {{if and $linked (not .Connected)}}<div class="text-xs text-base-content/50"><a class="link" href="/settings">Connect {{.Label}}</a> to sync your progress</div>{{end}}
+        </div>
+        {{$sync := and $linked .Connected}}
+        {{if or $.CanManage $sync}}
+        <details class="dropdown dropdown-end shrink-0">
+          <summary class="btn btn-ghost btn-sm btn-square" aria-label="{{.Label}} actions">{{template "iconDots"}}</summary>
+          <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-max whitespace-nowrap p-2 shadow-lg border border-base-300">
+            {{if and $sync (not .Syncing)}}
+            <li><button hx-post="/ui/library/{{$.TitleID}}/tracker-sync" hx-vals='{"provider":"{{.Provider}}"}' hx-target="#toast">{{template "iconUpload"}}Sync current progress</button></li>
+            <li><button hx-post="/ui/library/{{$.TitleID}}/providers/progressive" hx-vals='{"provider":"{{.Provider}}","on":"1"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconPower"}}Start progressive sync</button></li>
+            {{end}}
+            {{if $.CanManage}}
+            {{if and .ID (not .Confirmed)}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconCheckCircle"}}Confirm match</button></li>{{end}}
+            <li><button hx-post="/ui/library/{{$.TitleID}}/providers/search" hx-include="#picker-form-{{$.TitleID}}-{{.Provider}}" hx-target="#picker-results-{{$.TitleID}}-{{.Provider}}" onclick="openPicker('{{$.TitleID}}-{{.Provider}}')">{{if or .Primary $linked}}{{template "iconRefresh"}}Relink{{else}}{{template "iconLink"}}Link{{end}}</button></li>
+            {{if and $linked (not .Primary)}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}","mode":"primary"}' hx-confirm="Use {{.Label}} for this title's metadata?">{{template "iconDatabase"}}Use for metadata</button></li>{{end}}
+            {{end}}
+            {{if and $sync .Syncing}}<li><button class="text-error" hx-post="/ui/library/{{$.TitleID}}/providers/progressive" hx-vals='{"provider":"{{.Provider}}","on":"0"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconPower"}}Stop progressive sync</button></li>{{end}}
+            {{if $.CanManage}}
+            {{if and .ID (not .Primary)}}<li><button class="text-error" hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":""}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML" hx-confirm="Unlink {{.Label}} from this title? It won't be matched automatically again.">{{template "iconUnlink"}}Unlink</button></li>{{end}}
+            {{end}}
+          </ul>
+        </details>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+    {{if .CanManage}}{{range .Links}}
+    <dialog id="picker-{{$.TitleID}}-{{.Provider}}" class="modal">
+      <div class="modal-box flex max-w-lg flex-col gap-2 overflow-hidden">
+        <div class="flex items-start justify-between gap-2">
+          <h3 class="text-lg font-bold">{{if or .Primary (and .ID .Confirmed)}}Relink{{else}}Link{{end}} {{.Label}}</h3>
+          <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+        </div>
+        <form id="picker-form-{{$.TitleID}}-{{.Provider}}" class="grid grid-cols-1 gap-2" hx-post="/ui/library/{{$.TitleID}}/providers/search" hx-target="#picker-results-{{$.TitleID}}-{{.Provider}}" hx-on::before-request="openPicker('{{$.TitleID}}-{{.Provider}}')">
+          <input type="hidden" name="provider" value="{{.Provider}}">
+          <span class="text-xs text-base-content/60">Pick the matching {{.Label}} entry. Linking doesn't sync anyone's progress by itself.</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <input name="q" class="input input-sm min-w-40 flex-1" value="{{$.Query}}" aria-label="Search">
+            <button class="btn btn-sm btn-outline max-sm:w-full">Search</button>
+          </div>
+        </form>
+        <div id="picker-results-{{$.TitleID}}-{{.Provider}}" class="min-h-0 flex-1 overflow-y-auto"></div>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+    {{end}}{{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "providerPicker"}}
+  {{if .Error}}<p class="text-sm text-error">{{.Error}}</p>{{end}}
+  <div class="divide-y divide-line/25">
+    {{range .Results}}
+    {{$cur := eq .ProviderID $.Current}}
+    <div class="flex items-center gap-3 py-2">
+      <img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy">
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-sm font-medium">{{mangaTitle .}}</div>
+        <div class="text-xs text-base-content/50">{{.Format}}{{if .Year}} · {{.Year}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}} · <a class="link-hover" href="{{providerURL .Provider .ProviderID}}" target="_blank" rel="noreferrer noopener">#{{.ProviderID}} ↗</a></div>
+      </div>
+      {{if $cur}}<span class="badge badge-success badge-soft badge-sm shrink-0">linked</span>
+      {{else}}<button type="button" class="btn btn-sm btn-outline" hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">Use</button>{{end}}
+    </div>
+    {{else}}<p class="py-2 text-sm text-base-content/60">No results — refine the search.</p>{{end}}
+  </div>
+{{end}}
+
+{{define "providerBlocks"}}
+<div class="fieldset"><span class="fieldset-legend">Blocked metadata &amp; tracking backends</span>
+  <div class="flex flex-wrap gap-x-4 gap-y-1">
+    {{range .Options}}<label class="label cursor-pointer gap-2"><input type="checkbox" class="checkbox checkbox-sm" name="blocked_providers" value="{{.Name}}" {{if has $.Blocked .Name}}checked{{end}}><span class="text-sm">{{.Label}}</span></label>{{end}}
+  </div>
+  <span class="label">This user can't search, link or sync with blocked backends.</span>
+</div>
+{{end}}
+
+{{define "trackerCards"}}
+<div class="card bg-base-100 card-body p-4 gap-2 mb-4">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Tracking accounts</h2>
+  <div class="divide-y divide-line/25">
+  {{range .}}
+  <div class="grid gap-2 py-3">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <div>
+        <div class="text-sm font-medium">{{.Label}}</div>
+        {{with .Account}}<div class="text-sm">Connected as <span class="font-medium">{{.Name}}</span></div>
+        {{if .ExpiresAt}}<span class="text-xs {{if .ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.ExpiresAt}}</span>{{end}}
+        {{if .LastError}}<div class="text-xs text-error">{{.LastError}}</div>{{end}}{{end}}
+      </div>
+      {{if .Account}}
+      <div class="flex max-sm:flex-col max-sm:w-full items-center gap-2">
+        {{if and .Account.ExpiringSoon (eq .Login "oauth")}}<a class="btn btn-sm btn-warning" href="/trackers/{{.Provider}}/connect">Reconnect</a>{{end}}
+        <button class="btn btn-sm btn-outline max-sm:w-full" hx-post="/ui/trackers/{{.Provider}}/sync" hx-swap="none">Sync now</button>
+        <button class="btn btn-sm btn-outline max-sm:w-full text-error" hx-post="/ui/trackers/{{.Provider}}/disconnect" hx-swap="none" hx-confirm="Disconnect your {{.Label}} account?">Disconnect</button>
+      </div>
+      {{else if eq .Login "oauth"}}<a class="btn btn-sm btn-primary" href="/trackers/{{.Provider}}/connect">Connect {{.Label}}</a>
+      {{else if eq .Login ""}}<span class="text-xs text-base-content/50">Not configured by an admin</span>{{end}}
+    </div>
+    {{if and (not .Account) (eq .Login "password")}}
+    <form class="flex flex-wrap items-center gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
+      <input class="input input-sm min-w-36 flex-1" name="username" placeholder="{{.Label}} username or email" autocomplete="off" required>
+      <input class="input input-sm min-w-36 flex-1" type="password" name="password" placeholder="Password" autocomplete="off" required>
+      <button class="btn btn-sm btn-primary max-sm:w-full">Connect</button>
+    </form>
+    <span class="text-xs text-base-content/50">Your password is sent to {{.Label}} once; only the returned token is stored.</span>
+    {{end}}
+    {{if and (not .Account) (eq .Login "") (ne .Provider "kitsu") (ne .Provider "mangaupdates")}}
+    <div class="text-xs text-base-content/50">An admin registers an app with this redirect URL, then enters its client ID in Metadata &amp; tracking below:</div>
+    <code class="rounded-lg bg-base-300 px-3 py-2 text-xs break-all select-all">{{.Redirect}}</code>
+    {{end}}
+    {{if .Account}}
+    <details>
+      <summary class="flex cursor-pointer list-none items-center justify-between py-1 text-sm font-medium select-none">Browse your {{.Label}} list<span class="text-base-content/50">{{template "iconChevron"}}</span></summary>
+      <div hx-get="/ui/trackers/{{.Provider}}/library" hx-trigger="intersect once" hx-swap="outerHTML">
+        <div class="flex items-center gap-2 py-2 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading your list…</div>
+      </div>
+    </details>
+    {{end}}
+  </div>
+  {{end}}
+  </div>
 </div>
 {{end}}

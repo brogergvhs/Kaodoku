@@ -126,32 +126,8 @@
 {{define "search"}}
 <form id="search-form" class="filter-form mb-4 grid gap-3" hx-post="/ui/search" hx-target="#search-results" hx-swap="innerHTML" hx-indicator="#search-spin"
   hx-trigger="submit, change[event.target.name && event.target.name !== 'q'], keyup changed delay:400ms from:input[name='q']">
-  <div class="filter-toolbar">
-    <input name="q" class="input filter-query w-full min-w-0" aria-label="Search AniList" placeholder="Search AniList…" value="{{.Controls.Q}}" autofocus>
-    <div data-filter-desktop-controls>
-      <div class="filter-display-controls">
-        <div class="fieldset filter-sort"><span class="fieldset-legend filter-display-label">Sort</span>
-          <div class="flex items-center gap-1.5">
-            <select name="sort" aria-label="Sort by" class="select min-w-0 flex-1" data-default="">
-              <option value="" {{if eq .Controls.Sort ""}}selected{{end}}>Relevance</option>
-              <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
-              <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
-              <option value="year" {{if eq .Controls.Sort "year"}}selected{{end}}>Year</option>
-              <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Chapters</option>
-            </select>
-            <div class="flex shrink-0 items-center gap-1" data-dir-switch data-default="desc">
-              <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Descending"><input type="radio" name="dir" value="desc" class="sr-only" aria-label="Descending" {{if eq .Controls.Dir "desc"}}checked{{end}}>{{template "iconSortDesc"}}</label>
-              <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Ascending"><input type="radio" name="dir" value="asc" class="sr-only" aria-label="Ascending" {{if eq .Controls.Dir "asc"}}checked{{end}}>{{template "iconSortAsc"}}</label>
-            </div>
-          </div>
-        </div>
-        <div class="fieldset filter-view"><span class="fieldset-legend filter-display-label">View</span>
-          <div class="flex items-center gap-1" role="group" aria-label="View">
-            {{template "viewButtons" .Controls.View}}
-          </div>
-        </div>
-      </div>
-    </div>
+  <div class="filter-toolbar search-toolbar">
+    <input name="q" class="input filter-query w-full min-w-0" aria-label="Search manga" placeholder="Search manga…" value="{{.Controls.Q}}" autofocus>
     <button type="button" class="filter-disclosure btn btn-outline" aria-haspopup="dialog" aria-controls="search-filters" onclick="document.getElementById('search-filters').showModal()">{{template "iconFilter"}}<span data-filter-count>Filters</span></button>
   </div>
   <dialog id="search-filters" class="modal filter-modal" aria-labelledby="search-filters-title">
@@ -161,7 +137,31 @@
         <button type="button" class="btn btn-ghost btn-square" aria-label="Close filters" onclick="this.closest('dialog').close()" autofocus>✕</button>
       </div>
       <div class="filter-modal-body">
-        <div data-filter-mobile-controls></div>
+        <div class="search-filter-controls filter-display-controls">
+          {{if gt (len .Providers) 1}}<div class="fieldset"><span class="fieldset-legend">Backend</span>
+            <select name="provider" class="select w-full" aria-label="Search backend">{{range .Providers}}<option value="{{.Name}}" {{if eq .Name $.Controls.Provider}}selected{{end}}>{{.Label}}</option>{{end}}</select>
+          </div>{{end}}
+          <div class="fieldset filter-sort"><span class="fieldset-legend">Sort</span>
+            <div class="flex items-center gap-1.5">
+              <select name="sort" aria-label="Sort by" class="select min-w-0 flex-1" data-default="">
+                <option value="" {{if eq .Controls.Sort ""}}selected{{end}}>Relevance</option>
+                <option value="rating" {{if eq .Controls.Sort "rating"}}selected{{end}}>Rating</option>
+                <option value="title" {{if eq .Controls.Sort "title"}}selected{{end}}>Title</option>
+                <option value="year" {{if eq .Controls.Sort "year"}}selected{{end}}>Year</option>
+                <option value="chapters" {{if eq .Controls.Sort "chapters"}}selected{{end}}>Chapters</option>
+              </select>
+              <div class="flex shrink-0 items-center gap-1" data-dir-switch data-default="desc">
+                <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Descending"><input type="radio" name="dir" value="desc" class="sr-only" aria-label="Descending" {{if eq .Controls.Dir "desc"}}checked{{end}}>{{template "iconSortDesc"}}</label>
+                <label class="btn btn-square btn-outline has-checked:border-primary has-checked:bg-primary/10 has-checked:text-primary" title="Ascending"><input type="radio" name="dir" value="asc" class="sr-only" aria-label="Ascending" {{if eq .Controls.Dir "asc"}}checked{{end}}>{{template "iconSortAsc"}}</label>
+              </div>
+            </div>
+          </div>
+          <div class="fieldset filter-view"><span class="fieldset-legend">View</span>
+            <div class="flex items-center gap-1" role="group" aria-label="View">
+              {{template "viewButtons" .Controls.View}}
+            </div>
+          </div>
+        </div>
         <div class="filter-panel grid grid-cols-1 items-start gap-2 sm:grid-cols-2">
           {{template "tagFilter" tagFilter .TagOptions .Controls.IncludeTags .Controls.ExcludeTags "Tags & genres"}}
         </div>
@@ -172,7 +172,7 @@
   </dialog>
 </form>
 <div class="text-center"><span id="search-spin" class="htmx-indicator loading my-4"></span></div>
-<div hx-get="/ui/anilist/suggestions" hx-include="#search-form" hx-trigger="load" hx-swap="outerHTML"></div>
+<div hx-get="/ui/trackers/suggestions" hx-include="#search-form" hx-trigger="load, change from:#search-form select[name='provider']" hx-swap="innerHTML"></div>
 <div id="search-results"><div hx-post="/ui/search" hx-include="#search-form" hx-trigger="load" hx-swap="outerHTML">
   <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading…</div>
 </div></div>
@@ -405,7 +405,7 @@
   </dialog>
 </form>
 <div data-active-filters class="mb-4 hidden flex-wrap items-center gap-1.5"></div>
-{{if not .CollectionName}}<div hx-get="/ui/anilist/suggestions?view={{.Controls.View}}" hx-trigger="load" hx-swap="outerHTML"></div>{{end}}
+{{if not .CollectionName}}<div hx-get="/ui/trackers/suggestions?view={{.Controls.View}}" hx-trigger="load" hx-swap="outerHTML"></div>{{end}}
 <div id="library-results">{{template "libraryResults" .Table}}</div>
 {{if .Table.CanManage}}
 <dialog id="lib_title_dialog" class="modal">
@@ -445,7 +445,7 @@
 {{else if eq .Mode "custom"}}
 <p class="py-3 text-base-content/60">No custom collections yet. Use “New collection” to group titles manually, or add a title to one from its actions menu.</p>
 {{else if and (eq .Mode "smart") (not .HasRelations)}}
-<p class="py-3 text-base-content/60">No connections stored yet. Run a Catalog refresh (Management → Recent jobs → Start new job) to fetch AniList relations, then check back.</p>
+<p class="py-3 text-base-content/60">No connections stored yet. Run a Catalog refresh (Management → Recent jobs → Start new job) to fetch catalog relations, then check back.</p>
 {{else}}
 <p class="py-3 text-base-content/60">Nothing to collect yet — you need two or more {{if eq .Mode "smart"}}connected titles{{else}}titles by the same author{{end}} in your library.</p>
 {{end}}
@@ -498,17 +498,17 @@
 </div>
 {{end}}
 
-{{define "titleBanner"}}{{if .}}
+{{define "titleBanner"}}{{$src := or .Image .Cover}}{{if $src}}
 <div class="relative -mx-4 -mt-4 mb-4 h-56 overflow-hidden bg-base-300 sm:mx-0 sm:mt-0 sm:h-64 sm:rounded-lg">
-  <img class="h-full w-full object-cover" src="{{.}}" alt="">
+  <img class="h-full w-full object-cover" src="{{$src}}" alt="">
   <div class="absolute inset-0 bg-linear-to-t from-base-100 to-transparent"></div>
 </div>
 {{end}}{{end}}
 
 {{define "catalogManga"}}
-{{template "titleBanner" .Manga.BannerImage}}
+{{template "titleBanner" (banner .Manga.BannerImage .Manga.CoverImage)}}
 <div class="flex gap-5 mb-4 max-lg:flex-col">
-  <figure class="shrink-0 max-lg:self-center{{if .Manga.BannerImage}} relative -mt-28 lg:ml-4{{end}}"><img class="h-72 w-48 rounded-lg bg-base-300 object-cover" src="{{.Manga.CoverImage}}" alt="" loading="lazy"></figure>
+  <figure class="shrink-0 max-lg:self-center{{if or .Manga.BannerImage .Manga.CoverImage}} relative -mt-28 lg:ml-4{{end}}"><img class="h-72 w-48 rounded-lg bg-base-300 object-cover" src="{{.Manga.CoverImage}}" alt="" loading="lazy"></figure>
   <div class="flex min-w-0 flex-1 flex-col gap-3">
     <h1 class="text-2xl font-bold text-balance">{{mangaTitle .Manga}}</h1>
     {{template "mangaDetail" .Manga}}
@@ -516,15 +516,15 @@
 </div>
 {{if .CanAdd}}
 <div class="mt-8 flex justify-center">
-  <button class="btn btn-primary btn-wide" hx-post="/ui/library/add" hx-vals='{"provider_id":"{{.Manga.ProviderID}}","redirect":"1"}' hx-swap="none">Add to Library</button>
+  <button class="btn btn-primary btn-wide" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Manga.Provider}}","provider_id":"{{.Manga.ProviderID}}","redirect":"1"}' hx-swap="none">Add to Library</button>
 </div>
 {{end}}
 {{end}}
 
 {{define "title"}}
-{{template "titleBanner" .Title.BannerImage}}
+{{template "titleBanner" (banner .Title.BannerImage .Title.CoverImage)}}
 <div class="flex gap-5 mb-4 max-lg:flex-col">
-  <figure class="shrink-0 max-lg:self-center{{if .Title.BannerImage}} relative -mt-28 lg:ml-4{{end}}"><img class="rounded-lg bg-base-300" src="{{.Title.CoverImage}}" alt="" loading="lazy"></figure>
+  <figure class="shrink-0 max-lg:self-center{{if or .Title.BannerImage .Title.CoverImage}} relative -mt-28 lg:ml-4{{end}}"><img class="h-72 w-48 rounded-lg bg-base-300 object-cover" src="{{.Title.CoverImage}}" alt="" loading="lazy"></figure>
   <div class="flex min-w-0 flex-1 flex-col gap-3">
     <div class="flex items-start justify-between gap-3">
       <h1 class="text-2xl font-bold text-balance">{{.Title.DisplayTitle}}</h1>
@@ -540,7 +540,6 @@
             {{if linked .Title.SourceURL}}<li><button hx-post="/ui/library/{{.Title.ID}}/refresh" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "refresh_title"}}disabled{{end}}>{{template "iconRefresh"}}Refresh chapters</button></li>{{end}}
             <li><button hx-post="/ui/library/{{.Title.ID}}/scan" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "scan_downloads"}}disabled{{end}}>{{template "iconScan"}}Scan files</button></li>
             <li><button hx-post="/ui/library/{{.Title.ID}}/crops" hx-target="#act-{{.Title.ID}}" hx-swap="outerHTML" {{if index .Running "detect_crops"}}disabled{{end}}>{{template "iconScan"}}Detect page crops</button></li>
-            {{if .AniList.Connected}}<li><button hx-post="/ui/library/{{.Title.ID}}/anilist-sync" hx-swap="none">{{template "iconVerify"}}Sync AniList</button></li>{{end}}
             {{if linked .Title.SourceURL}}<li><button onclick="title_settings_modal.showModal()">{{template "iconSettings"}}Title settings</button></li>{{end}}
             <li><label>{{template "iconEdit"}}Upload cover
               <input type="file" name="cover" accept="image/*" class="hidden"
@@ -596,13 +595,7 @@
         <span><span class="text-sm font-medium">Also delete downloaded files from disk</span>
         <span class="block text-xs text-base-content/50">Leave unchecked to keep the folder — it will show up on the Import page for re-importing later.</span></span>
       </label>
-      {{if .AniList.Connected}}
-      <label class="label cursor-pointer justify-start gap-2">
-        <input type="checkbox" class="checkbox checkbox-sm" name="delete_anilist">
-        <span><span class="text-sm font-medium">Also delete from AniList</span>
-        <span class="block text-xs text-base-content/50">Removes this manga from your AniList list entirely. Left unchecked, it is set to Dropped instead.</span></span>
-      </label>
-      {{end}}
+      {{if .Trackers}}{{template "removeRemoteOption"}}{{end}}
       <div class="modal-action">
         <button type="button" class="btn btn-ghost" onclick="remove_title_modal.close()">Cancel</button>
         <button class="btn btn-error">Remove title</button>
@@ -694,6 +687,8 @@
 
 {{end}}
 
+{{if .Title.CatalogMangaID}}<div hx-get="/ui/library/{{.Title.ID}}/providers" hx-trigger="load" hx-swap="outerHTML"></div>{{end}}
+
 {{if .Title.CatalogMangaID}}<div hx-get="/ui/library/{{.Title.ID}}/related" hx-trigger="load" hx-swap="outerHTML">
   <div class="collapse bg-base-100 mt-4"><div class="collapse-title font-semibold">Related manga <span class="loading loading-spinner loading-xs ml-1 align-middle"></span></div></div>
   <div class="collapse bg-base-100 mt-4"><div class="collapse-title font-semibold">Recommended manga <span class="loading loading-spinner loading-xs ml-1 align-middle"></span></div></div>
@@ -716,7 +711,7 @@
 {{end}}
 
 {{define "import"}}
-<p class="text-sm text-base-content/60 mb-4">Folders in your download directory that aren't tracked yet. Match each to an AniList title to import it and recognize its existing chapters.</p>
+<p class="text-sm text-base-content/60 mb-4">Folders in your download directory that aren't tracked yet. Match each to a catalog title to import it and recognize its existing chapters.</p>
 <div hx-get="/ui/import/candidates" hx-trigger="load" hx-swap="outerHTML">
   <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Scanning download folder…</div>
 </div>
@@ -727,7 +722,7 @@
 <div class="card bg-base-100 mb-3"><div class="card-body p-4">
   <div class="flex items-center justify-between gap-2 flex-wrap">
     <div><strong>{{$c.Folder}}</strong> <span class="text-sm text-base-content/50">· {{$c.ChapterFiles}} chapter files</span></div>
-    <button class="btn btn-sm" hx-post="/ui/import/{{pathEscape $c.Folder}}/search" hx-target="#picker-{{$i}}" hx-swap="innerHTML">Match on AniList</button>
+    <button class="btn btn-sm" hx-post="/ui/import/{{pathEscape $c.Folder}}/search" hx-target="#picker-{{$i}}" hx-swap="innerHTML">Match title</button>
   </div>
   <div id="picker-{{$i}}"></div>
   {{if $.HasTitles}}
@@ -752,16 +747,22 @@
 {{define "importPicker"}}
 <form hx-post="/ui/import" hx-swap="none" class="mt-3 grid gap-3">
   <input type="hidden" name="folder" value="{{.Folder}}">
-  <input name="q" class="input input-sm w-full" value="{{.Query}}" placeholder="Refine search…"
-    hx-post="/ui/import/{{pathEscape .Folder}}/search" hx-target="closest form" hx-swap="outerHTML" hx-trigger="keyup changed delay:500ms">
+  <div class="flex items-center gap-2">
+    {{if gt (len .Providers) 1}}<select name="provider" class="select select-sm w-auto shrink-0" aria-label="Search backend"
+      hx-post="/ui/import/{{pathEscape .Folder}}/search" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML" hx-trigger="change">
+      {{range .Providers}}<option value="{{.Name}}" {{if eq .Name $.Provider}}selected{{end}}>{{.Label}}</option>{{end}}</select>
+    {{else}}<input type="hidden" name="provider" value="{{.Provider}}">{{end}}
+    <input name="q" class="input input-sm w-full" value="{{.Query}}" placeholder="Refine search…"
+      hx-post="/ui/import/{{pathEscape .Folder}}/search" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML" hx-trigger="keyup changed delay:500ms">
+  </div>
   <div class="grid gap-1">
     {{range $i, $m := .Results}}
     <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-base-200 cursor-pointer">
-      <input type="radio" class="radio radio-sm" name="anilist_id" value="{{$m.ProviderID}}" {{if eq $i 0}}checked{{end}}>
+      <input type="radio" class="radio radio-sm" name="provider_id" value="{{$m.ProviderID}}" {{if eq $i 0}}checked{{end}}>
       <img class="h-12 w-8 rounded object-cover bg-base-300" src="{{$m.CoverImage}}" loading="lazy">
       <span>{{mangaTitle $m}} <span class="text-xs text-base-content/50">{{$m.Format}} {{$m.Status}}{{if $m.Chapters}} · {{$m.Chapters}} ch{{end}}</span></span>
     </label>
-    {{else}}<p class="text-sm text-base-content/50">No AniList results — refine the search above.</p>{{end}}
+    {{else}}<p class="text-sm text-base-content/50">No results — refine the search above.</p>{{end}}
   </div>
   {{if .Results}}
   <div class="flex flex-wrap items-center gap-2">
@@ -854,41 +855,7 @@
 
 {{define "settings"}}
 <div hx-get="/ui/account" hx-trigger="load" hx-swap="outerHTML"></div>
-<div class="card bg-base-100 card-body p-4 gap-2 mb-4">
-  <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">AniList account</h2>
-  {{if .AniList.Connected}}
-  <div class="flex items-center justify-between gap-3 flex-wrap">
-    <div>
-      <div class="text-sm">Connected as <span class="font-medium">{{.AniList.Name}}</span></div>
-      {{if .AniList.ExpiresAt}} <span class="text-xs {{if .AniList.ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.AniList.ExpiresAt}}</span>{{end}}
-    </div>
-    <div class="flex max-sm:flex-col max-sm:w-full items-center gap-2 ">
-      {{if .AniList.ExpiringSoon}}<a class="btn btn-sm btn-warning" href="/anilist/connect">Reconnect</a>{{end}}
-      <button class="btn btn-sm btn-outline max-sm:w-full" hx-post="/ui/anilist/sync" hx-target="#anilist-sync-msg" hx-swap="innerHTML">Sync now</button>
-      <span id="anilist-sync-msg"></span>
-      <button class="btn btn-sm btn-outline max-sm:w-full text-error" hx-post="/ui/anilist/disconnect" hx-swap="none" hx-confirm="Disconnect your AniList account?">Disconnect</button>
-    </div>
-  </div>
-  <details class="mt-1">
-    <summary class="flex cursor-pointer list-none items-center justify-between py-1 text-sm font-medium select-none">Browse your AniList list<span class="text-base-content/50">{{template "iconChevron"}}</span></summary>
-    <div hx-get="/ui/anilist/library" hx-trigger="intersect once" hx-swap="outerHTML">
-      <div class="flex items-center gap-2 py-2 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading your list…</div>
-    </div>
-  </details>
-  {{else if .AppConfigured}}
-  <div class="flex items-center justify-between gap-3 flex-wrap">
-    <div class="text-sm text-base-content/60">Link your AniList account for personal syncing and recommendations.</div>
-    <a class="btn btn-sm btn-primary" href="/anilist/connect">Connect AniList</a>
-  </div>
-  {{else}}
-  <div class="text-sm text-base-content/60">
-    No AniList application is configured yet. An admin creates one at
-    <span class="font-medium">anilist.co/settings/developer</span> using this redirect URL:
-  </div>
-  <code class="rounded-lg bg-base-300 px-3 py-2 text-sm break-all select-all">{{.RedirectURL}}</code>
-  <div class="text-xs text-base-content/50">Then enter the client ID and secret in the AniList application section below (admins only).</div>
-  {{end}}
-</div>
+{{if .Trackers}}{{template "trackerCards" .Trackers}}{{end}}
 <form class="grid gap-4" hx-put="/ui/settings" hx-target="#toast">
   {{range .Groups}}
   {{if eq .Title "Appearance"}}
@@ -1083,6 +1050,7 @@
       </label>
       {{template "tagPicker" tagPicker .TagOptions nil "blocked_tags" "Blocked tags/genres" "Matching manga are hidden from this user everywhere."}}
       {{template "tagPicker" tagPicker .TagOptions nil "allowed_tags" "Include tags/genres (only)" "When set, only manga carrying at least one of these are shown."}}
+      {{template "providerBlocks" providerBlocks .ProviderOptions nil}}
       <label class="label cursor-pointer justify-start gap-2">
         <input type="checkbox" class="checkbox checkbox-sm" name="allow_adult">
         <span><span class="text-sm font-medium">Allow adult content</span>
@@ -1165,7 +1133,7 @@
   {{if .Hint}}<span class="label">{{.Hint}}</span>{{end}}
   {{else}}
   <input class="input w-full" name="{{.Name}}" value="{{range $i, $t := .Values}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="Gore, Horror, …">
-  <span class="label">Comma-separated (AniList tag list unavailable).{{if .Hint}} {{.Hint}}{{end}}</span>
+  <span class="label">Comma-separated (tag list unavailable).{{if .Hint}} {{.Hint}}{{end}}</span>
   {{end}}
 </div>
 {{end}}
@@ -1235,6 +1203,7 @@
       {{end}}
       {{template "tagPicker" tagPicker .TagOptions .User.BlockedTags "blocked_tags" "Blocked tags/genres" "Matching manga are hidden from this user everywhere."}}
       {{template "tagPicker" tagPicker .TagOptions .User.AllowedTags "allowed_tags" "Include tags/genres (only)" "When set, only manga carrying at least one of these are shown."}}
+      {{template "providerBlocks" providerBlocks .ProviderOptions .User.BlockedProviders}}
       <label class="label cursor-pointer justify-start gap-2">
         <input type="checkbox" class="checkbox checkbox-sm" name="allow_adult"{{if .User.AllowAdult}} checked{{end}}>
         <span><span class="text-sm font-medium">Allow adult content</span>

@@ -1089,3 +1089,9 @@ document.body.addEventListener("htmx:afterRequest", function (e) {
   applyView();
   appendNext();
 })();
+
+function openPicker(key) {
+  document.getElementById("picker-results-" + key).innerHTML = '<p class="py-2 text-sm text-base-content/60">Loading…</p>';
+  var d = document.getElementById("picker-" + key);
+  if (!d.open) d.showModal();
+}

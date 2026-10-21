@@ -19,7 +19,7 @@ func TestForwardedHeadersRequireTrustedProxy(t *testing.T) {
 	if secureRequest(req) {
 		t.Fatal("secureRequest trusted forwarded proto from public peer")
 	}
-	if got := anilistRedirectURL(req); got != "http://kaodoku.test/anilist/callback" {
+	if got := trackerRedirectURL(req, "anilist"); got != "http://kaodoku.test/anilist/callback" {
 		t.Fatalf("redirect URL untrusted = %q", got)
 	}
 
@@ -35,7 +35,7 @@ func TestForwardedHeadersRequireTrustedProxy(t *testing.T) {
 	if !secureRequest(req) {
 		t.Fatal("secureRequest ignored trusted forwarded proto")
 	}
-	if got := anilistRedirectURL(req); got != "https://public.example/anilist/callback" {
+	if got := trackerRedirectURL(req, "anilist"); got != "https://public.example/anilist/callback" {
 		t.Fatalf("redirect URL trusted = %q", got)
 	}
 

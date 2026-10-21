@@ -1,0 +1,280 @@
+package server
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/brogergvhs/kaodoku/internal/auth"
+	"github.com/brogergvhs/kaodoku/internal/catalog"
+	"github.com/brogergvhs/kaodoku/internal/service"
+)
+
+// trackerRedirectURL keeps AniList on its original callback path so existing apps stay valid.
+func trackerRedirectURL(r *http.Request, provider string) string {
+	scheme := "http"
+	if r.TLS != nil || forwardedProto(r) == "https" {
+		scheme = "https"
+	}
+	path := "/trackers/" + provider + "/callback"
+	if provider == catalog.AniListProvider {
+		path = "/anilist/callback"
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, requestHost(r), path)
+}
+
+func pathProvider(r *http.Request) string {
+	if p := r.PathValue("provider"); p != "" {
+		return p
+	}
+	return catalog.AniListProvider
+}
+
+func randomHex(n int) string {
+	raw := make([]byte, n)
+	_, _ = rand.Read(raw)
+	return hex.EncodeToString(raw)
+}
+
+func (u *webUI) trackerConnect(w http.ResponseWriter, r *http.Request) {
+	provider := pathProvider(r)
+	p, err := u.svc.Provider(r.Context(), provider)
+	o, ok := p.(catalog.OAuth)
+	if err != nil || !ok || u.svc.TrackerLogin(r.Context(), provider) != "oauth" {
+		http.Error(w, "this tracker is not configured yet (settings → Metadata & tracking)", http.StatusBadRequest)
+		return
+	}
+	state, verifier := randomHex(16), randomHex(48)
+	for name, value := range map[string]string{"tracker_state": provider + ":" + state, "tracker_verifier": verifier} {
+		http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", MaxAge: 600, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	}
+	http.Redirect(w, r, o.AuthorizeURL(u.svc.TrackerApp(r.Context(), provider, trackerRedirectURL(r, provider)), state, verifier), http.StatusSeeOther)
+}
+
+func (u *webUI) trackerCallback(w http.ResponseWriter, r *http.Request) {
+	provider := pathProvider(r)
+	if e := r.URL.Query().Get("error"); e != "" {
+		http.Error(w, fmt.Sprintf("%s refused the connection: %s %s", u.svc.ProviderLabel(provider), e, r.URL.Query().Get("error_description")), http.StatusBadRequest)
+		return
+	}
+	if c, err := r.Cookie("tracker_state"); err != nil || c.Value != provider+":"+r.URL.Query().Get("state") {
+		http.Error(w, "state mismatch — restart the connection from settings", http.StatusBadRequest)
+		return
+	}
+	verifier := ""
+	if c, err := r.Cookie("tracker_verifier"); err == nil {
+		verifier = c.Value
+	}
+	for _, name := range []string{"tracker_state", "tracker_verifier"} {
+		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1})
+	}
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "the tracker did not return an authorization code", http.StatusBadRequest)
+		return
+	}
+	if err := u.svc.ConnectOAuth(r.Context(), auth.UserID(r.Context()), provider, trackerRedirectURL(r, provider), code, verifier); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	u.kick()
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+}
+
+func (u *webUI) trackerLogin(w http.ResponseWriter, r *http.Request) {
+	if err := u.svc.LoginTracker(r.Context(), auth.UserID(r.Context()), pathProvider(r), r.FormValue("username"), r.FormValue("password")); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.kick()
+	w.Header().Set("HX-Refresh", "true")
+}
+
+func (u *webUI) trackerDisconnect(w http.ResponseWriter, r *http.Request) {
+	if err := u.svc.DisconnectTracker(r.Context(), auth.UserID(r.Context()), pathProvider(r)); err != nil {
+		u.fail(w, err)
+		return
+	}
+	w.Header().Set("HX-Refresh", "true")
+}
+
+func (u *webUI) trackerSyncNow(w http.ResponseWriter, r *http.Request) {
+	if err := u.svc.EnqueueTrackerSync(r.Context(), auth.UserID(r.Context()), pathProvider(r)); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.kick()
+	u.frag(w, "toast", toastView{OK: true, Msg: "Sync queued ✓"})
+}
+
+func (u *webUI) trackerLibrary(w http.ResponseWriter, r *http.Request) {
+	entries, err := u.svc.TrackerLibrary(r.Context(), pathProvider(r))
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	items := make([]catalog.Manga, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, e.Manga)
+	}
+	u.frag(w, "mangaResults", u.mangaResultsView(r.Context(), "", "cards", items))
+}
+
+func (u *webUI) trackerSuggestions(w http.ResponseWriter, r *http.Request) {
+	view := u.mangaResultsView(r.Context(), "", resultView(r), u.svc.TrackerSuggestions(r.Context(), r.FormValue("provider")))
+	missing := view.Items[:0]
+	for _, it := range view.Items {
+		if it.TitleID == 0 {
+			missing = append(missing, it)
+		}
+	}
+	view.Items = missing
+	u.frag(w, "trackerSuggestions", view)
+}
+
+func (u *webUI) trackerSyncTitle(w http.ResponseWriter, r *http.Request) {
+	id, err := parseInt64Path(r, "id")
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	if !titleAllowed(r.Context(), u.svc, id) {
+		http.NotFound(w, r)
+		return
+	}
+	provider := r.FormValue("provider")
+	if err := u.svc.SyncTrackersTitle(r.Context(), id, provider); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.frag(w, "toast", toastView{OK: true, Msg: u.svc.ProviderLabel(provider) + " synced ✓"})
+}
+
+func (u *webUI) titleProgressiveSync(w http.ResponseWriter, r *http.Request) {
+	id, err := parseInt64Path(r, "id")
+	if err != nil || !titleAllowed(r.Context(), u.svc, id) {
+		http.NotFound(w, r)
+		return
+	}
+	if err := u.svc.SetProgressiveSync(r.Context(), id, r.FormValue("provider"), r.FormValue("on") == "1"); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.titleProviders(w, r)
+}
+
+type trackerCardView struct {
+	Provider string
+	Label    string
+	Login    string
+	Account  *service.TrackerAccount
+	Redirect string
+}
+
+func (u *webUI) trackerCards(r *http.Request) []trackerCardView {
+	accounts := map[string]service.TrackerAccount{}
+	for _, a := range u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context())) {
+		accounts[a.Provider] = a
+	}
+	var out []trackerCardView
+	for _, p := range u.svc.Providers(r.Context()) {
+		card := trackerCardView{Provider: p.Name(), Label: p.Label(), Login: u.svc.TrackerLogin(r.Context(), p.Name()), Redirect: trackerRedirectURL(r, p.Name())}
+		if a, ok := accounts[p.Name()]; ok {
+			card.Account = &a
+		}
+		out = append(out, card)
+	}
+	return out
+}
+
+type providerPanelView struct {
+	TitleID   int64
+	CanManage bool
+	Open      bool
+	Query     string
+	Links     []service.ProviderLink
+}
+
+type providerPickerView struct {
+	TitleID  int64
+	Provider string
+	Label    string
+	Query    string
+	Current  string
+	Results  []catalog.Manga
+	Error    string
+}
+
+func (u *webUI) titleProviders(w http.ResponseWriter, r *http.Request) {
+	id, err := parseInt64Path(r, "id")
+	if err != nil || !titleAllowed(r.Context(), u.svc, id) {
+		http.NotFound(w, r)
+		return
+	}
+	links, err := u.svc.TitleLinks(r.Context(), id)
+	title, terr := u.svc.GetTitle(r.Context(), id)
+	if err != nil || terr != nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	u.frag(w, "providerPanel", providerPanelView{TitleID: id, CanManage: userFrom(r.Context()).Can(auth.PermLibraryManage), Open: r.Method == http.MethodPost, Query: title.DisplayTitle, Links: links})
+}
+
+func (u *webUI) titleProviderSearch(w http.ResponseWriter, r *http.Request) {
+	id, err := parseInt64Path(r, "id")
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	title, err := u.svc.GetTitle(r.Context(), id)
+	if err != nil || !contentAllowed(r.Context(), title.IsAdult, title.ContentTags) {
+		http.NotFound(w, r)
+		return
+	}
+	view := providerPickerView{TitleID: id, Provider: r.FormValue("provider"), Query: strings.TrimSpace(r.FormValue("q"))}
+	if view.Query == "" {
+		view.Query = title.DisplayTitle
+	}
+	view.Label = u.svc.ProviderLabel(view.Provider)
+	items, _, err := u.svc.SearchManga(r.Context(), view.Provider, view.Query, 8, catalog.SearchFilter{})
+	if err != nil {
+		view.Error = err.Error()
+	}
+	view.Current = u.svc.TitleLinkedID(r.Context(), id, view.Provider)
+	if view.Current != "" && !slices.ContainsFunc(items, func(m catalog.Manga) bool { return m.ProviderID == view.Current }) {
+		if m, err := u.svc.CatalogManga(r.Context(), view.Provider, view.Current); err == nil {
+			items = append([]catalog.Manga{m}, items...)
+		}
+	}
+	view.Results = allowedManga(r.Context(), items)
+	u.frag(w, "providerPicker", view)
+}
+
+func (u *webUI) titleProviderSet(w http.ResponseWriter, r *http.Request) {
+	id, err := parseInt64Path(r, "id")
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	if !titleAllowed(r.Context(), u.svc, id) {
+		http.NotFound(w, r)
+		return
+	}
+	provider, pid := r.FormValue("provider"), strings.TrimSpace(r.FormValue("provider_id"))
+	if r.FormValue("mode") == "primary" || provider == u.svc.MetadataProvider(r.Context(), id) {
+		if err := u.svc.SwitchTitleMetadata(r.Context(), id, provider, pid); err != nil {
+			u.fail(w, err)
+			return
+		}
+		w.Header().Set("HX-Refresh", "true")
+		return
+	}
+	if err := u.svc.LinkExternalID(r.Context(), id, provider, pid); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.titleProviders(w, r)
+}

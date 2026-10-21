@@ -14,7 +14,7 @@ func TestRelatedMangaLabels(t *testing.T) {
 	u.tmpl = template.Must(template.New("").Funcs(u.funcs()).ParseFS(templateFS, "templates/*.html"))
 	cases := []struct{ relation, label string }{
 		{"PREQUEL", "Prequel"}, {"SEQUEL", "Sequel"}, {"SIDE_STORY", "Side story"},
-		{"SPIN_OFF", "Spin-off"}, {"ALTERNATIVE", "Alternative version"}, {"OTHER", "Direct relation"},
+		{"SPIN_OFF", "Spin-off"}, {"ALTERNATIVE", "Alternative version"}, {"OTHER", "Other"},
 	}
 	for _, tc := range cases {
 		for _, show := range []bool{true, false} {

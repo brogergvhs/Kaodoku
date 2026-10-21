@@ -467,12 +467,59 @@ func (a *apiV1) meSettingsPut(w http.ResponseWriter, r *http.Request) {
 	a.meSettingsGet(w, r)
 }
 
+func (a *apiV1) trackers(r *http.Request) []trackerDTO {
+	var out []trackerDTO
+	for _, c := range (&webUI{svc: a.svc}).trackerCards(r) {
+		d := trackerDTO{Provider: c.Provider, Label: c.Label, Login: c.Login}
+		if c.Account != nil {
+			d.Connected, d.Name, d.ExpiresAt, d.LastError = true, c.Account.Name, c.Account.ExpiresAt, c.Account.LastError
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+func (a *apiV1) aniListStatus(r *http.Request) aniListDTO {
+	for _, t := range a.svc.TrackerAccounts(r.Context(), userFrom(r.Context()).ID) {
+		if t.Provider == catalog.AniListProvider {
+			return aniListDTO{Connected: true, Name: t.Name, ExpiresAt: t.ExpiresAt}
+		}
+	}
+	return aniListDTO{}
+}
+
 func (a *apiV1) anilistStatus(w http.ResponseWriter, r *http.Request) {
-	conn := a.svc.AniListConnectionFor(r.Context(), userFrom(r.Context()).ID)
-	writeJSON(w, http.StatusOK, aniListDTO{Connected: conn.Connected, Name: conn.Name, ExpiresAt: conn.ExpiresAt})
+	writeJSON(w, http.StatusOK, a.aniListStatus(r))
+}
+
+func (a *apiV1) trackersList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": a.trackers(r), "default": a.svc.DefaultProvider(r.Context())})
+}
+
+func (a *apiV1) trackerLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.LoginTracker(r.Context(), userFrom(r.Context()).ID, r.PathValue("provider"), body.Username, body.Password); err != nil {
+		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (a *apiV1) anilistSync(w http.ResponseWriter, r *http.Request) {
+	a.syncTrackers(w, r, "")
+}
+
+func (a *apiV1) trackerSync(w http.ResponseWriter, r *http.Request) {
+	a.syncTrackers(w, r, r.PathValue("provider"))
+}
+
+func (a *apiV1) syncTrackers(w http.ResponseWriter, r *http.Request, provider string) {
 	var body struct {
 		TitleID int64 `json:"title_id"`
 	}
@@ -485,9 +532,9 @@ func (a *apiV1) anilistSync(w http.ResponseWriter, r *http.Request) {
 			v1err(w, http.StatusNotFound, "not_found", "title not found")
 			return
 		}
-		err = a.svc.SyncAniListTitle(r.Context(), body.TitleID)
+		err = a.svc.SyncTrackersTitle(r.Context(), body.TitleID, provider)
 	} else {
-		err = a.svc.EnqueueAniListSync(r.Context(), userFrom(r.Context()).ID)
+		err = a.svc.EnqueueTrackerSync(r.Context(), userFrom(r.Context()).ID, provider)
 	}
 	if err != nil {
 		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -497,7 +544,15 @@ func (a *apiV1) anilistSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiV1) anilistDisconnect(w http.ResponseWriter, r *http.Request) {
-	if err := a.svc.DisconnectAniList(r.Context(), userFrom(r.Context()).ID); err != nil {
+	a.disconnectTracker(w, r, catalog.AniListProvider)
+}
+
+func (a *apiV1) trackerDisconnect(w http.ResponseWriter, r *http.Request) {
+	a.disconnectTracker(w, r, r.PathValue("provider"))
+}
+
+func (a *apiV1) disconnectTracker(w http.ResponseWriter, r *http.Request, provider string) {
+	if err := a.svc.DisconnectTracker(r.Context(), userFrom(r.Context()).ID, provider); err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
@@ -544,7 +599,7 @@ func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 	for scan := 0; scan < 3; scan++ {
 		last = page + scan
 		filter.Page = last
-		fetched, m, err := a.svc.SearchAniList(r.Context(), term, searchPerPage, filter)
+		fetched, m, err := a.svc.SearchManga(r.Context(), q.Get("provider"), term, searchPerPage, filter)
 		if err != nil {
 			v1err(w, http.StatusBadGateway, "unavailable", err.Error())
 			return
@@ -569,7 +624,7 @@ func (a *apiV1) wantedTrending(w http.ResponseWriter, r *http.Request) {
 		views = views[:18]
 	}
 	if len(views) == 0 {
-		views = stripItems(r.Context(), a.svc, guardedBrowseManga(r.Context(), a.svc, "", ""))
+		views = stripItems(r.Context(), a.svc, guardedBrowseManga(r.Context(), a.svc, "", "", ""))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": toSearchItems(views)})
 }
@@ -578,12 +633,13 @@ func (a *apiV1) wantedTrending(w http.ResponseWriter, r *http.Request) {
 // job runner so matching/downloading starts immediately.
 func (a *apiV1) libraryAdd(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ProviderID int `json:"provider_id"`
+		Provider   string      `json:"provider"`
+		ProviderID json.Number `json:"provider_id"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	title, err := a.svc.AddCatalogTitle(r.Context(), body.ProviderID)
+	title, err := a.svc.AddCatalogTitle(r.Context(), body.Provider, body.ProviderID.String())
 	if err != nil {
 		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
@@ -633,12 +689,18 @@ func (a *apiV1) wantedList(w http.ResponseWriter, r *http.Request) {
 
 func (a *apiV1) wantedAdd(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AniListID int `json:"anilist_id"`
+		AniListID  json.Number `json:"anilist_id"`
+		Provider   string      `json:"provider"`
+		ProviderID json.Number `json:"provider_id"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	item, err := a.svc.AddAniListWanted(r.Context(), body.AniListID, func(m catalog.Manga) bool {
+	provider, id := body.Provider, body.ProviderID.String()
+	if id == "" {
+		provider, id = catalog.AniListProvider, body.AniListID.String()
+	}
+	item, err := a.svc.AddWanted(r.Context(), provider, id, func(m catalog.Manga) bool {
 		return contentAllowed(r.Context(), m.IsAdult, mangaContentTags(m))
 	})
 	if errors.Is(err, service.ErrContentBlocked) {

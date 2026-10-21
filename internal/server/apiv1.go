@@ -105,6 +105,10 @@ func registerAPIV1(mux *http.ServeMux, svc *service.JobService, runJobs func(con
 	mux.HandleFunc("GET /api/v1/anilist", a.anilistStatus)
 	mux.HandleFunc("POST /api/v1/anilist/sync", a.anilistSync)
 	mux.HandleFunc("DELETE /api/v1/anilist", a.anilistDisconnect)
+	mux.HandleFunc("GET /api/v1/trackers", a.trackersList)
+	mux.HandleFunc("POST /api/v1/trackers/{provider}/login", a.trackerLogin)
+	mux.HandleFunc("POST /api/v1/trackers/{provider}/sync", a.trackerSync)
+	mux.HandleFunc("DELETE /api/v1/trackers/{provider}", a.trackerDisconnect)
 
 	mux.HandleFunc("GET /api/v1/wanted/search", a.wantedSearch)
 	mux.HandleFunc("GET /api/v1/tags", a.tagOptions)
@@ -157,9 +161,20 @@ type metaDTO struct {
 }
 
 type meDTO struct {
-	User        meUserDTO  `json:"user"`
-	Permissions []string   `json:"permissions"`
-	AniList     aniListDTO `json:"anilist"`
+	User        meUserDTO    `json:"user"`
+	Permissions []string     `json:"permissions"`
+	AniList     aniListDTO   `json:"anilist"`
+	Trackers    []trackerDTO `json:"trackers"`
+}
+
+type trackerDTO struct {
+	Provider  string `json:"provider"`
+	Label     string `json:"label"`
+	Login     string `json:"login,omitempty"`
+	Connected bool   `json:"connected"`
+	Name      string `json:"name,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+	LastError string `json:"last_error,omitempty"`
 }
 
 type meUserDTO struct {
@@ -175,18 +190,19 @@ type aniListDTO struct {
 	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
-// meDTOFor builds the current-user payload (identity, permissions, AniList link).
+// meDTOFor builds the current-user payload (identity, permissions, tracker links).
 func (a *apiV1) meDTOFor(r *http.Request, user *auth.User) meDTO {
+	r = r.WithContext(auth.WithUser(r.Context(), user))
 	perms := make([]string, 0, len(user.Perms))
 	for p := range user.Perms {
 		perms = append(perms, p)
 	}
 	sort.Strings(perms)
-	conn := a.svc.AniListConnectionFor(r.Context(), user.ID)
 	return meDTO{
 		User:        meUserDTO{ID: user.ID, Username: user.Username, Role: user.RoleName, AllowAdult: user.AllowAdult},
 		Permissions: perms,
-		AniList:     aniListDTO{Connected: conn.Connected, Name: conn.Name, ExpiresAt: conn.ExpiresAt},
+		AniList:     a.aniListStatus(r),
+		Trackers:    a.trackers(r),
 	}
 }
 
@@ -195,7 +211,7 @@ func (a *apiV1) meta(w http.ResponseWriter, _ *http.Request) {
 		ServerVersion: serverVersion(),
 		APIVersion:    1,
 		AuthRequired:  authEnabled(),
-		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "anilist"},
+		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "anilist", "trackers"},
 		ImageFormats:  []string{"jpg", "jpeg", "png", "webp", "gif", "avif"},
 		MaxPageBytes:  maxPageBytes,
 		InstanceID:    a.instanceID,

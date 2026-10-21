@@ -117,7 +117,7 @@ func requiredPerm(r *http.Request) string {
 		return auth.PermLibraryManage
 	case strings.HasPrefix(p, "/api/v1/wanted") || p == "/api/v1/library/add":
 		return auth.PermLibraryAdd
-	case strings.HasPrefix(p, "/api/v1/anilist"):
+	case strings.HasPrefix(p, "/api/v1/anilist") || strings.HasPrefix(p, "/api/v1/trackers"):
 		return auth.PermReaderUse
 	case strings.HasPrefix(p, "/api/v1/reader/"):
 		return auth.PermReaderUse
@@ -131,7 +131,7 @@ func requiredPerm(r *http.Request) string {
 		strings.HasPrefix(p, "/api/v1/volumes/") || strings.HasPrefix(p, "/api/v1/collections") ||
 		strings.HasPrefix(p, "/api/v1/screens") || p == "/api/v1/sources":
 		return auth.PermLibraryView
-	case p == "/logout" || p == "/" || strings.HasPrefix(p, "/anilist/") || strings.HasPrefix(p, "/ui/anilist/") || strings.HasPrefix(p, "/ui/account"):
+	case p == "/logout" || p == "/" || strings.HasPrefix(p, "/anilist/") || strings.HasPrefix(p, "/trackers/") || strings.HasPrefix(p, "/ui/trackers/") || strings.HasPrefix(p, "/ui/account"):
 		return "" // any signed-in user (dashboard sections gate individually)
 	case strings.HasPrefix(p, "/reader/") || strings.HasPrefix(p, "/api/reader/"):
 		return auth.PermReaderUse
@@ -172,7 +172,7 @@ func requiredPerm(r *http.Request) string {
 		return auth.PermLibraryView
 	case strings.Contains(p, "/chapters/"): // read/unread marking, bulk range
 		return auth.PermReaderUse
-	case strings.HasSuffix(p, "/anilist-sync"): // personal list reconcile
+	case strings.HasSuffix(p, "/tracker-sync") || strings.HasSuffix(p, "/providers/progressive"): // personal list reconcile
 		return auth.PermReaderUse
 	case strings.HasSuffix(p, "/favourite"): // personal curation
 		return auth.PermLibraryView

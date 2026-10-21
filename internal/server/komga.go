@@ -707,7 +707,7 @@ func (k *komga) seriesReadProgress(read bool) http.HandlerFunc {
 			}
 		}
 		if read {
-			k.svc.PushAniListEntry(ctx, auth.UserID(ctx), t.ID)
+			k.svc.PushTrackers(ctx, auth.UserID(ctx), t.ID)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -1324,7 +1324,7 @@ func (k *komga) bookReadProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if completed {
-		k.svc.PushAniListEntry(ctx, auth.UserID(ctx), ref.titleID)
+		k.svc.PushTrackers(ctx, auth.UserID(ctx), ref.titleID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1411,6 +1411,6 @@ func (k *komga) tachiyomiProgressPut(w http.ResponseWriter, r *http.Request) {
 			_, _ = k.svc.MarkChapterRead(ctx, id)
 		}
 	}
-	k.svc.PushAniListEntry(ctx, auth.UserID(ctx), t.ID)
+	k.svc.PushTrackers(ctx, auth.UserID(ctx), t.ID)
 	w.WriteHeader(http.StatusNoContent)
 }

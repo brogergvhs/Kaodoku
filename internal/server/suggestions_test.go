@@ -9,14 +9,14 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 )
 
-// The AniList-suggestions collapsible renders nothing when there is nothing
+// The tracker-suggestions collapsible renders nothing when there is nothing
 // to suggest, and honors the page's current view otherwise.
 func TestAnilistSuggestionsTemplate(t *testing.T) {
 	u := &webUI{}
 	u.tmpl = template.Must(template.New("").Funcs(u.funcs()).ParseFS(templateFS, "templates/*.html"))
 	render := func(v mangaResults) string {
 		var buf bytes.Buffer
-		if err := u.tmpl.ExecuteTemplate(&buf, "anilistSuggestions", v); err != nil {
+		if err := u.tmpl.ExecuteTemplate(&buf, "trackerSuggestions", v); err != nil {
 			t.Fatal(err)
 		}
 		return buf.String()
