@@ -23,7 +23,7 @@ func TestRelatedSplitsRelationsFromRecommendations(t *testing.T) {
 	defer srv.Close()
 	c := NewAniListClient(srv.Client())
 	c.endpoint = srv.URL
-	relations, recs, err := c.Related(context.Background(), 1, 10)
+	relations, recs, err := c.Related(context.Background(), "1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}

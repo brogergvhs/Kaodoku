@@ -4,81 +4,51 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 )
 
-const anilistTokenURL = "https://anilist.co/api/v2/oauth/token"
-
-type ctxTokenKey struct{}
-
-// WithToken carries a user's AniList access token; the client attaches it to
-// requests, raising rate limits and unlocking user-scoped fields.
-func WithToken(ctx context.Context, token string) context.Context {
-	if token == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, ctxTokenKey{}, token)
+func (c *AniListClient) AuthorizeURL(app App, state, _ string) string {
+	q := url.Values{"client_id": {app.ClientID}, "redirect_uri": {app.RedirectURI}, "response_type": {"code"}, "state": {state}}
+	return "https://anilist.co/api/v2/oauth/authorize?" + q.Encode()
 }
 
-// TokenFromContext returns the AniList token carried by the context, if any.
-func TokenFromContext(ctx context.Context) string {
-	t, _ := ctx.Value(ctxTokenKey{}).(string)
-	return t
-}
-
-// AniListExchangeCode swaps an authorization code for a long-lived token.
-func AniListExchangeCode(ctx context.Context, clientID, clientSecret, redirectURI, code string) (token string, expiresIn int, err error) {
+// Exchange swaps an authorization code for a long-lived token.
+func (c *AniListClient) Exchange(ctx context.Context, app App, code, _ string) (Token, error) {
 	body, _ := json.Marshal(map[string]string{
 		"grant_type":    "authorization_code",
-		"client_id":     clientID,
-		"client_secret": clientSecret,
-		"redirect_uri":  redirectURI,
+		"client_id":     app.ClientID,
+		"client_secret": app.ClientSecret,
+		"redirect_uri":  app.RedirectURI,
 		"code":          code,
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, anilistTokenURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, bytes.NewReader(body))
 	if err != nil {
-		return "", 0, err
+		return Token{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
-		return "", 0, err
+		return Token{}, err
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("anilist token exchange failed (%d): %s", resp.StatusCode, data)
+		return Token{}, fmt.Errorf("anilist token exchange failed (%d): %s", resp.StatusCode, data)
 	}
-	var out struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
-	}
+	var out oauthToken
 	if err := json.Unmarshal(data, &out); err != nil || out.AccessToken == "" {
-		return "", 0, fmt.Errorf("anilist token exchange: unexpected response")
+		return Token{}, fmt.Errorf("anilist token exchange: unexpected response")
 	}
-	return out.AccessToken, out.ExpiresIn, nil
+	return Token{Access: out.AccessToken, ExpiresIn: out.ExpiresIn}, nil
 }
 
-// AniListViewer returns the authenticated account's identity.
-func AniListViewer(ctx context.Context, token string) (id int, name string, err error) {
-	body, _ := json.Marshal(map[string]any{"query": `query { Viewer { id name } }`})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://graphql.anilist.co", bytes.NewReader(body))
-	if err != nil {
-		return 0, "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-	if err != nil {
-		return 0, "", err
-	}
-	defer resp.Body.Close()
+func (c *AniListClient) Viewer(ctx context.Context) (string, string, error) {
 	var out struct {
 		Data struct {
 			Viewer struct {
@@ -87,49 +57,39 @@ func AniListViewer(ctx context.Context, token string) (id int, name string, err 
 			} `json:"Viewer"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return 0, "", err
+	if err := c.do(ctx, `query { Viewer { id name } }`, nil, &out); err != nil {
+		return "", "", err
 	}
 	if out.Data.Viewer.ID == 0 {
-		return 0, "", fmt.Errorf("anilist viewer lookup failed")
+		return "", "", fmt.Errorf("anilist viewer lookup failed")
 	}
-	return out.Data.Viewer.ID, out.Data.Viewer.Name, nil
+	return strconv.Itoa(out.Data.Viewer.ID), out.Data.Viewer.Name, nil
 }
 
-// AniListEntry is one manga on a user's AniList list.
-type AniListEntry struct {
-	Manga    Manga
-	Progress int    // chapters read on AniList
-	Status   string // CURRENT, COMPLETED, PLANNING, ...
+func (c *AniListClient) viewerID(ctx context.Context) int {
+	n, _ := strconv.Atoi(AccountFrom(ctx).UserID)
+	return n
 }
 
-// UserList returns the user's AniList manga list (authenticated via ctx token).
-func (c *AniListClient) UserList(ctx context.Context, anilistUserID int) ([]AniListEntry, error) {
+// ListEntries returns the account's AniList manga list.
+func (c *AniListClient) ListEntries(ctx context.Context) ([]Entry, error) {
 	var resp struct {
 		Data struct {
 			MediaListCollection struct {
 				Lists []struct {
 					Entries []struct {
-						Progress int          `json:"progress"`
-						Status   string       `json:"status"`
-						Media    anilistMedia `json:"media"`
+						anilistEntry
+						Media anilistMedia `json:"media"`
 					} `json:"entries"`
 				} `json:"lists"`
 			} `json:"MediaListCollection"`
 		} `json:"data"`
 	}
-	if err := c.do(ctx, `
-		query ($userId: Int) {
-			MediaListCollection(userId: $userId, type: MANGA) {
-				lists { entries { progress status media {
-					id title { romaji english native } description(asHtml: false)
-					coverImage { large } bannerImage status format chapters volumes synonyms genres averageScore startDate { year } isAdult tags { name }
-				} } }
-			}
-		}`, map[string]any{"userId": anilistUserID}, &resp); err != nil {
+	q := fmt.Sprintf(`query ($userId: Int) { MediaListCollection(userId: $userId, type: MANGA) { lists { entries { progress status `+entryDates+` media { %s } } } } }`, mediaCore)
+	if err := c.do(ctx, q, map[string]any{"userId": c.viewerID(ctx)}, &resp); err != nil {
 		return nil, err
 	}
-	var out []AniListEntry
+	var out []Entry
 	seen := map[string]bool{}
 	for _, list := range resp.Data.MediaListCollection.Lists {
 		for _, e := range list.Entries {
@@ -142,15 +102,17 @@ func (c *AniListClient) UserList(ctx context.Context, anilistUserID int) ([]AniL
 				continue
 			}
 			seen[m.ProviderID] = true
-			out = append(out, AniListEntry{Manga: m, Progress: e.Progress, Status: e.Status})
+			entry := e.entry()
+			entry.Manga = m
+			out = append(out, entry)
 		}
 	}
 	return out, nil
 }
 
-// FavouriteManga returns the AniList ids of a user's favourite manga.
-func (c *AniListClient) FavouriteManga(ctx context.Context, anilistUserID int) ([]int, error) {
-	var out []int
+// Favourites returns the AniList ids of the account's favourite manga.
+func (c *AniListClient) Favourites(ctx context.Context) ([]string, error) {
+	var out []string
 	for page := 1; page <= 20; page++ {
 		var resp struct {
 			Data struct {
@@ -171,11 +133,11 @@ func (c *AniListClient) FavouriteManga(ctx context.Context, anilistUserID int) (
 		if err := c.do(ctx, `
 			query ($id: Int, $page: Int) {
 				User(id: $id) { favourites { manga(page: $page, perPage: 50) { nodes { id } pageInfo { hasNextPage } } } }
-			}`, map[string]any{"id": anilistUserID, "page": page}, &resp); err != nil {
+			}`, map[string]any{"id": c.viewerID(ctx), "page": page}, &resp); err != nil {
 			return nil, err
 		}
 		for _, n := range resp.Data.User.Favourites.Manga.Nodes {
-			out = append(out, n.ID)
+			out = append(out, strconv.Itoa(n.ID))
 		}
 		if !resp.Data.User.Favourites.Manga.PageInfo.HasNextPage {
 			break
@@ -184,8 +146,11 @@ func (c *AniListClient) FavouriteManga(ctx context.Context, anilistUserID int) (
 	return out, nil
 }
 
-// IsFavourite reports whether the authenticated user favourited a media.
-func (c *AniListClient) IsFavourite(ctx context.Context, mediaID int) (bool, error) {
+func (c *AniListClient) IsFavourite(ctx context.Context, id string) (bool, error) {
+	mediaID, err := anilistID(id)
+	if err != nil {
+		return false, err
+	}
 	var resp struct {
 		Data struct {
 			Media struct {
@@ -199,75 +164,106 @@ func (c *AniListClient) IsFavourite(ctx context.Context, mediaID int) (bool, err
 	return resp.Data.Media.IsFavourite, nil
 }
 
-// ToggleFavourite flips the authenticated user's favourite state for a manga
-// (AniList only offers a toggle; callers check IsFavourite first).
-func (c *AniListClient) ToggleFavourite(ctx context.Context, mediaID int) error {
-	var resp struct {
-		Data struct {
-			ToggleFavourite struct {
-				Manga struct {
-					Nodes []struct {
-						ID int `json:"id"`
-					} `json:"nodes"`
-				} `json:"manga"`
-			} `json:"ToggleFavourite"`
-		} `json:"data"`
+// ToggleFavourite flips the favourite state (AniList only offers a toggle).
+func (c *AniListClient) ToggleFavourite(ctx context.Context, id string) error {
+	mediaID, err := anilistID(id)
+	if err != nil {
+		return err
 	}
+	var resp struct{}
 	return c.do(ctx, `mutation ($id: Int) { ToggleFavourite(mangaId: $id) { manga { nodes { id } } } }`, map[string]any{"id": mediaID}, &resp)
 }
 
-// MediaEntry returns the authenticated user's list entry for a media.
-func (c *AniListClient) MediaEntry(ctx context.Context, mediaID int) (progress int, status string, found bool, err error) {
+func (c *AniListClient) GetEntry(ctx context.Context, id string) (Entry, bool, error) {
+	mediaID, err := anilistID(id)
+	if err != nil {
+		return Entry{}, false, err
+	}
 	var resp struct {
 		Data struct {
 			Media struct {
-				MediaListEntry *struct {
-					Progress int    `json:"progress"`
-					Status   string `json:"status"`
-				} `json:"mediaListEntry"`
+				MediaListEntry *anilistEntry `json:"mediaListEntry"`
 			} `json:"Media"`
 		} `json:"data"`
 	}
-	if err := c.do(ctx, `
-		query ($id: Int) { Media(id: $id, type: MANGA) { mediaListEntry { progress status } } }
-	`, map[string]any{"id": mediaID}, &resp); err != nil {
-		return 0, "", false, err
+	if err := c.do(ctx, `query ($id: Int) { Media(id: $id, type: MANGA) { mediaListEntry { progress status `+entryDates+` } } }`, map[string]any{"id": mediaID}, &resp); err != nil {
+		return Entry{}, false, err
 	}
 	e := resp.Data.Media.MediaListEntry
 	if e == nil {
-		return 0, "", false, nil
+		return Entry{}, false, nil
 	}
-	return e.Progress, e.Status, true, nil
+	return e.entry(), true, nil
 }
 
-// SaveEntry upserts the authenticated user's list entry. An empty status
-// keeps the remote status; progress < 0 keeps the remote progress.
-func (c *AniListClient) SaveEntry(ctx context.Context, mediaID, progress int, status string) error {
+// SaveEntry upserts the list entry. An empty status keeps the remote status;
+// progress < 0 keeps the remote progress.
+func (c *AniListClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
+	mediaID, err := anilistID(id)
+	if err != nil {
+		return err
+	}
 	vars := map[string]any{"id": mediaID}
-	if progress >= 0 {
-		vars["progress"] = progress
+	if u.Progress >= 0 {
+		vars["progress"] = u.Progress
 	}
-	if status != "" {
-		vars["status"] = status
+	if u.Status != "" {
+		vars["status"] = u.Status
 	}
-	var resp struct {
-		Data struct {
-			SaveMediaListEntry struct {
-				ID int `json:"id"`
-			} `json:"SaveMediaListEntry"`
-		} `json:"data"`
+	if !u.Started.IsZero() {
+		vars["startedAt"] = toFuzzy(u.Started)
 	}
+	if !u.Finished.IsZero() {
+		vars["completedAt"] = toFuzzy(u.Finished)
+	}
+	var resp struct{}
 	return c.do(ctx, `
-		mutation ($id: Int, $progress: Int, $status: MediaListStatus) {
-			SaveMediaListEntry(mediaId: $id, progress: $progress, status: $status) { id }
+		mutation ($id: Int, $progress: Int, $status: MediaListStatus, $startedAt: FuzzyDateInput, $completedAt: FuzzyDateInput) {
+			SaveMediaListEntry(mediaId: $id, progress: $progress, status: $status, startedAt: $startedAt, completedAt: $completedAt) { id }
 		}`, vars, &resp)
 }
 
-// DeleteEntry removes the authenticated user's list entry for a media entirely.
-// The entry id is resolved via the viewer-scoped MediaList query rather than
-// Media.mediaListEntry, which AniList serves from a CDN cache that can return
-// a stale or foreign entry id. A missing entry is treated as already gone.
-func (c *AniListClient) DeleteEntry(ctx context.Context, userID, mediaID int) error {
+func (c *AniListClient) TracksDates() bool { return true }
+
+const entryDates = `startedAt { year month day } completedAt { year month day }`
+
+type fuzzyDate struct {
+	Year  *int `json:"year"`
+	Month *int `json:"month"`
+	Day   *int `json:"day"`
+}
+
+func (f fuzzyDate) time() time.Time {
+	if f.Year == nil || f.Month == nil || f.Day == nil {
+		return time.Time{}
+	}
+	return time.Date(*f.Year, time.Month(*f.Month), *f.Day, 0, 0, 0, 0, time.Local)
+}
+
+func toFuzzy(t time.Time) map[string]int {
+	t = t.In(time.Local)
+	return map[string]int{"year": t.Year(), "month": int(t.Month()), "day": t.Day()}
+}
+
+type anilistEntry struct {
+	Progress    int       `json:"progress"`
+	Status      string    `json:"status"`
+	StartedAt   fuzzyDate `json:"startedAt"`
+	CompletedAt fuzzyDate `json:"completedAt"`
+}
+
+func (e anilistEntry) entry() Entry {
+	return Entry{Progress: e.Progress, Status: e.Status, Started: e.StartedAt.time(), Finished: e.CompletedAt.time()}
+}
+
+// DeleteEntry removes the list entry entirely. The entry id is resolved via
+// the viewer-scoped MediaList query rather than Media.mediaListEntry, which
+// AniList serves from a CDN cache that can return a stale or foreign entry id.
+func (c *AniListClient) DeleteEntry(ctx context.Context, id string) error {
+	mediaID, err := anilistID(id)
+	if err != nil {
+		return err
+	}
 	var lookup struct {
 		Data struct {
 			MediaList *struct {
@@ -277,8 +273,8 @@ func (c *AniListClient) DeleteEntry(ctx context.Context, userID, mediaID int) er
 	}
 	if err := c.do(ctx, `
 		query ($userId: Int, $mediaId: Int) { MediaList(userId: $userId, mediaId: $mediaId, type: MANGA) { id } }
-	`, map[string]any{"userId": userID, "mediaId": mediaID}, &lookup); err != nil {
-		if errors.Is(err, errAniListNotFound) {
+	`, map[string]any{"userId": c.viewerID(ctx), "mediaId": mediaID}, &lookup); err != nil {
+		if IsNotFound(err) {
 			return nil
 		}
 		return err
@@ -286,14 +282,6 @@ func (c *AniListClient) DeleteEntry(ctx context.Context, userID, mediaID int) er
 	if lookup.Data.MediaList == nil {
 		return nil
 	}
-	var resp struct {
-		Data struct {
-			DeleteMediaListEntry struct {
-				Deleted bool `json:"deleted"`
-			} `json:"DeleteMediaListEntry"`
-		} `json:"data"`
-	}
-	return c.do(ctx, `
-		mutation ($id: Int) { DeleteMediaListEntry(id: $id) { deleted } }
-	`, map[string]any{"id": lookup.Data.MediaList.ID}, &resp)
+	var resp struct{}
+	return c.do(ctx, `mutation ($id: Int) { DeleteMediaListEntry(id: $id) { deleted } }`, map[string]any{"id": lookup.Data.MediaList.ID}, &resp)
 }

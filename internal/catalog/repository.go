@@ -86,7 +86,60 @@ func (r *Repository) UpsertManga(ctx context.Context, m Manga) (Manga, error) {
 	if err := row.Scan(&id); err != nil {
 		return Manga{}, fmt.Errorf("upsert manga: %w", err)
 	}
+	for p, pid := range m.ExternalIDs {
+		if p != m.Provider && pid != "" {
+			if err := r.SetExternalID(ctx, id, ExternalID{Provider: p, ProviderID: pid, Method: "cross_link", Confirmed: true}); err != nil {
+				return Manga{}, err
+			}
+		}
+	}
 	return r.GetManga(ctx, id)
+}
+
+// ExternalID Method is cross_link, title_match, user, or miss (searched, nothing found).
+type ExternalID struct {
+	Provider   string
+	ProviderID string
+	Method     string
+	Confirmed  bool
+	CheckedAt  string
+}
+
+// SetExternalID stores a mapping; a user-made mapping is only replaced by another.
+func (r *Repository) SetExternalID(ctx context.Context, catalogID int64, e ExternalID) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO catalog_external_ids (catalog_manga_id, provider, provider_id, method, confirmed, checked_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(catalog_manga_id, provider) DO UPDATE SET
+			provider_id = excluded.provider_id, method = excluded.method,
+			confirmed = excluded.confirmed, checked_at = CURRENT_TIMESTAMP
+		WHERE catalog_external_ids.method != 'user' OR excluded.method = 'user'`,
+		catalogID, e.Provider, e.ProviderID, e.Method, database.BoolToInt(e.Confirmed))
+	return err
+}
+
+func (r *Repository) ExternalIDs(ctx context.Context, catalogID int64) ([]ExternalID, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT provider, provider_id, method, confirmed, checked_at FROM catalog_external_ids WHERE catalog_manga_id = ? ORDER BY provider`, catalogID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ExternalID
+	for rows.Next() {
+		var e ExternalID
+		if err := rows.Scan(&e.Provider, &e.ProviderID, &e.Method, &e.Confirmed, &e.CheckedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) CopyExternalIDs(ctx context.Context, fromID, toID int64) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO catalog_external_ids (catalog_manga_id, provider, provider_id, method, confirmed, checked_at)
+		SELECT ?, provider, provider_id, method, confirmed, checked_at FROM catalog_external_ids WHERE catalog_manga_id = ?`, toID, fromID)
+	return err
 }
 
 // DeleteMatches drops all cached source decisions for a manga, forcing the
@@ -96,7 +149,7 @@ func (r *Repository) DeleteMatches(ctx context.Context, catalogMangaID int64) er
 	return err
 }
 
-// Relation is an AniList media relation to another manga, kept for grouping
+// Relation is a provider relation to another manga, kept for grouping
 // connected titles into collections.
 type Relation struct {
 	ProviderID string
@@ -233,10 +286,10 @@ func (r *Repository) MangaByIDs(ctx context.Context, ids []int64) (map[int64]Man
 	return out, rows.Err()
 }
 
-// MangaAuthors loads only ID, ProviderID and Authors for the given manga.
+// MangaAuthors loads only ID, Provider, ProviderID and Authors for the given manga.
 func (r *Repository) MangaAuthors(ctx context.Context, ids []int64) (map[int64]Manga, error) {
 	raw, _ := json.Marshal(ids)
-	rows, err := r.db.QueryContext(ctx, `SELECT id, provider_id, authors_json FROM catalog_manga WHERE id IN (SELECT value FROM json_each(?))`, string(raw))
+	rows, err := r.db.QueryContext(ctx, `SELECT id, provider, provider_id, authors_json FROM catalog_manga WHERE id IN (SELECT value FROM json_each(?))`, string(raw))
 	if err != nil {
 		return nil, fmt.Errorf("load manga authors: %w", err)
 	}
@@ -245,7 +298,7 @@ func (r *Repository) MangaAuthors(ctx context.Context, ids []int64) (map[int64]M
 	for rows.Next() {
 		var m Manga
 		var authors string
-		if err := rows.Scan(&m.ID, &m.ProviderID, &authors); err != nil {
+		if err := rows.Scan(&m.ID, &m.Provider, &m.ProviderID, &authors); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(authors), &m.Authors); err != nil {
@@ -318,6 +371,11 @@ func (r *Repository) RecordMatchMiss(ctx context.Context, catalogMangaID int64, 
 // turned usable is retried immediately instead of after the 24h cache.
 func (r *Repository) ClearMissesForSource(ctx context.Context, sourceID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM title_source_matches WHERE source_id = ? AND match_method = 'miss'`, sourceID)
+	return err
+}
+
+func (r *Repository) MoveMatches(ctx context.Context, fromID, toID int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE OR IGNORE title_source_matches SET catalog_manga_id = ? WHERE catalog_manga_id = ?`, toID, fromID)
 	return err
 }
 
