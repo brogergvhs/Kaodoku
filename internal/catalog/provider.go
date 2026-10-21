@@ -2,9 +2,12 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -18,10 +21,41 @@ const (
 var (
 	ErrNotFound     = errors.New("catalog: not found")
 	ErrUnauthorized = errors.New("catalog: unauthorized")
+	ErrUnavailable  = errors.New("unavailable")
 )
 
 func IsNotFound(err error) bool     { return errors.Is(err, ErrNotFound) }
 func IsUnauthorized(err error) bool { return errors.Is(err, ErrUnauthorized) }
+func IsUnavailable(err error) bool  { return errors.Is(err, ErrUnavailable) }
+
+// health remembers the last outage seen by a client until any request succeeds again.
+type health struct{ outage atomic.Pointer[string] }
+
+func (h *health) Outage() string {
+	if r := h.outage.Load(); r != nil {
+		return *r
+	}
+	return ""
+}
+
+func (h *health) observe(ctx context.Context, err error) error {
+	switch {
+	case err == nil:
+		h.outage.Store(nil)
+	case IsUnavailable(err) && ctx.Err() == nil:
+		msg := err.Error()
+		h.outage.Store(&msg)
+	}
+	return err
+}
+
+func outageReason(data []byte) string {
+	var body struct{ Message, Error string }
+	if json.Unmarshal(data, &body) == nil && body.Message != "" {
+		return body.Message
+	}
+	return fmt.Sprintf("%.200s", data)
+}
 
 // Provider is one metadata/search/recommendation/tracking backend; tracking acts on the context Account.
 type Provider interface {

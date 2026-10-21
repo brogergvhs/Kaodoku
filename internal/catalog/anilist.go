@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,7 @@ type AniListClient struct {
 	tokenURL string
 	client   *http.Client
 	limiter  *rate.Limiter
+	*health
 }
 
 // NewAniListClient creates an AniList client.
@@ -37,6 +39,7 @@ func NewAniListClient(client *http.Client) *AniListClient {
 		tokenURL: "https://anilist.co/api/v2/oauth/token",
 		client:   client,
 		limiter:  rate.NewLimiter(rate.Every(2100*time.Millisecond), 5),
+		health:   &health{},
 	}
 }
 
@@ -328,7 +331,7 @@ func (c *AniListClient) send(ctx context.Context, body []byte) (*http.Response, 
 		bearer(ctx, req.Header)
 		resp, err := c.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("anilist request: %w", err)
+			return nil, fmt.Errorf("anilist %w: %w", ErrUnavailable, err)
 		}
 		if resp.StatusCode != http.StatusTooManyRequests {
 			return resp, nil
@@ -347,6 +350,10 @@ func (c *AniListClient) send(ctx context.Context, body []byte) (*http.Response, 
 }
 
 func (c *AniListClient) do(ctx context.Context, query string, variables map[string]any, out any) error {
+	return c.observe(ctx, c.query(ctx, query, variables, out))
+}
+
+func (c *AniListClient) query(ctx context.Context, query string, variables map[string]any, out any) error {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return err
@@ -356,16 +363,6 @@ func (c *AniListClient) do(ctx context.Context, query string, variables map[stri
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("anilist HTTP 404: %w", ErrNotFound)
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("anilist HTTP 401: %w", ErrUnauthorized)
-	}
-	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("anilist HTTP %d", resp.StatusCode)
-	}
-
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return fmt.Errorf("read anilist response: %w", err)
@@ -376,11 +373,23 @@ func (c *AniListClient) do(ctx context.Context, query string, variables map[stri
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
+	msg := ""
 	if err := json.Unmarshal(data, &failure); err == nil && len(failure.Errors) > 0 {
-		msg := failure.Errors[0].Message
-		if aniListUnauthorizedMessage(msg) {
-			return fmt.Errorf("anilist: %s: %w", msg, ErrUnauthorized)
-		}
+		msg = failure.Errors[0].Message
+	}
+	switch {
+	case resp.StatusCode >= http.StatusBadGateway && resp.StatusCode <= http.StatusGatewayTimeout,
+		resp.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(msg), "temporarily disabled"):
+		return fmt.Errorf("anilist HTTP %d %w: %s", resp.StatusCode, ErrUnavailable, cmp.Or(msg, outageReason(data)))
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("anilist HTTP 404: %w", ErrNotFound)
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("anilist HTTP 401: %w", ErrUnauthorized)
+	case resp.StatusCode >= http.StatusBadRequest:
+		return fmt.Errorf("anilist HTTP %d", resp.StatusCode)
+	case msg != "" && aniListUnauthorizedMessage(msg):
+		return fmt.Errorf("anilist: %s: %w", msg, ErrUnauthorized)
+	case msg != "":
 		return fmt.Errorf("anilist: %s", msg)
 	}
 	if err := json.Unmarshal(data, out); err != nil {

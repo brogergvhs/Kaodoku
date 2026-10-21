@@ -57,6 +57,36 @@ func splitNames(value string) []string {
 }
 
 func (s *JobService) providerEnabled(ctx context.Context, name string) bool {
+	return s.providerConfigured(ctx, name) && s.ProviderOutage(name) == ""
+}
+
+// ProviderOutage is the last outage a provider reported, empty while it is reachable.
+func (s *JobService) ProviderOutage(name string) string {
+	if h, ok := s.catalog.providers[name].(interface{ Outage() string }); ok {
+		return h.Outage()
+	}
+	return ""
+}
+
+// WatchProviders pings providers in outage every minute and the rest every ten, so outages switch them off server-wide.
+func (s *JobService) WatchProviders(ctx context.Context) {
+	for tick := 0; ; tick++ {
+		for _, name := range providerOrder {
+			if s.providerConfigured(ctx, name) && (tick%10 == 0 || s.ProviderOutage(name) != "") {
+				pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				_, _ = s.catalog.providers[name].Trending(pctx, 1)
+				cancel()
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Minute):
+		}
+	}
+}
+
+func (s *JobService) providerConfigured(ctx context.Context, name string) bool {
 	p, ok := s.catalog.providers[name]
 	if !ok || slices.Contains(splitNames(s.Setting(ctx, SettingProvidersDisabled, "")), name) {
 		return false
@@ -70,10 +100,19 @@ func (s *JobService) providerEnabled(ctx context.Context, name string) bool {
 }
 
 func (s *JobService) Providers(ctx context.Context) []catalog.Provider {
+	return s.providers(ctx, s.providerEnabled)
+}
+
+// Trackers also lists providers that are in an outage.
+func (s *JobService) Trackers(ctx context.Context) []catalog.Provider {
+	return s.providers(ctx, s.providerConfigured)
+}
+
+func (s *JobService) providers(ctx context.Context, ok func(context.Context, string) bool) []catalog.Provider {
 	user := auth.FromContext(ctx)
 	var out []catalog.Provider
 	for _, name := range providerOrder {
-		if s.providerEnabled(ctx, name) && user.ProviderAllowed(name) {
+		if ok(ctx, name) && user.ProviderAllowed(name) {
 			out = append(out, s.catalog.providers[name])
 		}
 	}
@@ -86,6 +125,9 @@ func (s *JobService) Provider(ctx context.Context, name string) (catalog.Provide
 	}
 	if s.providerEnabled(ctx, name) && auth.FromContext(ctx).ProviderAllowed(name) {
 		return s.catalog.providers[name], nil
+	}
+	if outage := s.ProviderOutage(name); outage != "" {
+		return nil, fmt.Errorf("%s is temporarily unavailable (%s)", s.ProviderLabel(name), outage)
 	}
 	return nil, fmt.Errorf("metadata provider %q is not available", name)
 }
@@ -138,7 +180,7 @@ func (s *JobService) AddCatalogTitle(ctx context.Context, provider, id string) (
 	if err != nil {
 		return library.Title{}, err
 	}
-	s.PushTrackers(ctx, auth.UserID(ctx), title.ID)
+	s.titleAdded(ctx, auth.UserID(ctx), title.ID)
 	if err := s.enqueueSourceSearchForTitle(ctx, title); err != nil {
 		return title, err
 	}
@@ -330,10 +372,15 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 			self[prov+":"+e.ProviderID] = true
 		}
 	}
+	prefs := map[string]TrackerPrefs{}
+	for _, a := range s.TrackerAccounts(ctx, auth.UserID(ctx)) {
+		prefs[a.Provider] = a.TrackerPrefs
+	}
 	var rels, recs [][]catalog.Manga
 	for _, p := range s.Providers(ctx) {
 		e := maps[p.Name()]
-		if !e.Confirmed || e.ProviderID == "" {
+		pref, connected := prefs[p.Name()]
+		if !e.Confirmed || e.ProviderID == "" || connected && !pref.Relations && !pref.Recommendations {
 			continue
 		}
 		rel, rec, rerr := s.relatedCached(ctx, p, e.ProviderID, limit)
@@ -341,7 +388,12 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 			err = rerr
 			continue
 		}
-		rels, recs = append(rels, rel), append(recs, rec)
+		if !connected || pref.Relations {
+			rels = append(rels, rel)
+		}
+		if !connected || pref.Recommendations {
+			recs = append(recs, rec)
+		}
 	}
 	relations, recommendations = mergeManga(rels, self, 0), mergeManga(recs, self, limit)
 	if len(relations)+len(recommendations) > 0 {

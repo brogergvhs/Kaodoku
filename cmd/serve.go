@@ -127,6 +127,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
 
+	go svc.WatchProviders(ctx)
 	go func() {
 		timer := time.NewTimer(time.Minute)
 		defer timer.Stop()

@@ -185,7 +185,7 @@ document.addEventListener("input", function (e) {
   var scope = filter.closest(".dropdown-content") || filter.parentElement;
   if (!scope) return;
   var q = filter.value.trim().toLowerCase();
-  scope.querySelectorAll("label, [data-tag-chip]").forEach(function (row) {
+  scope.querySelectorAll("label, [data-tag-chip], [data-filter-row]").forEach(function (row) {
     var el = row.matches("[data-tag-chip]") ? row.parentElement : row;
     el.hidden = q !== "" && row.textContent.toLowerCase().indexOf(q) === -1;
   });
@@ -1094,4 +1094,10 @@ function openPicker(key) {
   document.getElementById("picker-results-" + key).innerHTML = '<p class="py-2 text-sm text-base-content/60">Loading…</p>';
   var d = document.getElementById("picker-" + key);
   if (!d.open) d.showModal();
+}
+
+function trackerConnectPick(select) {
+  select.closest("dialog").querySelectorAll("[data-connect]").forEach(function (el) {
+    el.hidden = el.dataset.connect !== select.value;
+  });
 }

@@ -1178,7 +1178,7 @@ func (s *JobService) ImportFolder(ctx context.Context, folder, provider, id stri
 	if err != nil {
 		return library.Title{}, err
 	}
-	s.PushTrackers(ctx, auth.UserID(ctx), title.ID)
+	s.titleAdded(ctx, auth.UserID(ctx), title.ID)
 	if err := s.enqueueSourceSearchForTitle(ctx, title); err != nil {
 		return title, err
 	}
@@ -1296,7 +1296,7 @@ func (s *JobService) ImportVolumesFolder(ctx context.Context, folder, provider, 
 	if err != nil {
 		return library.Title{}, err
 	}
-	s.PushTrackers(ctx, auth.UserID(ctx), title.ID)
+	s.titleAdded(ctx, auth.UserID(ctx), title.ID)
 	return title, nil
 }
 
@@ -1368,7 +1368,7 @@ func (s *JobService) TrackMatch(ctx context.Context, matchID int64, output strin
 	if err != nil {
 		return library.Title{}, err
 	}
-	s.PushTrackers(ctx, auth.UserID(ctx), title.ID)
+	s.titleAdded(ctx, auth.UserID(ctx), title.ID)
 	if err := s.enqueueRefreshForTitle(ctx, title); err != nil {
 		return title, err
 	}
@@ -1572,6 +1572,14 @@ func (s *JobService) ServicesHealth(ctx context.Context) []ServiceHealth {
 				return h.Version, err
 			})
 		},
+	}
+	for _, name := range providerOrder {
+		if s.providerConfigured(ctx, name) {
+			outage := s.ProviderOutage(name)
+			probes = append(probes, func() ServiceHealth {
+				return ServiceHealth{Name: s.ProviderLabel(name) + " (tracker)", Enabled: true, Healthy: outage == "", Error: outage}
+			})
+		}
 	}
 	out := make([]ServiceHealth, len(probes))
 	var wg sync.WaitGroup

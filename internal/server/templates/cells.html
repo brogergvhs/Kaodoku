@@ -940,48 +940,109 @@
 
 {{define "trackerCards"}}
 <div class="card bg-base-100 card-body p-4 gap-2 mb-4">
-  <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Tracking accounts</h2>
+  <div class="flex items-center justify-between gap-2">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Tracking accounts</h2>
+    {{if .CanConnect}}<button type="button" class="btn btn-sm btn-primary" onclick="tracker_connect_modal.showModal()">{{template "iconPlus"}}Connect</button>{{end}}
+  </div>
+  {{$connected := false}}{{range .Cards}}{{if .Account}}{{$connected = true}}{{end}}{{end}}
+  {{if $connected}}
   <div class="divide-y divide-line/25">
-  {{range .}}
-  <div class="grid gap-2 py-3">
-    <div class="flex items-center justify-between gap-3 flex-wrap">
-      <div>
-        <div class="text-sm font-medium">{{.Label}}</div>
-        {{with .Account}}<div class="text-sm">Connected as <span class="font-medium">{{.Name}}</span></div>
-        {{if .ExpiresAt}}<span class="text-xs {{if .ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.ExpiresAt}}</span>{{end}}
-        {{if .LastError}}<div class="text-xs text-error">{{.LastError}}</div>{{end}}{{end}}
+    {{range .Cards}}{{if .Account}}{{$c := .}}{{with .Account}}
+    <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-medium">{{.Label}} <span class="font-normal text-base-content/50">({{.Name}})</span></div>
+        {{if .ExpiresAt}}<div class="text-xs {{if .ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.ExpiresAt}}</div>{{end}}
+        {{if $c.Outage}}<div class="text-xs text-warning">Temporarily unavailable: {{$c.Outage}}</div>
+        {{else if .LastError}}<div class="text-xs text-error">{{.LastError}}</div>{{end}}
       </div>
-      {{if .Account}}
-      <div class="flex max-sm:flex-col max-sm:w-full items-center gap-2">
-        {{if and .Account.ExpiringSoon (eq .Login "oauth")}}<a class="btn btn-sm btn-warning" href="/trackers/{{.Provider}}/connect">Reconnect</a>{{end}}
-        <button class="btn btn-sm btn-outline max-sm:w-full" hx-post="/ui/trackers/{{.Provider}}/sync" hx-swap="none">Sync now</button>
-        <button class="btn btn-sm btn-outline max-sm:w-full text-error" hx-post="/ui/trackers/{{.Provider}}/disconnect" hx-swap="none" hx-confirm="Disconnect your {{.Label}} account?">Disconnect</button>
-      </div>
-      {{else if eq .Login "oauth"}}<a class="btn btn-sm btn-primary" href="/trackers/{{.Provider}}/connect">Connect {{.Label}}</a>
-      {{else if eq .Login ""}}<span class="text-xs text-base-content/50">Not configured by an admin</span>{{end}}
+      <details class="dropdown dropdown-end shrink-0">
+        <summary class="btn btn-ghost btn-sm btn-square" aria-label="{{.Label}} actions">{{template "iconDots"}}</summary>
+        <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-max whitespace-nowrap p-2 shadow-lg border border-base-300">
+          <li><button hx-get="/ui/trackers/{{.Provider}}/settings" hx-target="#tracker-prefs-body" onclick="tracker_prefs_modal.showModal()">{{template "iconEdit"}}Edit</button></li>
+          {{if not $c.Outage}}<li><button hx-post="/ui/trackers/{{.Provider}}/sync" hx-target="#toast">{{template "iconRefresh"}}Sync now</button></li>{{end}}
+          {{if and .ExpiringSoon (eq $c.Login "oauth")}}<li><a href="/trackers/{{.Provider}}/connect">{{template "iconLink"}}Reconnect</a></li>{{end}}
+          <li><button class="text-error" hx-post="/ui/trackers/{{.Provider}}/disconnect" hx-swap="none" hx-confirm="Disconnect your {{.Label}} account?">{{template "iconPower"}}Disconnect</button></li>
+        </ul>
+      </details>
     </div>
-    {{if and (not .Account) (eq .Login "password")}}
-    <form class="flex flex-wrap items-center gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
-      <input class="input input-sm min-w-36 flex-1" name="username" placeholder="{{.Label}} username or email" autocomplete="off" required>
-      <input class="input input-sm min-w-36 flex-1" type="password" name="password" placeholder="Password" autocomplete="off" required>
-      <button class="btn btn-sm btn-primary max-sm:w-full">Connect</button>
-    </form>
-    <span class="text-xs text-base-content/50">Your password is sent to {{.Label}} once; only the returned token is stored.</span>
-    {{end}}
-    {{if and (not .Account) (eq .Login "") (ne .Provider "kitsu") (ne .Provider "mangaupdates")}}
-    <div class="text-xs text-base-content/50">An admin registers an app with this redirect URL, then enters its client ID in Metadata &amp; tracking below:</div>
-    <code class="rounded-lg bg-base-300 px-3 py-2 text-xs break-all select-all">{{.Redirect}}</code>
-    {{end}}
-    {{if .Account}}
-    <details>
-      <summary class="flex cursor-pointer list-none items-center justify-between py-1 text-sm font-medium select-none">Browse your {{.Label}} list<span class="text-base-content/50">{{template "iconChevron"}}</span></summary>
-      <div hx-get="/ui/trackers/{{.Provider}}/library" hx-trigger="intersect once" hx-swap="outerHTML">
-        <div class="flex items-center gap-2 py-2 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading your list…</div>
+    {{end}}{{end}}{{end}}
+  </div>
+  {{else}}<p class="text-sm text-base-content/60">No trackers here yet.</p>{{end}}
+</div>
+{{if .CanConnect}}
+<dialog id="tracker_connect_modal" class="modal">
+  <div class="modal-box grid max-w-md gap-3">
+    <div class="flex items-start justify-between gap-2">
+      <h3 class="text-lg font-bold">Connect a tracker</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+    </div>
+    <select class="select select-sm w-full" aria-label="Tracker" onchange="trackerConnectPick(this)">
+      <option value="" selected disabled>Pick a tracker…</option>
+      {{range .Cards}}{{if and (not .Account) .Login (not .Outage)}}<option value="{{.Provider}}">{{.Label}}</option>{{end}}{{end}}
+    </select>
+    {{range .Cards}}{{if and (not .Account) .Login (not .Outage)}}
+    <div class="grid gap-2" data-connect="{{.Provider}}" hidden>
+      {{if eq .Login "oauth"}}
+      <p class="text-sm text-base-content/60">You'll approve access on {{.Label}}, then come back here.</p>
+      <a class="btn btn-sm btn-primary" href="/trackers/{{.Provider}}/connect">Continue to {{.Label}}</a>
+      {{else}}
+      <form class="grid gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
+        <input class="input input-sm w-full" name="username" placeholder="{{.Label}} username or email" aria-label="{{.Label}} username or email" autocomplete="off" required>
+        <input class="input input-sm w-full" type="password" name="password" placeholder="Password" aria-label="Password" autocomplete="off" required>
+        <span class="text-xs text-base-content/50">Your password is sent to {{.Label}} once; only the returned token is stored.</span>
+        <button class="btn btn-sm btn-primary">Connect</button>
+      </form>
+      {{end}}
+    </div>
+    {{end}}{{end}}
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{{end}}
+<dialog id="tracker_prefs_modal" class="modal">
+  <div class="modal-box max-w-lg">
+    <div id="tracker-prefs-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{{end}}
+
+{{define "trackerPrefs"}}
+<form class="grid gap-1" hx-post="/ui/trackers/{{.Provider}}/settings" hx-target="#toast" hx-on::after-request="if (event.detail.successful) this.closest('dialog').close()">
+  <div class="mb-2 flex items-start justify-between gap-2">
+    <h3 class="text-lg font-bold">{{.Label}} settings</h3>
+    <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+  </div>
+  {{template "trackerPrefToggle" (pref "auto_link" "Link new titles automatically" "Look up every title added to the library on this tracker and link confident matches." .AutoLink)}}
+  {{template "trackerPrefToggle" (pref "auto_progressive" "Progressive sync for linked titles" "Turn on progressive sync whenever a title is linked to this tracker. You can still turn it off per title." .AutoProgressive)}}
+  {{template "trackerPrefToggle" (pref "relations" "Use its related manga" "Include related titles from this tracker on title pages." .Relations)}}
+  {{template "trackerPrefToggle" (pref "recommendations" "Use its recommendations" "Include recommendations from this tracker on title pages and the home page." .Recommendations)}}
+  <div class="grid gap-1 py-3">
+    <span class="font-medium">Unlinked titles</span>
+    <span class="text-sm text-base-content/60">Library titles without a confirmed {{.Label}} link. Open one to link it.</span>
+    {{if .Unlinked}}
+    <details class="dropdown mt-1 w-full" data-keep-open>
+      <summary class="select select-sm flex w-full cursor-pointer items-center">{{len .Unlinked}} titles</summary>
+      <div class="dropdown-content z-30 w-full rounded-lg border border-line bg-base-100 p-2 shadow-lg">
+        <input class="input input-sm mb-2 w-full" aria-label="Filter titles" placeholder="Filter titles…" data-tag-filter form="">
+        <ul class="grid max-h-60 overflow-y-auto">
+          {{range .Unlinked}}<li data-filter-row><a class="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-base-200" href="/library/{{.ID}}"><span class="truncate">{{.DisplayTitle}}</span>{{if .Suggested}}<span class="badge badge-warning badge-soft badge-sm shrink-0">suggested match</span>{{end}}</a></li>{{end}}
+        </ul>
       </div>
     </details>
-    {{end}}
+    {{else}}<span class="text-sm text-base-content/50">Every title is linked or marked as not on {{.Label}}.</span>{{end}}
   </div>
-  {{end}}
+  <button class="btn btn-sm btn-primary">Save</button>
+</form>
+{{end}}
+
+{{define "trackerPrefToggle"}}
+<div class="flex items-start justify-between gap-4 border-b border-base-200 py-3">
+  <div class="min-w-0">
+    <label class="font-medium" for="tp-{{.Key}}">{{.Label}}</label>
+    <div class="text-sm text-base-content/60">{{.Desc}}</div>
   </div>
+  <input type="hidden" name="{{.Key}}" value="false">
+  <input type="checkbox" class="toggle shrink-0" id="tp-{{.Key}}" name="{{.Key}}" value="true" {{if .On}}checked{{end}}>
 </div>
 {{end}}

@@ -24,13 +24,14 @@ type restClient struct {
 	client      *http.Client
 	limiter     *rate.Limiter
 	auth        func(ctx context.Context, h http.Header)
+	*health
 }
 
 func newRest(base, label string, client *http.Client, every time.Duration) restClient {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	return restClient{base: base, label: label, contentType: "application/json", client: client, limiter: rate.NewLimiter(rate.Every(every), 3)}
+	return restClient{base: base, label: label, contentType: "application/json", client: client, limiter: rate.NewLimiter(rate.Every(every), 3), health: &health{}}
 }
 
 func bearer(ctx context.Context, h http.Header) {
@@ -40,6 +41,10 @@ func bearer(ctx context.Context, h http.Header) {
 }
 
 func (c *restClient) do(ctx context.Context, method, path string, body, out any) error {
+	return c.observe(ctx, c.send(ctx, method, path, body, out))
+}
+
+func (c *restClient) send(ctx context.Context, method, path string, body, out any) error {
 	target := path
 	if !strings.HasPrefix(path, "http") {
 		target = c.base + path
@@ -74,7 +79,7 @@ func (c *restClient) do(ctx context.Context, method, path string, body, out any)
 		}
 		resp, err := c.client.Do(req)
 		if err != nil {
-			return fmt.Errorf("%s request: %w", c.label, err)
+			return fmt.Errorf("%s %w: %w", c.label, ErrUnavailable, err)
 		}
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		resp.Body.Close()
@@ -94,6 +99,8 @@ func (c *restClient) do(ctx context.Context, method, path string, body, out any)
 			return fmt.Errorf("%s HTTP 401: %w", c.label, ErrUnauthorized)
 		case resp.StatusCode == http.StatusNotFound:
 			return fmt.Errorf("%s HTTP 404: %w", c.label, ErrNotFound)
+		case resp.StatusCode >= http.StatusBadGateway && resp.StatusCode <= http.StatusGatewayTimeout:
+			return fmt.Errorf("%s HTTP %d %w: %s", c.label, resp.StatusCode, ErrUnavailable, outageReason(data))
 		case resp.StatusCode >= http.StatusBadRequest:
 			return fmt.Errorf("%s HTTP %d: %.200s", c.label, resp.StatusCode, data)
 		}

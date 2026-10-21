@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
+	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/service"
 )
 
@@ -29,13 +30,34 @@ func TestTrackerTemplatesRender(t *testing.T) {
 		}
 	}
 
-	cards := render("trackerCards", []trackerCardView{
-		{Provider: "anilist", Label: "AniList", Login: "oauth", Account: &service.TrackerAccount{Name: "me", LastError: "boom"}},
-		{Provider: "mal", Label: "MyAnimeList", Redirect: "https://k/trackers/mal/callback"},
+	cards := render("trackerCards", trackersView{CanConnect: true, Cards: []trackerCardView{
+		{Provider: "anilist", Label: "AniList", Login: "oauth", Account: &service.TrackerAccount{Provider: "anilist", Label: "AniList", Name: "me", LastError: "boom"}},
+		{Provider: "mal", Label: "MyAnimeList", Login: "oauth"},
 		{Provider: "kitsu", Label: "Kitsu", Login: "password"},
+		{Provider: "mangaupdates", Label: "MangaUpdates"},
+	}})
+	expect(cards, `AniList <span class="font-normal text-base-content/50">(me)</span>`, "boom", "/ui/trackers/anilist/sync", "/ui/trackers/anilist/settings",
+		"/ui/trackers/anilist/disconnect", `<option value="mal">MyAnimeList</option>`, "/trackers/mal/connect", "/ui/trackers/kitsu/login", `type="password"`)
+	if strings.Contains(cards, `value="anilist">`) || strings.Contains(cards, `value="mangaupdates"`) || strings.Contains(cards, "/library\"") {
+		t.Fatalf("connect picker offers connected or unconfigured trackers:\n%s", cards)
+	}
+	if empty := render("trackerCards", trackersView{Cards: []trackerCardView{{Provider: "anilist", Label: "AniList", Login: "oauth", Account: &service.TrackerAccount{Provider: "anilist"}}}}); strings.Contains(empty, "tracker_connect_modal.showModal") {
+		t.Fatal("Connect button shown with nothing left to connect")
+	}
+	expect(render("trackerCards", trackersView{CanConnect: true, Cards: []trackerCardView{{Provider: "kitsu", Label: "Kitsu", Login: "password"}}}), "No trackers here yet.", "tracker_connect_modal.showModal()")
+	down := render("trackerCards", trackersView{Cards: []trackerCardView{
+		{Provider: "mal", Label: "MyAnimeList", Login: "oauth", Outage: "maintenance", Account: &service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", Name: "me"}},
+		{Provider: "kitsu", Label: "Kitsu", Login: "password", Outage: "down"},
+	}})
+	expect(down, "Temporarily unavailable: maintenance")
+	if strings.Contains(down, "/ui/trackers/mal/sync") || strings.Contains(down, `value="kitsu"`) {
+		t.Fatalf("unavailable tracker still offers sync or connect:\n%s", down)
+	}
+	prefs := render("trackerPrefs", trackerPrefsView{
+		TrackerAccount: service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", TrackerPrefs: service.TrackerPrefs{AutoLink: true, Recommendations: true}},
+		Unlinked:       []service.UnlinkedTitle{{Title: library.Title{ID: 7, DisplayTitle: "Vagabond"}, Suggested: true}},
 	})
-	expect(cards, "Connected as <span class=\"font-medium\">me</span>", "boom", "/ui/trackers/anilist/sync", "/ui/trackers/anilist/library",
-		"https://k/trackers/mal/callback", "/ui/trackers/kitsu/login", `type="password"`)
+	expect(prefs, `id="tp-auto_link" name="auto_link" value="true" checked`, `id="tp-auto_progressive" name="auto_progressive" value="true" >`, "/library/7", "Vagabond", "suggested match", "data-filter-row")
 
 	panel := render("providerPanel", providerPanelView{TitleID: 3, CanManage: true, Links: []service.ProviderLink{
 		{Provider: "anilist", Label: "AniList", ID: "1", Primary: true, Confirmed: true, Connected: true, Syncing: true, URL: "https://anilist.co/manga/1"},

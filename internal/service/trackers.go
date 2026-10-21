@@ -25,10 +25,15 @@ type TrackerAccount struct {
 	ExpiresAt    string
 	LastError    string
 	ExpiringSoon bool // no refresh token and under 30 days of validity left
+	TrackerPrefs
+}
+
+type TrackerPrefs struct {
+	AutoLink, AutoProgressive, Relations, Recommendations bool
 }
 
 func (s *JobService) TrackerAccounts(ctx context.Context, userID int64) []TrackerAccount {
-	rows, err := s.db.QueryContext(ctx, `SELECT provider, remote_name, expires_at, last_error, refresh_token = '' FROM tracker_accounts WHERE user_id = ? ORDER BY created_at, rowid`, userID)
+	rows, err := s.db.QueryContext(ctx, `SELECT provider, remote_name, expires_at, last_error, refresh_token = '', auto_link, auto_progressive, use_relations, use_recommendations FROM tracker_accounts WHERE user_id = ? ORDER BY created_at, rowid`, userID)
 	if err != nil {
 		return nil
 	}
@@ -37,7 +42,7 @@ func (s *JobService) TrackerAccounts(ctx context.Context, userID int64) []Tracke
 	for rows.Next() {
 		var a TrackerAccount
 		var noRefresh bool
-		if rows.Scan(&a.Provider, &a.Name, &a.ExpiresAt, &a.LastError, &noRefresh) != nil {
+		if rows.Scan(&a.Provider, &a.Name, &a.ExpiresAt, &a.LastError, &noRefresh, &a.AutoLink, &a.AutoProgressive, &a.Relations, &a.Recommendations) != nil {
 			continue
 		}
 		if _, known := s.catalog.providers[a.Provider]; !known {
@@ -50,6 +55,86 @@ func (s *JobService) TrackerAccounts(ctx context.Context, userID int64) []Tracke
 		out = append(out, a)
 	}
 	return out
+}
+
+func (s *JobService) trackerAccount(ctx context.Context, userID int64, provider string) (TrackerAccount, bool) {
+	for _, a := range s.TrackerAccounts(ctx, userID) {
+		if a.Provider == provider {
+			return a, true
+		}
+	}
+	return TrackerAccount{}, false
+}
+
+func (s *JobService) SetTrackerPrefs(ctx context.Context, provider string, p TrackerPrefs) error {
+	uid := auth.UserID(ctx)
+	res, err := s.db.ExecContext(ctx, `UPDATE tracker_accounts SET auto_link = ?, auto_progressive = ?, use_relations = ?, use_recommendations = ? WHERE user_id = ? AND provider = ?`,
+		p.AutoLink, p.AutoProgressive, p.Relations, p.Recommendations, uid, provider)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("no %s account connected", s.ProviderLabel(provider))
+	}
+	s.invalidateRecs(uid)
+	return nil
+}
+
+type UnlinkedTitle struct {
+	library.Title
+	Suggested bool
+}
+
+// UnlinkedTitles lists library titles with no confirmed link to provider, skipping ones marked as not on it.
+func (s *JobService) UnlinkedTitles(ctx context.Context, provider string) ([]UnlinkedTitle, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id, COALESCE(e.provider_id, '') != '' FROM titles t
+		JOIN catalog_manga cm ON cm.id = t.catalog_manga_id
+		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = cm.id AND e.provider = ?
+		WHERE cm.provider != ? AND COALESCE(e.confirmed, 0) = 0 AND COALESCE(e.method, '') != 'user'`, provider, provider)
+	if err != nil {
+		return nil, err
+	}
+	suggested := map[int64]bool{}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		var sug bool
+		if rows.Scan(&id, &sug) == nil {
+			ids, suggested[id] = append(ids, id), sug
+		}
+	}
+	rows.Close()
+	titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UnlinkedTitle, 0, len(titles))
+	for _, t := range titles {
+		out = append(out, UnlinkedTitle{Title: t, Suggested: suggested[t.ID]})
+	}
+	slices.SortFunc(out, func(a, b UnlinkedTitle) int {
+		return strings.Compare(strings.ToLower(a.DisplayTitle), strings.ToLower(b.DisplayTitle))
+	})
+	return out, nil
+}
+
+// titleAdded auto-links a new library title for trackers that opted in, then pushes progressive ones.
+func (s *JobService) titleAdded(ctx context.Context, userID, titleID int64) {
+	ctx = context.WithoutCancel(ctx)
+	m, ok := s.titleWork(ctx, titleID)
+	if !ok {
+		return
+	}
+	accounts := s.TrackerAccounts(ctx, userID)
+	go func() {
+		for _, a := range accounts {
+			if p, err := s.Provider(ctx, a.Provider); err == nil && a.AutoLink {
+				s.resolveID(ctx, m, p)
+			}
+		}
+		s.pushTrackers(ctx, userID, titleID, false)
+	}()
 }
 
 func (s *JobService) connectedTrackers(ctx context.Context, userID int64) []string {
@@ -304,7 +389,9 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	for _, e := range entries {
 		remote[e.Manga.ProviderID] = e
 	}
-	s.resolveLibrary(ctx, p, 100)
+	if a, _ := s.trackerAccount(ctx, user.ID, p.Name()); a.AutoLink {
+		s.resolveLibrary(ctx, p, 100)
+	}
 	tracked, err := s.lib.TitlesByProvider(ctx, p.Name())
 	if err != nil {
 		return err
@@ -313,7 +400,7 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	if err != nil {
 		return err
 	}
-	maps.DeleteFunc(tracked, func(_ string, id int64) bool { return !enabled[id] })
+	maps.DeleteFunc(tracked, func(_ string, id int64) bool { return !enabled(id) })
 	trackedIDs := make([]int64, 0, len(tracked))
 	for _, id := range tracked {
 		trackedIDs = append(trackedIDs, id)
@@ -476,7 +563,7 @@ func (s *JobService) pushTrackers(ctx context.Context, userID, titleID int64, ex
 		return
 	}
 	s.eachTracker(ctx, userID, names, func(actx context.Context, p catalog.Provider) error {
-		id := s.resolveID(actx, m, p)
+		id := s.confirmedID(actx, m, p.Name())
 		if id == "" {
 			return nil
 		}
@@ -585,7 +672,7 @@ func (s *JobService) SyncTrackersTitle(ctx context.Context, titleID int64, provi
 		if !ok {
 			continue
 		}
-		id := s.resolveID(ctx, m, p)
+		id := s.confirmedID(ctx, m, name)
 		if id == "" {
 			continue
 		}
@@ -599,45 +686,55 @@ func (s *JobService) SyncTrackersTitle(ctx context.Context, titleID int64, provi
 	return errors.Join(errs...)
 }
 
+// SetProgressiveSync stores an explicit per-title choice, which overrides the account's auto progressive default.
 func (s *JobService) SetProgressiveSync(ctx context.Context, titleID int64, provider string, on bool) error {
-	userID := auth.UserID(ctx)
-	if !on {
-		_, err := s.db.ExecContext(ctx, `DELETE FROM tracker_title_sync WHERE user_id = ? AND title_id = ? AND provider = ?`, userID, titleID, provider)
-		return err
+	if on {
+		if err := s.SyncTrackersTitle(ctx, titleID, provider); err != nil {
+			return err
+		}
 	}
-	if err := s.SyncTrackersTitle(ctx, titleID, provider); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO tracker_title_sync (user_id, title_id, provider) VALUES (?, ?, ?)`, userID, titleID, provider)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tracker_title_sync (user_id, title_id, provider, enabled) VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_id, title_id, provider) DO UPDATE SET enabled = excluded.enabled`, auth.UserID(ctx), titleID, provider, on)
 	return err
 }
 
 func (s *JobService) progressiveTrackers(ctx context.Context, userID, titleID int64) []string {
 	var out []string
-	for _, name := range s.connectedTrackers(ctx, userID) {
-		var one int
-		if s.db.QueryRowContext(ctx, `SELECT 1 FROM tracker_title_sync WHERE user_id = ? AND title_id = ? AND provider = ?`, userID, titleID, name).Scan(&one) == nil {
-			out = append(out, name)
+	for _, a := range s.TrackerAccounts(ctx, userID) {
+		if _, err := s.Provider(ctx, a.Provider); err != nil {
+			continue
+		}
+		on := a.AutoProgressive
+		_ = s.db.QueryRowContext(ctx, `SELECT enabled FROM tracker_title_sync WHERE user_id = ? AND title_id = ? AND provider = ?`, userID, titleID, a.Provider).Scan(&on)
+		if on {
+			out = append(out, a.Provider)
 		}
 	}
 	return out
 }
 
-func (s *JobService) progressiveTitles(ctx context.Context, userID int64, provider string) (map[int64]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT title_id FROM tracker_title_sync WHERE user_id = ? AND provider = ?`, userID, provider)
+func (s *JobService) progressiveTitles(ctx context.Context, userID int64, provider string) (func(int64) bool, error) {
+	a, _ := s.trackerAccount(ctx, userID, provider)
+	rows, err := s.db.QueryContext(ctx, `SELECT title_id, enabled FROM tracker_title_sync WHERE user_id = ? AND provider = ?`, userID, provider)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[int64]bool{}
+	explicit := map[int64]bool{}
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var on bool
+		if err := rows.Scan(&id, &on); err != nil {
 			return nil, err
 		}
-		out[id] = true
+		explicit[id] = on
 	}
-	return out, rows.Err()
+	return func(id int64) bool {
+		if on, ok := explicit[id]; ok {
+			return on
+		}
+		return a.AutoProgressive
+	}, rows.Err()
 }
 
 func (s *JobService) syncTitle(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64) error {
@@ -659,21 +756,18 @@ func (s *JobService) syncTitle(ctx, actx context.Context, p catalog.Provider, id
 	return reconcileEntry(actx, p, id, local, false)
 }
 
-func (s *JobService) TrackerLibrary(ctx context.Context, provider string) ([]catalog.Entry, error) {
-	p, actx, ok := s.trackerSession(ctx, auth.UserID(ctx), provider)
-	if !ok {
-		return nil, fmt.Errorf("no %s account connected", s.ProviderLabel(provider))
-	}
-	return p.ListEntries(actx)
-}
-
 func (s *JobService) TrackerSuggestions(ctx context.Context, provider string) []catalog.Manga {
 	var lists [][]catalog.Manga
-	for _, name := range s.connectedTrackers(ctx, auth.UserID(ctx)) {
+	uid := auth.UserID(ctx)
+	for _, name := range s.connectedTrackers(ctx, uid) {
 		if provider != "" && name != provider {
 			continue
 		}
-		entries, err := s.TrackerLibrary(ctx, name)
+		p, actx, ok := s.trackerSession(ctx, uid, name)
+		if !ok {
+			continue
+		}
+		entries, err := p.ListEntries(actx)
 		if err != nil {
 			continue
 		}

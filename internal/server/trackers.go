@@ -110,17 +110,46 @@ func (u *webUI) trackerSyncNow(w http.ResponseWriter, r *http.Request) {
 	u.frag(w, "toast", toastView{OK: true, Msg: "Sync queued ✓"})
 }
 
-func (u *webUI) trackerLibrary(w http.ResponseWriter, r *http.Request) {
-	entries, err := u.svc.TrackerLibrary(r.Context(), pathProvider(r))
+type trackerPrefsView struct {
+	service.TrackerAccount
+	Unlinked []service.UnlinkedTitle
+}
+
+func (u *webUI) trackerPrefs(w http.ResponseWriter, r *http.Request) {
+	provider := pathProvider(r)
+	var view trackerPrefsView
+	for _, a := range u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context())) {
+		if a.Provider == provider {
+			view.TrackerAccount = a
+		}
+	}
+	if view.Provider == "" {
+		u.fail(w, fmt.Errorf("no %s account connected", u.svc.ProviderLabel(provider)))
+		return
+	}
+	titles, err := u.svc.UnlinkedTitles(r.Context(), provider)
 	if err != nil {
 		u.fail(w, err)
 		return
 	}
-	items := make([]catalog.Manga, 0, len(entries))
-	for _, e := range entries {
-		items = append(items, e.Manga)
+	for _, t := range titles {
+		if contentAllowed(r.Context(), t.IsAdult, t.ContentTags) {
+			view.Unlinked = append(view.Unlinked, t)
+		}
 	}
-	u.frag(w, "mangaResults", u.mangaResultsView(r.Context(), "", "cards", items))
+	u.frag(w, "trackerPrefs", view)
+}
+
+func (u *webUI) trackerPrefsSave(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	on := func(k string) bool { v := r.Form[k]; return len(v) > 0 && v[len(v)-1] == "true" }
+	if err := u.svc.SetTrackerPrefs(r.Context(), pathProvider(r), service.TrackerPrefs{
+		AutoLink: on("auto_link"), AutoProgressive: on("auto_progressive"), Relations: on("relations"), Recommendations: on("recommendations"),
+	}); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.frag(w, "toast", toastView{OK: true, Msg: "Saved ✓"})
 }
 
 func (u *webUI) trackerSuggestions(w http.ResponseWriter, r *http.Request) {
@@ -170,22 +199,28 @@ type trackerCardView struct {
 	Provider string
 	Label    string
 	Login    string
+	Outage   string
 	Account  *service.TrackerAccount
-	Redirect string
 }
 
-func (u *webUI) trackerCards(r *http.Request) []trackerCardView {
+type trackersView struct {
+	Cards      []trackerCardView
+	CanConnect bool
+}
+
+func (u *webUI) trackerCards(r *http.Request) trackersView {
 	accounts := map[string]service.TrackerAccount{}
 	for _, a := range u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context())) {
 		accounts[a.Provider] = a
 	}
-	var out []trackerCardView
-	for _, p := range u.svc.Providers(r.Context()) {
-		card := trackerCardView{Provider: p.Name(), Label: p.Label(), Login: u.svc.TrackerLogin(r.Context(), p.Name()), Redirect: trackerRedirectURL(r, p.Name())}
+	var out trackersView
+	for _, p := range u.svc.Trackers(r.Context()) {
+		card := trackerCardView{Provider: p.Name(), Label: p.Label(), Login: u.svc.TrackerLogin(r.Context(), p.Name()), Outage: u.svc.ProviderOutage(p.Name())}
 		if a, ok := accounts[p.Name()]; ok {
 			card.Account = &a
 		}
-		out = append(out, card)
+		out.Cards = append(out.Cards, card)
+		out.CanConnect = out.CanConnect || card.Account == nil && card.Login != "" && card.Outage == ""
 	}
 	return out
 }

@@ -469,7 +469,7 @@ func (a *apiV1) meSettingsPut(w http.ResponseWriter, r *http.Request) {
 
 func (a *apiV1) trackers(r *http.Request) []trackerDTO {
 	var out []trackerDTO
-	for _, c := range (&webUI{svc: a.svc}).trackerCards(r) {
+	for _, c := range (&webUI{svc: a.svc}).trackerCards(r).Cards {
 		d := trackerDTO{Provider: c.Provider, Label: c.Label, Login: c.Login}
 		if c.Account != nil {
 			d.Connected, d.Name, d.ExpiresAt, d.LastError = true, c.Account.Name, c.Account.ExpiresAt, c.Account.LastError

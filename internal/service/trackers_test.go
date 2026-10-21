@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -410,5 +411,66 @@ func TestLinkedTitleSyncsOnlyWhenAsked(t *testing.T) {
 	}
 	if got := svc.progressiveTrackers(ctx, 1, titleID); len(got) != 0 {
 		t.Fatalf("progressive sync still on: %v", got)
+	}
+}
+
+func TestTrackerPrefsDriveLinkingSyncAndRelated(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	kitsu := newFake(catalog.KitsuProvider)
+	kitsu.search = []catalog.Manga{{Provider: catalog.KitsuProvider, ProviderID: "50", TitleRomaji: "Other"}}
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	uctx := asUser(svc, ctx, t)
+	native, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Native"}, 1, 0)
+	_, unlinked := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "1", TitleRomaji: "Unlinked"}, 1, 0)
+	_, notOn := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "2", TitleRomaji: "Not There"}, 1, 0)
+	_, guessed := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "3", TitleRomaji: "Guessed"}, 1, 0)
+	if _, err := svc.db.ExecContext(ctx, `DELETE FROM tracker_title_sync`); err != nil {
+		t.Fatal(err)
+	}
+	_ = svc.catalog.repo.SetExternalID(ctx, notOn.ID, catalog.ExternalID{Provider: catalog.KitsuProvider, Method: "user"})
+	_ = svc.catalog.repo.SetExternalID(ctx, guessed.ID, catalog.ExternalID{Provider: catalog.KitsuProvider, ProviderID: "77", Method: "title_match"})
+
+	if err := svc.SetTrackerPrefs(uctx, catalog.KitsuProvider, TrackerPrefs{AutoProgressive: true, Relations: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil {
+		t.Fatal(err)
+	}
+	if id := svc.confirmedID(ctx, unlinked, catalog.KitsuProvider); id != "" || len(svc.mappings(ctx, unlinked)) != 1 {
+		t.Fatalf("auto link off still looked titles up: %v", svc.mappings(ctx, unlinked))
+	}
+	if got := svc.progressiveTrackers(ctx, 1, native); len(got) != 1 {
+		t.Fatalf("auto progressive not applied to a linked title: %v", got)
+	}
+	if err := svc.SetProgressiveSync(uctx, native, catalog.KitsuProvider, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.progressiveTrackers(ctx, 1, native); len(got) != 0 {
+		t.Fatalf("explicit off lost to the auto default: %v", got)
+	}
+	nativeWork, _ := svc.titleWork(ctx, native)
+	if _, recs, _ := svc.RelatedManga(uctx, nativeWork.ID, 10); len(recs) != 0 {
+		t.Fatalf("recommendations used though turned off: %v", recs)
+	}
+
+	titles, err := svc.UnlinkedTitles(ctx, catalog.KitsuProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, ut := range titles {
+		names = append(names, fmt.Sprintf("%s:%v", ut.DisplayTitle, ut.Suggested))
+	}
+	slices.Sort(names)
+	if strings.Join(names, ",") != "t:false,t:true" {
+		t.Fatalf("unlinked titles = %v, want the guessed and the unlinked one only", names)
+	}
+
+	if err := svc.SetTrackerPrefs(uctx, catalog.KitsuProvider, TrackerPrefs{AutoLink: true, Recommendations: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, recs, _ := svc.RelatedManga(uctx, nativeWork.ID, 10); len(recs) != 1 {
+		t.Fatalf("recommendations missing once turned on: %v", recs)
 	}
 }
