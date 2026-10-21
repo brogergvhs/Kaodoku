@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
+	"github.com/brogergvhs/kaodoku/internal/browserfetch"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/config"
@@ -178,7 +179,7 @@ func titleSourceView(title library.Title, active, failed bool, msg string, match
 
 type settingsView struct {
 	Groups   []settingGroup
-	Trackers []trackerCardView
+	Trackers trackersView
 }
 type settingGroup struct {
 	Title  string
@@ -186,9 +187,12 @@ type settingGroup struct {
 }
 type settingField struct {
 	Key, Label, Desc, Value string
-	Kind                    string // "", "select", "color"
-	Options                 []string
+	Kind                    string // "", "select", "multi", "bool", "color", "secret"
+	Options                 []providerOption
+	Selected                []string
 }
+
+func multiSetting(key string) bool { return key == service.SettingProvidersDisabled }
 
 // settingMeta maps a technical setting key to a human label and description.
 func settingMeta(key string) (label, desc string) {
@@ -205,19 +209,19 @@ func settingMeta(key string) (label, desc string) {
 	case service.SettingRateLimitBurst:
 		return "Request pacing burst", "How many page requests may go out back-to-back before pacing kicks in."
 	case service.SettingRateLimitDisabled:
-		return "Disable request pacing", "true turns off per-site pacing entirely (not recommended for Cloudflare-fronted sites)."
+		return "Disable request pacing", "Turns off per-site pacing entirely (not recommended for Cloudflare-fronted sites)."
 	case service.SettingAniListClientID:
-		return "AniList client ID", "From your AniList developer application."
+		return "AniList client ID", "From your AniList developer application (anilist.co/settings/developer). Enables AniList tracking."
 	case service.SettingAniListClientSecret:
 		return "AniList client secret", "Kept server-side; used to exchange login codes for tokens."
 	case service.SettingMALClientID:
-		return "MyAnimeList client ID", "Create an app at myanimelist.net/apiconfig with redirect URL https://<this server>/trackers/mal/callback. Enables MyAnimeList search, metadata and tracking."
+		return "MyAnimeList client ID", "From your app at myanimelist.net/apiconfig. Enables MyAnimeList search, metadata and tracking."
 	case service.SettingMALClientSecret:
 		return "MyAnimeList client secret", "Only for MAL apps registered as \"web\"; leave empty for \"other\" apps."
 	case service.SettingProvidersDefault:
-		return "Default metadata backend", "Used for search and new titles when a user has no tracker connected: " + strings.Join(service.ProviderNames(), ", ") + "."
+		return "Default metadata backend", "Used for search and new titles when a user has no tracker connected."
 	case service.SettingProvidersDisabled:
-		return "Disabled backends", "Comma-separated backends hidden from everyone, e.g. kitsu, mangaupdates. Block per user in Users."
+		return "Disabled backends", "Backends hidden from everyone. Block them per user in Users."
 	case service.SettingUITheme:
 		return "Theme", "Interface color theme. Pick custom to use the colors below."
 	case service.SettingServeRefreshEvery:
@@ -233,15 +237,15 @@ func settingMeta(key string) (label, desc string) {
 	case service.SettingServeRunEvery:
 		return "Background task interval", "How often the background worker wakes to run queued jobs. Lower is more responsive, higher is less busy."
 	case service.SettingBrowserSolverEnabled:
-		return "Use a browser solver for protected sites", "Enable a headless browser / Cloudflare solver for sources that block plain requests (true or false)."
+		return "Use a browser solver for protected sites", "Use a headless browser / Cloudflare solver for sources that block plain requests."
 	case service.SettingBrowserSolverProvider:
-		return "Solver type", "Which solver to use for protected sites (e.g. flaresolverr)."
+		return "Solver type", "Which solver to use for protected sites."
 	case service.SettingBrowserSolverEndpoint:
 		return "Solver address", "The URL where your solver (e.g. FlareSolverr) is reachable."
 	case service.SettingBrowserSolverTimeoutSeconds:
 		return "Solver timeout (seconds)", "How long to wait for the solver to load a page before giving up."
 	case service.SettingBrowserDownloaderEnabled:
-		return "Use browser image downloader", "Enable the Selenium browser worker fallback for sources whose images only load in a browser (true or false)."
+		return "Use browser image downloader", "Fall back to the Selenium browser worker for sources whose images only load in a browser."
 	case service.SettingBrowserDownloaderEndpoint:
 		return "Browser downloader address", "The URL where the browser downloader worker is reachable."
 	case service.SettingBrowserDownloaderTimeoutSeconds:
@@ -426,7 +430,8 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/trackers/{provider}/login", u.trackerLogin)
 	mux.HandleFunc("POST /ui/trackers/{provider}/disconnect", u.trackerDisconnect)
 	mux.HandleFunc("POST /ui/trackers/{provider}/sync", u.trackerSyncNow)
-	mux.HandleFunc("GET /ui/trackers/{provider}/library", u.trackerLibrary)
+	mux.HandleFunc("GET /ui/trackers/{provider}/settings", u.trackerPrefs)
+	mux.HandleFunc("POST /ui/trackers/{provider}/settings", u.trackerPrefsSave)
 	mux.HandleFunc("GET /ui/trackers/suggestions", u.trackerSuggestions)
 	mux.HandleFunc("POST /ui/library/{id}/tracker-sync", u.trackerSyncTitle)
 	mux.HandleFunc("POST /ui/library/{id}/providers/progressive", u.titleProgressiveSync)
@@ -2903,6 +2908,16 @@ func (u *webUI) backupDownload(w http.ResponseWriter, r *http.Request) {
 func (u *webUI) settingsPage(w http.ResponseWriter, r *http.Request) {
 	view := u.settings(r.Context())
 	view.Trackers = u.trackerCards(r)
+	for _, g := range view.Groups {
+		for i, f := range g.Fields {
+			switch f.Key {
+			case service.SettingAniListClientID:
+				g.Fields[i].Desc += " Redirect URL: " + trackerRedirectURL(r, catalog.AniListProvider)
+			case service.SettingMALClientID:
+				g.Fields[i].Desc += " Redirect URL: " + trackerRedirectURL(r, catalog.MALProvider)
+			}
+		}
+	}
 	u.page(w, r, "settings", "Settings", view)
 }
 
@@ -3939,7 +3954,11 @@ func (u *webUI) settingsSave(w http.ResponseWriter, r *http.Request) {
 		if !appearance && !user.Can(auth.PermSettingsManage) {
 			continue
 		}
-		value := strings.TrimSpace(r.FormValue(key))
+		values := r.Form[key]
+		value := strings.TrimSpace(values[len(values)-1])
+		if multiSetting(key) {
+			value = strings.Join(slices.DeleteFunc(values, func(v string) bool { return v == "" }), ",")
+		}
 		if secretSetting(key) && value == redactedSecret {
 			continue
 		}
@@ -4008,7 +4027,23 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 		f := settingField{Key: key, Label: label, Desc: desc, Value: value}
 		switch {
 		case key == service.SettingUITheme:
-			f.Kind, f.Options = "select", service.UIThemes()
+			f.Kind = "select"
+			for _, t := range service.UIThemes() {
+				f.Options = append(f.Options, providerOption{t, t})
+			}
+		case key == service.SettingBrowserSolverProvider:
+			f.Kind, f.Options = "select", []providerOption{{browserfetch.ProviderFlareSolverr, "FlareSolverr"}}
+		case key == service.SettingProvidersDefault:
+			f.Kind, f.Options = "select", u.providerOptions()
+		case multiSetting(key):
+			f.Kind, f.Options = "multi", u.providerOptions()
+			for _, o := range f.Options {
+				if slices.Contains(strings.Split(value, ","), o.Name) {
+					f.Selected = append(f.Selected, o.Name)
+				}
+			}
+		case key == service.SettingBrowserSolverEnabled, key == service.SettingBrowserDownloaderEnabled, key == service.SettingRateLimitDisabled:
+			f.Kind = "bool"
 		case strings.HasPrefix(key, "ui.custom."):
 			f.Kind = "color"
 		case key == service.SettingAniListClientID, key == service.SettingMALClientID, secretSetting(key):
@@ -4277,6 +4312,9 @@ func (u *webUI) funcs() template.FuncMap {
 			return map[string]any{"Title": t, "CanManage": canManage, "Screen": screen}
 		},
 		"permDesc": func(p string) string { _, d := permMeta(p); return d },
+		"pref": func(key, label, desc string, on bool) map[string]any {
+			return map[string]any{"Key": key, "Label": label, "Desc": desc, "On": on}
+		},
 		"has": func(list []string, v string) bool {
 			for _, s := range list {
 				if s == v {

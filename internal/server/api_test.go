@@ -87,6 +87,50 @@ func TestSettingsPageRedactsAniListSecret(t *testing.T) {
 	}
 }
 
+func TestSettingsToggleSelectAndMultiSave(t *testing.T) {
+	ctx := context.Background()
+	svc, closeDB, err := service.OpenJobs(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	api := New(svc, func(context.Context) (service.RunSummary, error) { return service.RunSummary{}, nil },
+		func(context.Context, string) (service.SourceVerifyResult, error) {
+			return service.SourceVerifyResult{}, nil
+		})
+	save := func(form url.Values) {
+		req := httptest.NewRequest(http.MethodPut, "/ui/settings", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "alert-error") {
+			t.Fatalf("save %v: %d %s", form, rec.Code, rec.Body.String())
+		}
+	}
+	save(url.Values{
+		service.SettingRateLimitDisabled: {"false", "true"},
+		service.SettingProvidersDisabled: {"", "kitsu", "mal"},
+		service.SettingProvidersDefault:  {"mangaupdates"},
+	})
+	for key, want := range map[string]string{service.SettingRateLimitDisabled: "true", service.SettingProvidersDisabled: "kitsu,mal", service.SettingProvidersDefault: "mangaupdates"} {
+		if got := svc.Setting(ctx, key, ""); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	body := rec.Body.String()
+	for _, want := range []string{`class="toggle" id="set-ratelimit.disabled" name="ratelimit.disabled" value="true" checked`, `value="kitsu" checked`, `data-empty-label="None">2 selected</summary>`, `<option value="mangaupdates" selected>MangaUpdates</option>`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("settings page missing %s", want)
+		}
+	}
+	save(url.Values{service.SettingRateLimitDisabled: {"false"}, service.SettingProvidersDisabled: {""}})
+	if svc.Setting(ctx, service.SettingRateLimitDisabled, "false") != "false" || svc.Setting(ctx, service.SettingProvidersDisabled, "") != "" {
+		t.Fatal("unchecking did not clear the settings")
+	}
+}
+
 func TestAPIReaderProgress(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")

@@ -855,7 +855,7 @@
 
 {{define "settings"}}
 <div hx-get="/ui/account" hx-trigger="load" hx-swap="outerHTML"></div>
-{{if .Trackers}}{{template "trackerCards" .Trackers}}{{end}}
+{{if .Trackers.Cards}}{{template "trackerCards" .Trackers}}{{end}}
 <form class="grid gap-4" hx-put="/ui/settings" hx-target="#toast">
   {{range .Groups}}
   {{if eq .Title "Appearance"}}
@@ -867,9 +867,7 @@
         <label class="font-medium" for="set-{{.Key}}">{{.Label}}</label>
         {{if .Desc}}<div class="text-sm text-base-content/60 max-w-prose">{{.Desc}}</div>{{end}}
       </div>
-      <select class="select select-sm max-sm:w-full shrink-0" id="set-{{.Key}}" name="{{.Key}}">
-        {{$v := .Value}}{{range .Options}}<option value="{{.}}" {{if eq . $v}}selected{{end}}>{{.}}</option>{{end}}
-      </select>
+      {{template "settingInput" .}}
     </div>
     {{end}}{{end}}
     <details class="mt-2">
@@ -894,7 +892,7 @@
         <label class="font-medium" for="set-{{.Key}}">{{.Label}}</label>
         {{if .Desc}}<div class="text-sm text-base-content/60 max-w-prose">{{.Desc}}</div>{{end}}
       </div>
-      <input class="input input-sm max-sm:w-full shrink-0" id="set-{{.Key}}" name="{{.Key}}" value="{{.Value}}"{{if eq .Kind "secret"}} type="password" autocomplete="off"{{end}}>
+      {{template "settingInput" .}}
     </div>
     {{end}}
   </div>
@@ -904,6 +902,32 @@
     <button class="w-full btn btn-primary btn-sm">Save settings</button>
   </div>
 </form>
+{{end}}
+
+{{define "settingInput"}}
+<div class="w-56 shrink-0 max-sm:w-full">
+{{if eq .Kind "bool"}}
+<input type="hidden" name="{{.Key}}" value="false">
+<input type="checkbox" class="toggle" id="set-{{.Key}}" name="{{.Key}}" value="true" {{if eq .Value "true"}}checked{{end}}>
+{{else if eq .Kind "select"}}
+<select class="select select-sm w-full" id="set-{{.Key}}" name="{{.Key}}">
+  {{$v := .Value}}{{range .Options}}<option value="{{.Name}}" {{if eq .Name $v}}selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+{{else if eq .Kind "multi"}}
+<details class="dropdown w-full" data-keep-open>
+  {{$sel := .Selected}}{{$key := .Key}}
+  <summary class="select select-sm w-full flex cursor-pointer items-center" id="set-{{.Key}}" data-tag-count data-empty-label="None">{{with .Selected}}{{len .}} selected{{else}}None{{end}}</summary>
+  <div class="dropdown-content z-30 w-full rounded-lg border border-line bg-base-100 p-2 shadow-lg">
+    <input type="hidden" name="{{.Key}}" value="">
+    <div class="grid gap-y-1" data-tag-list>
+      {{range .Options}}<label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="{{$key}}" value="{{.Name}}" {{if has $sel .Name}}checked{{end}}><span>{{.Label}}</span></label>{{end}}
+    </div>
+  </div>
+</details>
+{{else}}
+<input class="input input-sm w-full" id="set-{{.Key}}" name="{{.Key}}" value="{{.Value}}"{{if eq .Kind "secret"}} type="password" autocomplete="off"{{end}}>
+{{end}}
+</div>
 {{end}}
 
 {{define "backups"}}
