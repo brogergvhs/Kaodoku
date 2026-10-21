@@ -19,18 +19,20 @@ var (
 	flagWantedRefreshInterval string
 )
 
-var wantedCmd = &cobra.Command{Use: "wanted", Short: "Manage AniList-backed wanted manga"}
+var wantedCmd = &cobra.Command{Use: "wanted", Short: "Manage catalog-backed wanted manga"}
+
+var flagWantedProvider string
 
 var wantedSearchCmd = &cobra.Command{
 	Use:   "search <query>",
-	Short: "Search AniList manga",
+	Short: "Search catalog manga",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runWantedSearch,
 }
 
 var wantedAddCmd = &cobra.Command{
-	Use:   "add <anilist_id>",
-	Short: "Add an AniList manga as wanted",
+	Use:   "add <provider_id>",
+	Short: "Add a catalog manga as wanted",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runWantedAdd,
 }
@@ -60,7 +62,8 @@ var wantedTrackCmd = &cobra.Command{
 
 func init() {
 	wantedCmd.PersistentFlags().StringVar(&flagWantedDB, "db", "", "path to Kaodoku SQLite database")
-	wantedSearchCmd.Flags().IntVar(&flagWantedLimit, "limit", 10, "maximum AniList results")
+	wantedCmd.PersistentFlags().StringVar(&flagWantedProvider, "provider", catalog.AniListProvider, "metadata backend: anilist, kitsu, mangaupdates")
+	wantedSearchCmd.Flags().IntVar(&flagWantedLimit, "limit", 10, "maximum results")
 	wantedTrackCmd.Flags().StringVar(&flagWantedOutput, "output", "", "output folder override")
 	wantedTrackCmd.Flags().BoolVar(&flagWantedUnmonitored, "unmonitored", false, "add title without automatic monitoring")
 	wantedTrackCmd.Flags().StringVar(&flagWantedRefreshInterval, "refresh-interval", "24h", "refresh interval label")
@@ -69,8 +72,12 @@ func init() {
 }
 
 func runWantedSearch(_ *cobra.Command, args []string) error {
-	return withWanted(func(ctx context.Context, svc *service.WantedService) error {
-		items, _, err := svc.SearchAniList(ctx, args[0], flagWantedLimit, catalog.SearchFilter{})
+	return withWanted(func(ctx context.Context, svc *service.CatalogService) error {
+		p, err := svc.Provider(flagWantedProvider)
+		if err != nil {
+			return err
+		}
+		items, _, err := svc.Search(ctx, p, args[0], flagWantedLimit, catalog.SearchFilter{})
 		if err != nil {
 			return err
 		}
@@ -82,22 +89,22 @@ func runWantedSearch(_ *cobra.Command, args []string) error {
 }
 
 func runWantedAdd(_ *cobra.Command, args []string) error {
-	id, err := strconv.Atoi(args[0])
-	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid AniList id %q", args[0])
-	}
-	return withWanted(func(ctx context.Context, svc *service.WantedService) error {
-		item, err := svc.AddAniListWanted(ctx, id, nil)
+	return withWanted(func(ctx context.Context, svc *service.CatalogService) error {
+		p, err := svc.Provider(flagWantedProvider)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Wanted %d: %s (AniList %s)\n", item.ID, wantedTitle(item), item.ProviderID)
+		item, err := svc.AddWanted(ctx, p, args[0], nil)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Wanted %d: %s (%s %s)\n", item.ID, wantedTitle(item), p.Label(), item.ProviderID)
 		return nil
 	})
 }
 
 func runWantedList(_ *cobra.Command, _ []string) error {
-	return withWanted(func(ctx context.Context, svc *service.WantedService) error {
+	return withWanted(func(ctx context.Context, svc *service.CatalogService) error {
 		items, err := svc.ListWanted(ctx)
 		if err != nil {
 			return err
@@ -118,7 +125,7 @@ func runWantedMatch(_ *cobra.Command, args []string) error {
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid catalog id %q", args[0])
 	}
-	return withWanted(func(ctx context.Context, svc *service.WantedService) error {
+	return withWanted(func(ctx context.Context, svc *service.CatalogService) error {
 		cfg, logSvc, err := runtimeConfig()
 		if err != nil {
 			return err
@@ -144,7 +151,7 @@ func runWantedMatches(_ *cobra.Command, args []string) error {
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid catalog id %q", args[0])
 	}
-	return withWanted(func(ctx context.Context, svc *service.WantedService) error {
+	return withWanted(func(ctx context.Context, svc *service.CatalogService) error {
 		matches, err := svc.ListMatches(ctx, id)
 		if err != nil {
 			return err
@@ -165,7 +172,7 @@ func runWantedTrack(_ *cobra.Command, args []string) error {
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid match id %q", args[0])
 	}
-	return withWanted(func(ctx context.Context, svc *service.WantedService) error {
+	return withWanted(func(ctx context.Context, svc *service.CatalogService) error {
 		title, err := svc.TrackMatch(ctx, id, flagWantedOutput, !flagWantedUnmonitored, flagWantedRefreshInterval)
 		if err != nil {
 			return err
@@ -175,9 +182,9 @@ func runWantedTrack(_ *cobra.Command, args []string) error {
 	})
 }
 
-func withWanted(fn func(context.Context, *service.WantedService) error) error {
+func withWanted(fn func(context.Context, *service.CatalogService) error) error {
 	ctx := context.Background()
-	svc, closeDB, err := service.OpenWanted(ctx, flagWantedDB)
+	svc, closeDB, err := service.OpenCatalog(ctx, flagWantedDB)
 	if err != nil {
 		return err
 	}
@@ -187,7 +194,7 @@ func withWanted(fn func(context.Context, *service.WantedService) error) error {
 
 func printWantedManga(item catalog.Manga) {
 	fmt.Printf("%3d  %s\n", item.ID, wantedTitle(item))
-	fmt.Printf("     anilist: %s", item.ProviderID)
+	fmt.Printf("     %s: %s", item.Provider, item.ProviderID)
 	if item.Chapters != nil {
 		fmt.Printf(" chapters=%d", *item.Chapters)
 	}

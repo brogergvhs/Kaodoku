@@ -159,7 +159,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		downloadEvery = serveDuration(svc, ctx, service.SettingServeDownloadEvery)
 		sourceVerifyEvery = serveDuration(svc, ctx, service.SettingServeSourceVerifyEvery)
 		backupEvery = serveDuration(svc, ctx, service.SettingServeBackupEvery)
-		anilistEvery = serveDuration(svc, ctx, service.SettingServeAniListSyncEvery)
+		anilistEvery = serveDuration(svc, ctx, service.SettingServeTrackerSyncEvery)
 		catalogEvery = serveDuration(svc, ctx, service.SettingServeCatalogEvery)
 		runEvery = serveDuration(svc, ctx, service.SettingServeRunEvery)
 		if runEvery <= 0 {
@@ -182,7 +182,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			nextBackup = nextAfter(svc, ctx, jobs.TypeBackupUserData, backupEvery)
 		}
 		if oldAniList != anilistEvery {
-			nextAniList = nextAfter(svc, ctx, jobs.TypeSyncAniList, anilistEvery)
+			nextAniList = nextAfter(svc, ctx, jobs.TypeSyncTrackers, anilistEvery)
 		}
 		if oldCatalog != catalogEvery {
 			nextCatalog = nextAfter(svc, ctx, jobs.TypeCatalogRefresh, catalogEvery)
@@ -239,7 +239,7 @@ func serveTick(ctx context.Context, svc *service.JobService, refresh, scan, down
 		}
 	}
 	if anilist {
-		if _, err := svc.Enqueue(ctx, jobs.TypeSyncAniList, 0, now); err != nil {
+		if _, err := svc.Enqueue(ctx, jobs.TypeSyncTrackers, 0, now); err != nil {
 			return err
 		}
 	}

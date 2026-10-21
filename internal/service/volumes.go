@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/config"
 	"github.com/brogergvhs/kaodoku/internal/library"
 )
@@ -20,16 +21,12 @@ const (
 
 // ImportVolumesFolder tracks a folder of volume .cbz files as a new title.
 // Volumes are disk-only, so no source search is started for them.
-func (s *WantedService) ImportVolumesFolder(ctx context.Context, root, folder string, anilistID int) (library.Title, error) {
+func (s *CatalogService) ImportVolumesFolder(ctx context.Context, root, folder string, p catalog.Provider, id string) (library.Title, error) {
 	dir, err := importDir(root, folder)
 	if err != nil {
 		return library.Title{}, err
 	}
-	manga, err := s.anilist.Get(ctx, anilistID)
-	if err != nil {
-		return library.Title{}, err
-	}
-	manga, err = s.catalog.UpsertManga(ctx, manga)
+	manga, err := s.fetch(ctx, p, id)
 	if err != nil {
 		return library.Title{}, err
 	}

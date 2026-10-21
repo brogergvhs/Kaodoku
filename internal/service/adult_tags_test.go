@@ -21,7 +21,7 @@ func TestAdultTagNamesFailsClosed(t *testing.T) {
 
 	// Populated vocabulary: adult names come from the store plus the seed;
 	// non-adult stays visible.
-	if err := svc.want.catalog.ReplaceContentTags(ctx, []string{"Action"}, []catalog.ContentTag{
+	if err := svc.catalog.repo.ReplaceContentTags(ctx, []string{"Action"}, []catalog.ContentTag{
 		{Name: "Guro", Kind: "tag", IsAdult: true},
 		{Name: "Kids", Kind: "tag"},
 	}); err != nil {
