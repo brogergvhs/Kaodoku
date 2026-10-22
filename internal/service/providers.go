@@ -286,15 +286,20 @@ func (s *JobService) resolveID(ctx context.Context, m catalog.Manga, p catalog.P
 			}
 		}
 	}
-	cands, _, err := p.Search(ctx, firstTitle(m), 5, catalog.SearchFilter{})
-	if err != nil {
-		return ""
-	}
 	var best catalog.Manga
 	score := 0.0
-	for _, c := range cands {
-		if sc := catalog.MatchScore(m, c); sc > score {
-			best, score = c, sc
+	for _, q := range matchQueries(m) {
+		cands, _, err := p.Search(ctx, q, 5, catalog.SearchFilter{})
+		if err != nil {
+			return ""
+		}
+		for _, c := range cands {
+			if sc := catalog.MatchScore(m, c); sc > score {
+				best, score = c, sc
+			}
+		}
+		if score >= autoConfirm {
+			break
 		}
 	}
 	e := catalog.ExternalID{Provider: name, Method: "miss"}
@@ -312,13 +317,15 @@ func crossLinks(provider string) bool {
 	return provider == catalog.AniListProvider || provider == catalog.KitsuProvider
 }
 
-func firstTitle(m catalog.Manga) string {
-	for _, t := range catalog.Titles(m) {
-		if strings.TrimSpace(t) != "" {
-			return t
+// matchQueries lists the distinct romaji, English and native titles, since trackers index different ones.
+func matchQueries(m catalog.Manga) []string {
+	var out []string
+	for _, t := range []string{m.TitleRomaji, m.TitleEnglish, m.TitleNative} {
+		if t = strings.TrimSpace(t); t != "" && !slices.Contains(out, t) {
+			out = append(out, t)
 		}
 	}
-	return ""
+	return out
 }
 
 func (s *JobService) takenByOther(ctx context.Context, catalogID int64, provider, id string) bool {

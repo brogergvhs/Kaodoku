@@ -83,26 +83,28 @@ func (s *JobService) SetTrackerPrefs(ctx context.Context, provider string, p Tra
 
 type UnlinkedTitle struct {
 	library.Title
-	Suggested bool
+	Suggested        bool
+	Provider, Format string
+	Year             int
 }
 
 // UnlinkedTitles lists library titles with no confirmed link to provider, skipping ones marked as not on it.
 func (s *JobService) UnlinkedTitles(ctx context.Context, provider string) ([]UnlinkedTitle, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.id, COALESCE(e.provider_id, '') != '' FROM titles t
+		SELECT t.id, COALESCE(e.provider_id, '') != '', cm.provider, cm.format, cm.year FROM titles t
 		JOIN catalog_manga cm ON cm.id = t.catalog_manga_id
 		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = cm.id AND e.provider = ?
 		WHERE cm.provider != ? AND COALESCE(e.confirmed, 0) = 0 AND COALESCE(e.method, '') != 'user'`, provider, provider)
 	if err != nil {
 		return nil, err
 	}
-	suggested := map[int64]bool{}
+	found := map[int64]UnlinkedTitle{}
 	var ids []int64
 	for rows.Next() {
 		var id int64
-		var sug bool
-		if rows.Scan(&id, &sug) == nil {
-			ids, suggested[id] = append(ids, id), sug
+		var u UnlinkedTitle
+		if rows.Scan(&id, &u.Suggested, &u.Provider, &u.Format, &u.Year) == nil {
+			ids, found[id] = append(ids, id), u
 		}
 	}
 	rows.Close()
@@ -112,7 +114,9 @@ func (s *JobService) UnlinkedTitles(ctx context.Context, provider string) ([]Unl
 	}
 	out := make([]UnlinkedTitle, 0, len(titles))
 	for _, t := range titles {
-		out = append(out, UnlinkedTitle{Title: t, Suggested: suggested[t.ID]})
+		u := found[t.ID]
+		u.Title = t
+		out = append(out, u)
 	}
 	slices.SortFunc(out, func(a, b UnlinkedTitle) int {
 		return strings.Compare(strings.ToLower(a.DisplayTitle), strings.ToLower(b.DisplayTitle))

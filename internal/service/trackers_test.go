@@ -20,6 +20,7 @@ type fakeProvider struct {
 	name    string
 	works   map[string]catalog.Manga
 	search  []catalog.Manga
+	byQuery map[string][]catalog.Manga
 	listErr error
 	dates   bool
 	mu      sync.Mutex
@@ -42,7 +43,10 @@ func (f *fakeProvider) Get(_ context.Context, id string) (catalog.Manga, []catal
 	}
 	return m, nil, nil
 }
-func (f *fakeProvider) Search(context.Context, string, int, catalog.SearchFilter) ([]catalog.Manga, bool, error) {
+func (f *fakeProvider) Search(_ context.Context, q string, _ int, _ catalog.SearchFilter) ([]catalog.Manga, bool, error) {
+	if f.byQuery != nil {
+		return f.byQuery[q], false, nil
+	}
 	return f.search, false, nil
 }
 func (f *fakeProvider) Trending(context.Context, int) ([]catalog.Manga, error) { return f.search, nil }
@@ -254,6 +258,22 @@ func TestUnconfirmedMatchIsNeverPushed(t *testing.T) {
 	mu.search[0].Year = 1998
 	if id := svc.resolveID(ctx, stored, mu); id != "55" {
 		t.Fatalf("exact title+year+format resolved to %q, want 55", id)
+	}
+}
+
+func TestTitleMatchSearchesEnglishWhenRomajiMisses(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	mu := newFake(catalog.MangaUpdatesProvider)
+	svc.catalog.providers[catalog.MangaUpdatesProvider] = mu
+	svc.catalog.providers[catalog.AniListProvider] = newFake(catalog.AniListProvider)
+	work := catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "115240", TitleRomaji: "Kaljibui Ai", TitleEnglish: "Child of the Sheath", TitleNative: "칼집의 아이", Year: 2020, Format: "MANGA"}
+	_, stored := seedTitle(t, svc, ctx, work, 1, 0)
+	mu.byQuery = map[string][]catalog.Manga{
+		"Kaljibui Ai":         {{Provider: catalog.MangaUpdatesProvider, ProviderID: "1", TitleRomaji: "Ai Ai House", Year: 2001, Format: "MANGA"}},
+		"Child of the Sheath": {{Provider: catalog.MangaUpdatesProvider, ProviderID: "74854950521", TitleRomaji: "Child of the Sheath", Year: 2020, Format: "MANGA"}},
+	}
+	if id := svc.resolveID(ctx, stored, mu); id != "74854950521" {
+		t.Fatalf("resolved %q, want the English title match", id)
 	}
 }
 
@@ -470,6 +490,9 @@ func TestTrackerPrefsDriveLinkingSyncAndRelated(t *testing.T) {
 	var names []string
 	for _, ut := range titles {
 		names = append(names, fmt.Sprintf("%s:%v", ut.DisplayTitle, ut.Suggested))
+		if ut.Provider == "" || ut.Provider == catalog.KitsuProvider {
+			t.Fatalf("unlinked title without its metadata backend: %+v", ut)
+		}
 	}
 	slices.Sort(names)
 	if strings.Join(names, ",") != "t:false,t:true" {

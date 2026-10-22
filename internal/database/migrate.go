@@ -523,8 +523,6 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
-	// One-shot backfill when the manual column is first added; rerunning would
-	// clobber genuinely-read chapters whose pages share one timestamp.
 	if !hadManual {
 		if _, err = tx.ExecContext(ctx, `
 			UPDATE chapter_read_progress SET manual = 1
@@ -535,7 +533,6 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("backfill read/marked flag: %w", err)
 		}
 	}
-	// one-shot: clear kotatsu import-snapshot domains, stored domains now mean user overrides
 	if !hadFetchError {
 		if _, err = tx.ExecContext(ctx, `UPDATE sources SET domains_json = '[]' WHERE scraper LIKE 'kotatsu:%'`); err != nil {
 			return fmt.Errorf("clear kotatsu snapshot domains: %w", err)
@@ -547,6 +544,15 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if err = migrateAniListAccounts(ctx, tx); err != nil {
 		return fmt.Errorf("migrate anilist accounts: %w", err)
+	}
+	var version int
+	if err = tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version < 1 {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM catalog_external_ids WHERE method = 'miss'; PRAGMA user_version = 1`); err != nil {
+			return fmt.Errorf("retry title matches: %w", err)
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)

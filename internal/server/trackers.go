@@ -111,34 +111,39 @@ func (u *webUI) trackerSyncNow(w http.ResponseWriter, r *http.Request) {
 	u.frag(w, "toast", toastView{OK: true, Msg: "Sync queued ✓"})
 }
 
-type trackerPrefsView struct {
-	service.TrackerAccount
-	Unlinked []service.UnlinkedTitle
-}
-
 func (u *webUI) trackerPrefs(w http.ResponseWriter, r *http.Request) {
 	provider := pathProvider(r)
-	var view trackerPrefsView
 	for _, a := range u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context())) {
 		if a.Provider == provider {
-			view.TrackerAccount = a
+			u.frag(w, "trackerPrefs", a)
+			return
 		}
 	}
-	if view.Provider == "" {
-		u.fail(w, fmt.Errorf("no %s account connected", u.svc.ProviderLabel(provider)))
+	u.fail(w, fmt.Errorf("no %s account connected", u.svc.ProviderLabel(provider)))
+}
+
+type unlinkedView struct {
+	Provider, Label string
+	Titles          []service.UnlinkedTitle
+}
+
+func (u *webUI) unlinked(r *http.Request, provider string) ([]service.UnlinkedTitle, error) {
+	titles, err := u.svc.UnlinkedTitles(r.Context(), provider)
+	return slices.DeleteFunc(titles, func(t service.UnlinkedTitle) bool { return !contentAllowed(r.Context(), t.IsAdult, t.ContentTags) }), err
+}
+
+func (u *webUI) trackerUnlinked(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).Can(auth.PermLibraryManage) {
+		writeError(w, http.StatusForbidden, "linking titles needs the library manage permission")
 		return
 	}
-	titles, err := u.svc.UnlinkedTitles(r.Context(), provider)
+	provider := pathProvider(r)
+	titles, err := u.unlinked(r, provider)
 	if err != nil {
 		u.fail(w, err)
 		return
 	}
-	for _, t := range titles {
-		if contentAllowed(r.Context(), t.IsAdult, t.ContentTags) {
-			view.Unlinked = append(view.Unlinked, t)
-		}
-	}
-	u.frag(w, "trackerPrefs", view)
+	u.frag(w, "trackerUnlinked", unlinkedView{Provider: provider, Label: u.svc.ProviderLabel(provider), Titles: titles})
 }
 
 func (u *webUI) trackerPrefsSave(w http.ResponseWriter, r *http.Request) {
@@ -202,11 +207,13 @@ type trackerCardView struct {
 	Login    string
 	Outage   string
 	Account  *service.TrackerAccount
+	Unlinked int
 }
 
 type trackersView struct {
 	Cards      []trackerCardView
 	CanConnect bool
+	CanManage  bool
 }
 
 func (u *webUI) trackerCards(r *http.Request) trackersView {
@@ -214,11 +221,15 @@ func (u *webUI) trackerCards(r *http.Request) trackersView {
 	for _, a := range u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context())) {
 		accounts[a.Provider] = a
 	}
-	var out trackersView
+	out := trackersView{CanManage: userFrom(r.Context()).Can(auth.PermLibraryManage)}
 	for _, p := range u.svc.Trackers(r.Context()) {
 		card := trackerCardView{Provider: p.Name(), Label: p.Label(), Login: u.svc.TrackerLogin(r.Context(), p.Name()), Outage: u.svc.ProviderOutage(p.Name())}
 		if a, ok := accounts[p.Name()]; ok {
 			card.Account = &a
+			if out.CanManage {
+				titles, _ := u.unlinked(r, p.Name())
+				card.Unlinked = len(titles)
+			}
 		}
 		out.Cards = append(out.Cards, card)
 		out.CanConnect = out.CanConnect || card.Account == nil && card.Login != ""
@@ -240,6 +251,7 @@ type providerPickerView struct {
 	Current  string
 	Results  []catalog.Manga
 	Error    string
+	Unlinked bool
 }
 
 func (u *webUI) titleProviders(w http.ResponseWriter, r *http.Request) {
@@ -268,7 +280,7 @@ func (u *webUI) titleProviderSearch(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	view := providerPickerView{TitleID: id, Provider: r.FormValue("provider")}
+	view := providerPickerView{TitleID: id, Provider: r.FormValue("provider"), Unlinked: r.FormValue("unlinked") != ""}
 	query := cmp.Or(strings.TrimSpace(r.FormValue("q")), title.DisplayTitle)
 	items, _, err := u.svc.SearchManga(r.Context(), view.Provider, query, 8, catalog.SearchFilter{})
 	if err != nil {
@@ -305,6 +317,11 @@ func (u *webUI) titleProviderSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := u.svc.LinkExternalID(r.Context(), id, provider, pid); err != nil {
 		u.fail(w, err)
+		return
+	}
+	if r.FormValue("unlinked") != "" {
+		titles, _ := u.unlinked(r, provider)
+		u.frag(w, "unlinkedLeft", unlinkedView{Provider: provider, Label: u.svc.ProviderLabel(provider), Titles: titles})
 		return
 	}
 	u.titleProviders(w, r)

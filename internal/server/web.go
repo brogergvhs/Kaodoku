@@ -444,6 +444,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/trackers/{provider}/disconnect", u.trackerDisconnect)
 	mux.HandleFunc("POST /ui/trackers/{provider}/sync", u.trackerSyncNow)
 	mux.HandleFunc("GET /ui/trackers/{provider}/settings", u.trackerPrefs)
+	mux.HandleFunc("GET /ui/trackers/{provider}/unlinked", u.trackerUnlinked)
 	mux.HandleFunc("POST /ui/trackers/{provider}/settings", u.trackerPrefsSave)
 	mux.HandleFunc("GET /ui/trackers/suggestions", u.trackerSuggestions)
 	mux.HandleFunc("POST /ui/library/{id}/tracker-sync", u.trackerSyncTitle)

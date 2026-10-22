@@ -1091,10 +1091,20 @@ document.body.addEventListener("htmx:afterRequest", function (e) {
   appendNext();
 })();
 
+function showLoading(el) {
+  el.innerHTML = '<p class="flex items-center gap-2 py-2 text-sm text-base-content/60"><span class="loading loading-spinner loading-xs"></span>Loading…</p>';
+}
+
 function openPicker(key) {
-  document.getElementById("picker-results-" + key).innerHTML = '<p class="py-2 text-sm text-base-content/60">Loading…</p>';
+  showLoading(document.getElementById("picker-results-" + key));
   var d = document.getElementById("picker-" + key);
   if (!d.open) d.showModal();
+}
+
+function openLoading(id) {
+  var d = document.getElementById(id);
+  showLoading(d.querySelector("[data-loading]"));
+  d.showModal();
 }
 
 function trackerConnectPick(select) {

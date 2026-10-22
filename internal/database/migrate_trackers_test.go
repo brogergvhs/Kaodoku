@@ -52,3 +52,54 @@ func TestMigrateMovesAniListAccounts(t *testing.T) {
 		t.Fatalf("read title did not keep AniList sync (%d, %v)", n, err)
 	}
 }
+
+func TestMigrateRetriesTitleMatchMissesOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	seed := func() {
+		for _, q := range []string{
+			`INSERT OR IGNORE INTO catalog_manga (id, provider, provider_id) VALUES (1, 'anilist', '115240')`,
+			`INSERT OR REPLACE INTO catalog_external_ids (catalog_manga_id, provider, method) VALUES (1, 'mangaupdates', 'miss')`,
+			`INSERT OR REPLACE INTO catalog_external_ids (catalog_manga_id, provider, provider_id, method) VALUES (1, 'kitsu', '9', 'title_match')`,
+		} {
+			if _, err := db.ExecContext(ctx, q); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+	}
+	methods := func() (out []string) {
+		rows, _ := db.QueryContext(ctx, `SELECT method FROM catalog_external_ids ORDER BY provider`)
+		defer rows.Close()
+		for rows.Next() {
+			var m string
+			_ = rows.Scan(&m)
+			out = append(out, m)
+		}
+		return out
+	}
+	seed()
+	if _, err := db.ExecContext(ctx, `PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if got := methods(); len(got) != 1 || got[0] != "title_match" {
+		t.Fatalf("after upgrade: %v, want only the suggestion kept", got)
+	}
+	seed()
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if got := methods(); len(got) != 2 {
+		t.Fatalf("misses cleared again on a later start: %v", got)
+	}
+}

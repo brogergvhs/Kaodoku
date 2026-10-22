@@ -58,25 +58,46 @@ func TestTrackerTemplatesRender(t *testing.T) {
 	if strings.Contains(downPanel, "Relink") || strings.Contains(downPanel, "Connect MyAnimeList") {
 		t.Fatalf("unavailable tracker still offers actions:\n%s", downPanel)
 	}
-	prefs := render("trackerPrefs", trackerPrefsView{
-		TrackerAccount: service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", TrackerPrefs: service.TrackerPrefs{AutoLink: true, Recommendations: true}},
-		Unlinked:       []service.UnlinkedTitle{{Title: library.Title{ID: 7, DisplayTitle: "Vagabond"}, Suggested: true}},
-	})
-	expect(prefs, `id="tp-auto_link" name="auto_link" value="true" checked`, `id="tp-auto_progressive" name="auto_progressive" value="true" >`, "/library/7", "Vagabond", "suggested match", "data-filter-row")
+	prefs := render("trackerPrefs", service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", TrackerPrefs: service.TrackerPrefs{AutoLink: true, Recommendations: true}})
+	expect(prefs, `id="tp-auto_link" name="auto_link" value="true" checked`, `id="tp-auto_progressive" name="auto_progressive" value="true" >`)
+
+	manage := render("trackerCards", trackersView{CanManage: true, Cards: []trackerCardView{
+		{Provider: "mal", Label: "MyAnimeList", Login: "oauth", Unlinked: 4, Account: &service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", Name: "me"}},
+		{Provider: "kitsu", Label: "Kitsu", Login: "password", Unlinked: 2, Outage: "down", Account: &service.TrackerAccount{Provider: "kitsu", Label: "Kitsu", Name: "me"}},
+		{Provider: "anilist", Label: "AniList", Login: "oauth", Account: &service.TrackerAccount{Provider: "anilist", Label: "AniList", Name: "me"}},
+	}})
+	expect(manage, `hx-get="/ui/trackers/mal/unlinked"`, `data-unlinked-count="mal">4</span>`, `id="tracker_unlinked_modal"`)
+	if strings.Contains(manage, "/ui/trackers/kitsu/unlinked") || strings.Contains(manage, "/ui/trackers/anilist/unlinked") || strings.Contains(cards, "/unlinked") {
+		t.Fatalf("unlinked titles offered for an unavailable tracker or without the manage permission:\n%s", manage)
+	}
+	unlinked := render("trackerUnlinked", unlinkedView{Provider: "mal", Label: "MyAnimeList", Titles: []service.UnlinkedTitle{{Title: library.Title{ID: 7, DisplayTitle: "Vagabond", CoverImage: "https://c/v.jpg", AverageScore: 91}, Suggested: true, Provider: "anilist", Format: "MANGA", Year: 1998}}})
+	expect(unlinked, "Vagabond", "suggested match", `src="https://c/v.jpg"`, "anilist · MANGA · 1998 · ★ 91%", `hx-post="/ui/library/7/providers/search"`, `value="Vagabond"`, `name="unlinked" value="1"`, "toggle once from:closest details", "grid-cols-1")
+	expect(render("trackerUnlinked", unlinkedView{Provider: "mal", Label: "MyAnimeList"}), "Every title is linked or marked as not on MyAnimeList.")
+	expect(render("unlinkedLeft", unlinkedView{Provider: "mal"}), `hx-swap-oob="innerHTML:[data-unlinked-count=mal]">0</span>`, `hx-swap-oob="delete:[data-unlinked-item=mal]"`)
+	if left := render("unlinkedLeft", unlinkedView{Provider: "mal", Titles: []service.UnlinkedTitle{{}}}); strings.Contains(left, "delete:") {
+		t.Fatalf("menu item removed with titles still unlinked:\n%s", left)
+	}
+	rowPicker := render("providerPicker", providerPickerView{TitleID: 7, Provider: "mal", Unlinked: true, Results: []catalog.Manga{{Provider: "mal", ProviderID: "2", TitleRomaji: "Vagabond"}}})
+	expect(rowPicker, `"provider":"mal","provider_id":"2","unlinked":"1"`, `"provider":"mal","provider_id":"","unlinked":"1"`, `hx-target="closest [data-unlinked]"`, "None of these, not on mal")
 
 	panel := render("providerPanel", providerPanelView{TitleID: 3, CanManage: true, Links: []service.ProviderLink{
 		{Provider: "anilist", Label: "AniList", ID: "1", Primary: true, Confirmed: true, Connected: true, Syncing: true, URL: "https://anilist.co/manga/1"},
 		{Provider: "mangaupdates", Label: "MangaUpdates", ID: "55", Method: "title_match"},
 		{Provider: "kitsu", Label: "Kitsu", Method: "user"},
 		{Provider: "mal", Label: "MyAnimeList", ID: "2", Confirmed: true, Method: "cross_link", Cover: "https://c/2.jpg"},
+		{Provider: "other", Label: "Other"},
 	}})
-	expect(panel, `data-tip="Metadata source"`, `data-tip="Progressive sync"`, "Stop progressive sync", `data-tip="Suggested match"`, "Confirm match", `data-tip="Not linked"`, `data-tip="Linked"`, `"mode":"primary"`, "Use for metadata", "Relink", "Unlink",
+	expect(panel, `data-tip="Metadata source"`, `data-tip="Progressive sync"`, "Stop progressive sync", `data-tip="Suggested match"`, "Confirm match", `data-tip="Not linked"`, `data-tip="Linked"`, `data-tip="Not on Kitsu"`, `"provider":"other","provider_id":""`, "Not on Other", `"provider":"mangaupdates","provider_id":""`, "Not on MangaUpdates", "None of these, not on Other", `"mode":"primary"`, "Use for metadata", "Relink", "Unlink",
 		`"provider":"mal","provider_id":"2","mode":"primary"`, `"provider":"mal","provider_id":""`, "Connect MyAnimeList", "https://c/2.jpg", "openPicker('3-mal')", `id="picker-3-kitsu"`, `hx-include="#picker-form-3-mal"`, "Relink MyAnimeList")
+
+	if strings.Contains(panel, "Not on Kitsu</button>") || strings.Contains(panel, `"provider":"kitsu","provider_id":""`) {
+		t.Fatalf("title already marked as not on Kitsu still offers the mark:\n%s", panel)
+	}
 
 	picker := render("providerPicker", providerPickerView{TitleID: 3, Provider: "mal", Current: "9",
 		Results: []catalog.Manga{{Provider: "mal", ProviderID: "9", TitleRomaji: "Berserk 2"}, {Provider: "mal", ProviderID: "2", TitleRomaji: "Berserk", Format: "MANGA"}}})
 	expect(picker, "/ui/library/3/providers/set", `"provider_id":"2"`, "https://myanimelist.net/manga/2")
-	if strings.Contains(picker, `"provider_id":"9"`) || strings.Contains(picker, "<select") {
+	if strings.Contains(picker, `"provider_id":"9"`) || strings.Contains(picker, "<select") || strings.Contains(picker, "unlinked") {
 		t.Fatalf("picker should not offer the linked entry or a provider select:\n%s", picker)
 	}
 
