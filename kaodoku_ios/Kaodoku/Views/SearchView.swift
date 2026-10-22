@@ -256,17 +256,22 @@ struct MangaDetailSheet: View {
   }
 
   private func add() {
-    guard let api = app.api, let pid = Int64(manga.providerId) else { return }
+    guard let api = app.api else { return }
     busy = true
     Task {
       do {
-        let title: Title = try await api.post("/api/v1/library/add", body: ["provider_id": pid])
+        let title: Title = try await api.post("/api/v1/library/add", body: catalogRef)
         manga.titleId = title.id
         onUpdate(manga)
         openInLibrary(title.id)
       } catch { self.error = error.localizedDescription }
       busy = false
     }
+  }
+
+  /// catalogRef names the backend the result came from, so the server never resolves the id on another one.
+  private var catalogRef: [String: String] {
+    ["provider": manga.provider ?? "", "provider_id": manga.providerId]
   }
 
   private func openInLibrary(_ id: Int64) {
@@ -280,8 +285,8 @@ struct MangaDetailSheet: View {
     busy = true
     Task {
       do {
-        if manga.catalogId == 0, let pid = Int64(manga.providerId) {
-          let cached: Manga = try await api.post("/api/v1/wanted", body: ["anilist_id": pid])
+        if manga.catalogId == 0 {
+          let cached: Manga = try await api.post("/api/v1/wanted", body: catalogRef)
           manga.catalogId = cached.catalogId
         }
         let found: MatchList = try await api.post("/api/v1/wanted/matches", body: ["catalog_id": manga.catalogId])

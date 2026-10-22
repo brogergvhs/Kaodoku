@@ -139,8 +139,19 @@ struct TitleReadProgress: Decodable {
   var nextPage: Int
 }
 
-struct AniListStatus: Decodable {
-  var connected: Bool
+struct TrackerList: Decodable {
+  struct Tracker: Decodable, Identifiable {
+    var provider: String
+    var label: String
+    var connected: Bool
+    var name: String?
+    var unavailable: String?
+    var id: String {
+      provider
+    }
+  }
+
+  var items: [Tracker]
 }
 
 struct TitleActivity: Decodable {
@@ -226,6 +237,7 @@ struct UserSettings: Codable {
 
 struct Manga: Decodable, Identifiable, Hashable {
   var catalogId: Int64
+  var provider: String?
   var providerId: String
   var titleRomaji: String
   var titleEnglish: String
@@ -239,9 +251,9 @@ struct Manga: Decodable, Identifiable, Hashable {
   var titleId: Int64?
 
   /// Browse results aren't DB-cached (catalog id 0), so identity is the
-  /// stable AniList provider id.
+  /// backend plus its stable id.
   var id: String {
-    providerId
+    "\(provider ?? ""):\(providerId)"
   }
 
   var name: String {
@@ -250,7 +262,7 @@ struct Manga: Decodable, Identifiable, Hashable {
 
   enum CodingKeys: String, CodingKey {
     case catalogId = "id"
-    case providerId, titleRomaji, titleEnglish, description, coverImage
+    case provider, providerId, titleRomaji, titleEnglish, description, coverImage
     case status, format, chapters, averageScore, isAdult, titleId
   }
 

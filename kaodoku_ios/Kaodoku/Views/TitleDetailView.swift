@@ -8,8 +8,8 @@ struct TitleDetailView: View {
   @State private var readerChapter: ChapterProgress?
   @State private var note: String?
   @State private var downloading = false
-  @State private var anilistConnected = false
-  @State private var checkedAniList = false
+  @State private var trackersConnected = false
+  @State private var checkedTrackers = false
   @State private var showRange = false
   @State private var showRemoveRange = false
   @State private var showSources = false
@@ -173,8 +173,8 @@ struct TitleDetailView: View {
     }
     .sheet(isPresented: $showRemove) {
       if let p = progress {
-        RemoveTitleSheet(name: p.title.displayTitle, anilistConnected: anilistConnected) { files, anilist in
-          removeTitle(deleteFiles: files, deleteAniList: anilist)
+        RemoveTitleSheet(name: p.title.displayTitle, trackersConnected: trackersConnected) { files, remote in
+          removeTitle(deleteFiles: files, deleteRemote: remote)
         }
       }
     }
@@ -319,9 +319,9 @@ struct TitleDetailView: View {
           enqueue("scan_downloads", done: "Scan queued")
         }
         Button("Sources…", systemImage: "link") { showSources = true }
-        if anilistConnected {
-          Button("Sync AniList", systemImage: "arrow.triangle.2.circlepath") {
-            post("/api/v1/anilist/sync", body: ["title_id": titleID], done: "AniList synced")
+        if trackersConnected {
+          Button("Sync trackers", systemImage: "arrow.triangle.2.circlepath") {
+            post("/api/v1/anilist/sync", body: ["title_id": titleID], done: "Trackers synced")
           }
         }
         if p.title.linked {
@@ -411,10 +411,10 @@ struct TitleDetailView: View {
     if let p = progress {
       app.store.syncRead(p.chapters, volumes: volumes)
     }
-    if canManage, !checkedAniList {
-      checkedAniList = true
-      if let status: AniListStatus = try? await api.get("/api/v1/anilist") {
-        anilistConnected = status.connected
+    if canManage, !checkedTrackers {
+      checkedTrackers = true
+      if let list: TrackerList = try? await api.get("/api/v1/trackers") {
+        trackersConnected = list.items.contains(where: \.connected)
       }
     }
   }
@@ -428,12 +428,12 @@ struct TitleDetailView: View {
     }
   }
 
-  private func removeTitle(deleteFiles: Bool, deleteAniList: Bool) {
+  private func removeTitle(deleteFiles: Bool, deleteRemote: Bool) {
     guard let api = app.api else { return }
     Task {
       do {
         _ = try await api.data("DELETE",
-                               "/api/v1/library/\(titleID)?delete_files=\(deleteFiles ? 1 : 0)&delete_anilist=\(deleteAniList ? 1 : 0)")
+                               "/api/v1/library/\(titleID)?delete_files=\(deleteFiles ? 1 : 0)&delete_anilist=\(deleteRemote ? 1 : 0)")
         app.tab = 0
         app.libraryNav = .root
       } catch { note = error.localizedDescription }
@@ -616,10 +616,10 @@ struct CollectionsSheet: View {
 struct RemoveTitleSheet: View {
   @Environment(\.dismiss) private var dismiss
   let name: String
-  let anilistConnected: Bool
+  let trackersConnected: Bool
   var onRemove: (Bool, Bool) -> Void
   @State private var deleteFiles = false
-  @State private var deleteAniList = false
+  @State private var deleteRemote = false
 
   var body: some View {
     NavigationStack {
@@ -632,11 +632,11 @@ struct RemoveTitleSheet: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
           }
-          if anilistConnected {
-            Toggle(isOn: $deleteAniList) {
+          if trackersConnected {
+            Toggle(isOn: $deleteRemote) {
               VStack(alignment: .leading, spacing: 2) {
-                Text("Also delete from AniList")
-                Text("Removes this manga from your AniList list entirely. Left off, it is set to Dropped instead.")
+                Text("Also delete from your trackers")
+                Text("Removes this manga from the trackers it has progressive sync on. Left off, it is set to Dropped there instead.")
                   .font(.caption).foregroundStyle(.secondary)
               }
             }
@@ -646,7 +646,7 @@ struct RemoveTitleSheet: View {
         }
         .nordRows()
         Button("Remove title", role: .destructive) {
-          onRemove(deleteFiles, deleteAniList)
+          onRemove(deleteFiles, deleteRemote)
           dismiss()
         }
         .nordRows()

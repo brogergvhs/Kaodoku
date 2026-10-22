@@ -1,10 +1,10 @@
 import SwiftUI
 
 // SettingsView: reader preferences (synced to /me/settings, cached locally),
-// account/server info, AniList status, device storage, and about.
+// account/server info, tracker status, device storage, and about.
 struct SettingsView: View {
   @Environment(AppState.self) private var app
-  @State private var anilist: AniListStatus?
+  @State private var trackers: TrackerList?
   @State private var meta: Meta?
   @State private var confirmClear = false
   @State private var note: String?
@@ -39,13 +39,16 @@ struct SettingsView: View {
             Button("Sign out", role: .destructive) { app.signOut() }
           }
           serverSection
-          Section("AniList") {
-            if let anilist {
-              LabeledContent("Status", value: anilist.connected ? "Connected" : "Not connected")
-              if anilist.connected {
-                Button("Sync library now") { syncAniList() }
-              } else {
-                Text("Connect AniList from the web interface.")
+          Section("Trackers") {
+            if let trackers {
+              ForEach(trackers.items) { t in
+                LabeledContent(t.label, value: t.unavailable != nil ? "Unavailable" : t.connected ? t.name ?? "Connected" : "Not connected")
+                if t.connected, t.unavailable == nil {
+                  Button("Sync \(t.label) now") { syncTracker(t) }
+                }
+              }
+              if !trackers.items.contains(where: \.connected) {
+                Text("Connect trackers from the web interface.")
                   .font(.caption).foregroundStyle(.secondary)
               }
             } else {
@@ -79,7 +82,7 @@ struct SettingsView: View {
       .connectionStatusToolbar()
       .task {
         guard let api = app.api else { return }
-        anilist = try? await api.get("/api/v1/anilist")
+        trackers = try? await api.get("/api/v1/trackers")
         meta = try? await api.get("/api/v1/meta")
       }
       .sheet(item: $editingServer) { ServerEditSheet(server: $0) }
@@ -117,12 +120,12 @@ struct SettingsView: View {
     app.store.titles.reduce(0) { $0 + $1.size }
   }
 
-  private func syncAniList() {
+  private func syncTracker(_ t: TrackerList.Tracker) {
     guard let api = app.api else { return }
     Task {
       do {
-        _ = try await api.data("POST", "/api/v1/anilist/sync")
-        note = "AniList sync started"
+        _ = try await api.data("POST", "/api/v1/trackers/\(t.provider)/sync")
+        note = "\(t.label) sync started"
       } catch { note = error.localizedDescription }
     }
   }
