@@ -348,6 +348,25 @@ func (r *Repository) MangaByProvider(ctx context.Context, provider, providerID s
 	return m, true, nil
 }
 
+// MangaByProviderIDs returns stored manga of one provider keyed by provider id, in one query.
+func (r *Repository) MangaByProviderIDs(ctx context.Context, provider string, ids []string) (map[string]Manga, error) {
+	raw, _ := json.Marshal(ids)
+	rows, err := r.db.QueryContext(ctx, mangaSelect()+` WHERE provider = ? AND provider_id IN (SELECT value FROM json_each(?))`, provider, string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("load manga by provider ids: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]Manga, len(ids))
+	for rows.Next() {
+		m, err := scanManga(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[m.ProviderID] = m
+	}
+	return out, rows.Err()
+}
+
 // ListWanted returns wanted canonical titles.
 func (r *Repository) ListWanted(ctx context.Context) ([]Manga, error) {
 	rows, err := r.db.QueryContext(ctx, mangaSelect()+` WHERE wanted = 1 ORDER BY title_english COLLATE NOCASE, title_romaji COLLATE NOCASE`)

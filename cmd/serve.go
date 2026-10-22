@@ -149,24 +149,24 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	nextDownload := time.Now()
 	nextSourceVerify := time.Now()
 	nextBackup := time.Now()
-	nextAniList := time.Now()
+	nextTrackerSync := time.Now()
 	nextCatalog := time.Now()
-	var refreshEvery, scanEvery, downloadEvery, sourceVerifyEvery, backupEvery, anilistEvery, catalogEvery, runEvery time.Duration
+	var refreshEvery, scanEvery, downloadEvery, sourceVerifyEvery, backupEvery, trackerSyncEvery, catalogEvery, runEvery time.Duration
 
 	for {
-		oldRefresh, oldScan, oldDownload, oldSourceVerify, oldBackup, oldAniList, oldCatalog, oldRun := refreshEvery, scanEvery, downloadEvery, sourceVerifyEvery, backupEvery, anilistEvery, catalogEvery, runEvery
+		oldRefresh, oldScan, oldDownload, oldSourceVerify, oldBackup, oldTrackerSync, oldCatalog, oldRun := refreshEvery, scanEvery, downloadEvery, sourceVerifyEvery, backupEvery, trackerSyncEvery, catalogEvery, runEvery
 		refreshEvery = serveDuration(svc, ctx, service.SettingServeRefreshEvery)
 		scanEvery = serveDuration(svc, ctx, service.SettingServeScanEvery)
 		downloadEvery = serveDuration(svc, ctx, service.SettingServeDownloadEvery)
 		sourceVerifyEvery = serveDuration(svc, ctx, service.SettingServeSourceVerifyEvery)
 		backupEvery = serveDuration(svc, ctx, service.SettingServeBackupEvery)
-		anilistEvery = serveDuration(svc, ctx, service.SettingServeTrackerSyncEvery)
+		trackerSyncEvery = serveDuration(svc, ctx, service.SettingServeTrackerSyncEvery)
 		catalogEvery = serveDuration(svc, ctx, service.SettingServeCatalogEvery)
 		runEvery = serveDuration(svc, ctx, service.SettingServeRunEvery)
 		if runEvery <= 0 {
 			runEvery = fallbackDuration(service.SettingDefault(service.SettingServeRunEvery))
 		}
-		changed := oldRefresh != refreshEvery || oldScan != scanEvery || oldDownload != downloadEvery || oldSourceVerify != sourceVerifyEvery || oldBackup != backupEvery || oldAniList != anilistEvery || oldCatalog != catalogEvery || oldRun != runEvery
+		changed := oldRefresh != refreshEvery || oldScan != scanEvery || oldDownload != downloadEvery || oldSourceVerify != sourceVerifyEvery || oldBackup != backupEvery || oldTrackerSync != trackerSyncEvery || oldCatalog != catalogEvery || oldRun != runEvery
 		if oldRefresh != refreshEvery {
 			nextRefresh = nextAfter(svc, ctx, jobs.TypeRefreshTitle, refreshEvery)
 		}
@@ -182,8 +182,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		if oldBackup != backupEvery {
 			nextBackup = nextAfter(svc, ctx, jobs.TypeBackupUserData, backupEvery)
 		}
-		if oldAniList != anilistEvery {
-			nextAniList = nextAfter(svc, ctx, jobs.TypeSyncTrackers, anilistEvery)
+		if oldTrackerSync != trackerSyncEvery {
+			nextTrackerSync = nextAfter(svc, ctx, jobs.TypeSyncTrackers, trackerSyncEvery)
 		}
 		if oldCatalog != catalogEvery {
 			nextCatalog = nextAfter(svc, ctx, jobs.TypeCatalogRefresh, catalogEvery)
@@ -192,7 +192,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			fmt.Printf("Serving: refresh=%s scan=%s download=%s source_verify=%s backup=%s run=%s\n", refreshEvery, scanEvery, downloadEvery, sourceVerifyEvery, backupEvery, runEvery)
 		}
 
-		if err := serveTick(ctx, svc, nextDue(&nextRefresh, refreshEvery), nextDue(&nextScan, scanEvery), nextDue(&nextDownload, downloadEvery), nextDue(&nextSourceVerify, sourceVerifyEvery), nextDue(&nextBackup, backupEvery), nextDue(&nextAniList, anilistEvery), nextDue(&nextCatalog, catalogEvery)); err != nil && ctx.Err() == nil {
+		if err := serveTick(ctx, svc, nextDue(&nextRefresh, refreshEvery), nextDue(&nextScan, scanEvery), nextDue(&nextDownload, downloadEvery), nextDue(&nextSourceVerify, sourceVerifyEvery), nextDue(&nextBackup, backupEvery), nextDue(&nextTrackerSync, trackerSyncEvery), nextDue(&nextCatalog, catalogEvery)); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "serve tick: %v\n", err)
 		}
 		if _, err := runDue(ctx, svc); err != nil && ctx.Err() == nil {
@@ -212,7 +212,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 }
 
-func serveTick(ctx context.Context, svc *service.JobService, refresh, scan, download, sourceVerify, backup, anilist, catalogRefresh bool) error {
+func serveTick(ctx context.Context, svc *service.JobService, refresh, scan, download, sourceVerify, backup, trackerSync, catalogRefresh bool) error {
 	now := time.Now()
 	if refresh {
 		if _, err := svc.Enqueue(ctx, jobs.TypeRefreshTitle, 0, now); err != nil {
@@ -239,7 +239,7 @@ func serveTick(ctx context.Context, svc *service.JobService, refresh, scan, down
 			return err
 		}
 	}
-	if anilist {
+	if trackerSync {
 		if _, err := svc.Enqueue(ctx, jobs.TypeSyncTrackers, 0, now); err != nil {
 			return err
 		}

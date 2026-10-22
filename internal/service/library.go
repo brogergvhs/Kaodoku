@@ -152,8 +152,8 @@ func (s *LibraryService) ToggleFavourite(ctx context.Context, titleID int64) (bo
 	return s.repo.ToggleFavourite(ctx, titleID)
 }
 
-func (s *LibraryService) SetFavourite(ctx context.Context, userID, titleID int64) error {
-	return s.repo.SetFavourite(ctx, userID, titleID)
+func (s *LibraryService) SetFavourite(ctx context.Context, userID, titleID int64, on bool) error {
+	return s.repo.SetFavourite(ctx, userID, titleID, on)
 }
 
 func (s *LibraryService) SetLanguageMode(ctx context.Context, id int64, mode string) error {
@@ -301,7 +301,7 @@ func (s *LibraryService) TitleOwners(ctx context.Context) (map[int64]int64, erro
 }
 
 // MarkChapterRangeRead marks downloaded chapters in a title range read.
-// MarkChaptersReadThrough marks chapters up to a number read (AniList pull).
+// MarkChaptersReadThrough marks chapters up to a number read (tracker pull).
 func (s *LibraryService) MarkChaptersReadThrough(ctx context.Context, titleID int64, maxNumber int) (int, error) {
 	return s.repo.MarkChaptersReadThrough(ctx, titleID, maxNumber)
 }

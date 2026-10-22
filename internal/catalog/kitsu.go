@@ -184,7 +184,8 @@ func (c *KitsuClient) Search(ctx context.Context, query string, limit int, f Sea
 	if limit <= 0 {
 		limit = 10
 	}
-	q := url.Values{"page[limit]": {strconv.Itoa(min(limit, 20))}, "page[offset]": {strconv.Itoa(max(f.Page-1, 0) * limit)}, "include": {"categories"}}
+	limit = min(limit, 20)
+	q := url.Values{"page[limit]": {strconv.Itoa(limit)}, "page[offset]": {strconv.Itoa(max(f.Page-1, 0) * limit)}, "include": {"categories"}}
 	if in := slices.Concat(f.GenreIn, f.TagIn); len(in) > 0 {
 		q.Set("filter[categories]", strings.Join(in, ","))
 	}
@@ -323,9 +324,8 @@ func (c *KitsuClient) Viewer(ctx context.Context) (string, string, error) {
 var kitsuToStatus = map[string]string{"current": "CURRENT", "planned": "PLANNING", "completed": "COMPLETED", "on_hold": "PAUSED", "dropped": "DROPPED"}
 
 type kitsuEntry struct {
-	id      string
-	mangaID string
-	entry   Entry
+	id    string
+	entry Entry
 }
 
 func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]kitsuEntry, error) {
@@ -354,7 +354,6 @@ func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]kitsuEntry, 
 				e.entry.Status = "REPEATING"
 			}
 			for _, ref := range r.refs("manga") {
-				e.mangaID = ref.ID
 				if res, ok := doc.find(ref); ok {
 					e.entry.Manga = doc.manga(res)
 				}

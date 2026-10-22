@@ -308,6 +308,14 @@ CREATE TABLE IF NOT EXISTS tracker_title_sync (
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
+CREATE TABLE IF NOT EXISTS tracker_favourites (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
+	favourite INTEGER NOT NULL,
+	PRIMARY KEY (user_id, title_id, provider)
+);
+
 CREATE TABLE IF NOT EXISTS catalog_external_ids (
 	catalog_manga_id INTEGER NOT NULL REFERENCES catalog_manga(id) ON DELETE CASCADE,
 	provider TEXT NOT NULL,
@@ -484,7 +492,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"api_tokens", "expires_at", "TEXT NOT NULL DEFAULT ''"},
 		{"api_tokens", "last_seen_at", "TEXT NOT NULL DEFAULT ''"},
 		{"api_tokens", "device_id", "TEXT NOT NULL DEFAULT ''"},
-		{"chapter_read_progress", "manual", "INTEGER NOT NULL DEFAULT 0"}, // 1 = bulk/AniList mark, not page-by-page reading
+		{"chapter_read_progress", "manual", "INTEGER NOT NULL DEFAULT 0"}, // 1 = bulk/tracker mark, not page-by-page reading
 		{"titles", "fetch_error", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err = ensureColumn(ctx, tx, col.table, col.name, col.def); err != nil {

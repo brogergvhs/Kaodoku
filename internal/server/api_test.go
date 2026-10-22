@@ -425,3 +425,40 @@ func TestSearchSwapsTagPickerWithBackend(t *testing.T) {
 		t.Fatal("tag picker re-sent without a backend change")
 	}
 }
+
+func TestCoverRouteFillsMissingCovers(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	svc, closeDB, err := service.OpenJobs(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	db, err := database.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := catalog.NewRepository(db)
+	if err := repo.ReplaceContentTags(ctx, catalog.MangaUpdatesProvider, []catalog.ContentTag{{Name: "Drama", Kind: "genre"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertManga(ctx, catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "55", TitleRomaji: "Solo", CoverImage: "https://c/55.jpg"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := coverURL(catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "55"}); got != "/ui/covers/mangaupdates/55" {
+		t.Fatalf("coverURL = %q", got)
+	}
+	if got := coverURL(catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "55", CoverImage: "https://c/x.jpg"}); got != "https://c/x.jpg" {
+		t.Fatalf("coverURL kept = %q", got)
+	}
+	api := New(svc, func(context.Context) (service.RunSummary, error) { return service.RunSummary{}, nil },
+		func(context.Context, string) (service.SourceVerifyResult, error) {
+			return service.SourceVerifyResult{}, nil
+		})
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui/covers/mangaupdates/55", nil))
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://c/55.jpg" {
+		t.Fatalf("cover route = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}

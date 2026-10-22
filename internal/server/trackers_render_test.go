@@ -73,7 +73,7 @@ func TestTrackerTemplatesRender(t *testing.T) {
 	expect(panel, `data-tip="Metadata source"`, `data-tip="Progressive sync"`, "Stop progressive sync", `data-tip="Suggested match"`, "Confirm match", `data-tip="Not linked"`, `data-tip="Linked"`, `"mode":"primary"`, "Use for metadata", "Relink", "Unlink",
 		`"provider":"mal","provider_id":"2","mode":"primary"`, `"provider":"mal","provider_id":""`, "Connect MyAnimeList", "https://c/2.jpg", "openPicker('3-mal')", `id="picker-3-kitsu"`, `hx-include="#picker-form-3-mal"`, "Relink MyAnimeList")
 
-	picker := render("providerPicker", providerPickerView{TitleID: 3, Provider: "mal", Label: "MyAnimeList", Query: "Berserk", Current: "9",
+	picker := render("providerPicker", providerPickerView{TitleID: 3, Provider: "mal", Current: "9",
 		Results: []catalog.Manga{{Provider: "mal", ProviderID: "9", TitleRomaji: "Berserk 2"}, {Provider: "mal", ProviderID: "2", TitleRomaji: "Berserk", Format: "MANGA"}}})
 	expect(picker, "/ui/library/3/providers/set", `"provider_id":"2"`, "https://myanimelist.net/manga/2")
 	if strings.Contains(picker, `"provider_id":"9"`) || strings.Contains(picker, "<select") {

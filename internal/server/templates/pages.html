@@ -85,11 +85,14 @@
 <div hx-get="/ui/jobs/table" hx-trigger="load"></div>
 {{if .User.Can "jobs.manage"}}
 <dialog id="job_start_modal" class="modal">
-  <div class="modal-box max-w-sm">
+  <div class="modal-box max-w-md">
     <h3 class="text-lg font-bold mb-3">Start a job</h3>
     <div class="grid gap-2">
       {{range globalJobs}}
-      <button class="btn btn-outline justify-start" hx-post="/ui/jobs/start" hx-vals='{"type": "{{.Type}}"}' hx-target="#jobs-table" hx-swap="outerHTML" onclick="job_start_modal.close()">{{.Label}}</button>
+      <button class="btn btn-outline h-auto flex-col items-start gap-0.5 py-2 text-left" hx-post="/ui/jobs/start" hx-vals='{"type": "{{.Type}}"}' hx-target="#jobs-table" hx-swap="outerHTML" onclick="job_start_modal.close()">
+        <span>{{.Label}}</span>
+        <span class="text-xs font-normal text-base-content/60">{{.Desc}}</span>
+      </button>
       {{end}}
     </div>
     <div class="modal-action"><button class="btn btn-ghost" onclick="job_start_modal.close()">Cancel</button></div>
@@ -108,7 +111,7 @@
     <tr>
       <td class="min-w-0">
         <span class="font-medium">{{.Name}}</span>
-        <div class="truncate max-w-60 text-xs text-base-content/50">{{orDash .Endpoint}}</div>
+        {{with .Endpoint}}<div class="truncate max-w-60 text-xs text-base-content/50">{{.}}</div>{{end}}
       </td>
       <td class="align-middle whitespace-nowrap">
         {{if not .Enabled}}<span class="badge badge-ghost badge-sm">disabled</span>

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -236,8 +237,6 @@ type providerPanelView struct {
 type providerPickerView struct {
 	TitleID  int64
 	Provider string
-	Label    string
-	Query    string
 	Current  string
 	Results  []catalog.Manga
 	Error    string
@@ -269,12 +268,9 @@ func (u *webUI) titleProviderSearch(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	view := providerPickerView{TitleID: id, Provider: r.FormValue("provider"), Query: strings.TrimSpace(r.FormValue("q"))}
-	if view.Query == "" {
-		view.Query = title.DisplayTitle
-	}
-	view.Label = u.svc.ProviderLabel(view.Provider)
-	items, _, err := u.svc.SearchManga(r.Context(), view.Provider, view.Query, 8, catalog.SearchFilter{})
+	view := providerPickerView{TitleID: id, Provider: r.FormValue("provider")}
+	query := cmp.Or(strings.TrimSpace(r.FormValue("q")), title.DisplayTitle)
+	items, _, err := u.svc.SearchManga(r.Context(), view.Provider, query, 8, catalog.SearchFilter{})
 	if err != nil {
 		view.Error = err.Error()
 	}

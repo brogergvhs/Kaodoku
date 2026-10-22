@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
@@ -226,6 +227,9 @@ func (s *JobService) saveAccount(ctx context.Context, userID int64, p catalog.Pr
 			return err
 		}
 	}
+	if err := s.forgetFavouriteSync(ctx, userID, p.Name()); err != nil {
+		return err
+	}
 	if _, err = s.db.ExecContext(ctx, `
 		INSERT INTO tracker_accounts (user_id, provider, access_token, refresh_token, remote_user_id, remote_name, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -245,6 +249,12 @@ func (s *JobService) DisconnectTracker(ctx context.Context, userID int64, provid
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM tracker_accounts WHERE user_id = ? AND provider = ?`, userID, provider); err != nil {
 		return err
 	}
+	if err := s.forgetFavouriteSync(ctx, userID, provider); err != nil {
+		return err
+	}
+	s.listMu.Lock()
+	delete(s.listCache, fmt.Sprintf("%d:%s", userID, provider))
+	s.listMu.Unlock()
 	s.invalidateRecs(userID)
 	return nil
 }
@@ -287,7 +297,10 @@ func (s *JobService) storeToken(ctx context.Context, userID int64, provider stri
 	if err != nil {
 		return err
 	}
-	expires := database.FormatTime(time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second))
+	expires := ""
+	if tok.ExpiresIn > 0 {
+		expires = database.FormatTime(time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second))
+	}
 	_, err = s.db.ExecContext(ctx, `UPDATE tracker_accounts SET access_token = ?, refresh_token = ?, expires_at = ? WHERE user_id = ? AND provider = ?`, access, refresh, expires, userID, provider)
 	return err
 }
@@ -430,6 +443,10 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	if err != nil {
 		return err
 	}
+	syncedFav, err := s.syncedFavourites(ctx, user.ID, p.Name())
+	if err != nil {
+		return err
+	}
 	handle := progress.Register(p.Name() + " sync")
 	handle.SetTotal(len(tracked))
 	defer handle.MarkDone()
@@ -442,14 +459,8 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 		if !contentAllowedFor(user, t.IsAdult, t.ContentTags) {
 			continue
 		}
-		if canFav && remoteFav[pid] && !localFav[pid] {
-			if err := s.lib.SetFavourite(ctx, user.ID, titleID); err != nil {
-				errs = append(errs, err)
-			}
-		} else if canFav && localFav[pid] && !remoteFav[pid] {
-			if err := fav.ToggleFavourite(actx, pid); err != nil {
-				errs = append(errs, fmt.Errorf("favourite %s: %w", pid, err))
-			}
+		if canFav {
+			errs = append(errs, s.mergeFavourite(ctx, actx, fav, user.ID, titleID, p.Name(), pid, localFav[pid], remoteFav[pid], syncedFav))
 		}
 		e, listed := remote[pid]
 		if listed && e.Progress > 0 {
@@ -618,11 +629,64 @@ func (s *JobService) pushFavourite(ctx context.Context, userID, titleID int64, w
 			return nil
 		}
 		remote, err := fav.IsFavourite(actx, id)
-		if err != nil || remote == want {
+		if err == nil && remote != want {
+			err = fav.ToggleFavourite(actx, id)
+		}
+		if err != nil {
 			return err
 		}
-		return fav.ToggleFavourite(actx, id)
+		return s.markFavouriteSynced(ctx, userID, titleID, p.Name(), want)
 	})
+}
+
+// mergeFavourite is a three-way merge against the last state both sides agreed on, so removals win on either side;
+// the first sync of a title keeps a favourite from either side.
+func (s *JobService) mergeFavourite(ctx, actx context.Context, fav catalog.Favouriter, userID, titleID int64, provider, pid string, local, remote bool, synced map[int64]bool) error {
+	want := local
+	if last, known := synced[titleID]; (known && local == last) || (!known && remote) {
+		want = remote
+	}
+	if want != local {
+		if err := s.lib.SetFavourite(ctx, userID, titleID, want); err != nil {
+			return err
+		}
+	}
+	if want != remote {
+		if err := fav.ToggleFavourite(actx, pid); err != nil {
+			return fmt.Errorf("favourite %s: %w", pid, err)
+		}
+	}
+	return s.markFavouriteSynced(ctx, userID, titleID, provider, want)
+}
+
+func (s *JobService) syncedFavourites(ctx context.Context, userID int64, provider string) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT title_id, favourite FROM tracker_favourites WHERE user_id = ? AND provider = ?`, userID, provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		var on bool
+		if err := rows.Scan(&id, &on); err != nil {
+			return nil, err
+		}
+		out[id] = on
+	}
+	return out, rows.Err()
+}
+
+// forgetFavouriteSync drops the merge baseline, so the next sync with a (re)connected account starts fresh.
+func (s *JobService) forgetFavouriteSync(ctx context.Context, userID int64, provider string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM tracker_favourites WHERE user_id = ? AND provider = ?`, userID, provider)
+	return err
+}
+
+func (s *JobService) markFavouriteSynced(ctx context.Context, userID, titleID int64, provider string, on bool) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tracker_favourites (user_id, title_id, provider, favourite) VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_id, title_id, provider) DO UPDATE SET favourite = excluded.favourite`, userID, titleID, provider, on)
+	return err
 }
 
 func (s *JobService) localFavouriteIDs(ctx context.Context, userID int64, provider string) (map[string]bool, error) {
@@ -688,6 +752,9 @@ func (s *JobService) SyncTrackersTitle(ctx context.Context, titleID int64, provi
 
 // SetProgressiveSync stores an explicit per-title choice, which overrides the account's auto progressive default.
 func (s *JobService) SetProgressiveSync(ctx context.Context, titleID int64, provider string, on bool) error {
+	if !slices.Contains(providerOrder, provider) {
+		return fmt.Errorf("unknown tracker %q", provider)
+	}
 	if on {
 		if err := s.SyncTrackersTitle(ctx, titleID, provider); err != nil {
 			return err
@@ -756,42 +823,90 @@ func (s *JobService) syncTitle(ctx, actx context.Context, p catalog.Provider, id
 	return reconcileEntry(actx, p, id, local, false)
 }
 
+// TrackerSuggestions merges the user's lists on provider, or on every reachable connected tracker when empty.
 func (s *JobService) TrackerSuggestions(ctx context.Context, provider string) []catalog.Manga {
-	var lists [][]catalog.Manga
 	uid := auth.UserID(ctx)
-	for _, name := range s.connectedTrackers(ctx, uid) {
-		if provider != "" && name != provider {
-			continue
-		}
-		entries, err := s.cachedEntries(ctx, uid, name)
-		if err != nil {
-			continue
-		}
-		var list []catalog.Manga
+	names := slices.DeleteFunc(s.connectedTrackers(ctx, uid), func(name string) bool { return provider != "" && name != provider })
+	lists := make([][]catalog.Manga, len(names))
+	for i, entries := range s.trackerLists(ctx, uid, names) {
 		for _, e := range entries {
 			if e.Status != "DROPPED" {
-				list = append(list, e.Manga)
+				lists[i] = append(lists[i], e.Manga)
 			}
 		}
-		lists = append(lists, list)
+		lists[i] = s.fillFromStore(ctx, names[i], lists[i])
 	}
 	return mergeManga(lists, nil, 0)
 }
 
-type cachedList struct {
-	entries []catalog.Entry
-	expires time.Time
+// trackerLists downloads the user's lists on several trackers side by side; a failed one comes back empty.
+func (s *JobService) trackerLists(ctx context.Context, uid int64, names []string) [][]catalog.Entry {
+	out := make([][]catalog.Entry, len(names))
+	parallel(ctx, len(names), len(names), func(i int) {
+		out[i], _ = s.cachedEntries(ctx, uid, names[i])
+	})
+	return out
 }
 
-// cachedEntries shares one list download between the search page's suggestion boxes until the next sync.
-// ponytail: one lock serializes every user's list fetch; per-key locks if many users connect trackers.
+// fillFromStore swaps thin records (no cover, or no genres to judge adult content by) for the stored copy when there is one.
+func (s *JobService) fillFromStore(ctx context.Context, provider string, items []catalog.Manga) []catalog.Manga {
+	ids := make([]string, len(items))
+	for i, m := range items {
+		ids[i] = m.ProviderID
+	}
+	stored, _ := s.catalog.repo.MangaByProviderIDs(ctx, provider, ids)
+	for i, m := range items {
+		if known, ok := stored[m.ProviderID]; ok && (m.CoverImage == "" || len(m.Genres)+len(m.Tags) == 0) {
+			known.ExternalIDs = m.ExternalIDs
+			items[i] = known
+		}
+	}
+	return items
+}
+
+type cachedList struct {
+	entries []catalog.Entry
+	fetched time.Time
+}
+
+const (
+	listFresh = 30 * time.Second
+	listStale = recommendationTTL
+)
+
+// cachedEntries serves a user's list from memory: as is while fresh, then re-downloaded in the background
+// while the old copy is still served, and only fetched in place when missing or older than listStale.
 func (s *JobService) cachedEntries(ctx context.Context, uid int64, provider string) ([]catalog.Entry, error) {
 	key := fmt.Sprintf("%d:%s", uid, provider)
-	s.listMu.Lock()
-	defer s.listMu.Unlock()
-	if c, ok := s.listCache[key]; ok && time.Now().Before(c.expires) {
+	v, _ := s.listLocks.LoadOrStore(key, &sync.Mutex{})
+	lock := v.(*sync.Mutex)
+	if c, ok := s.cachedList(key); ok && time.Since(c.fetched) < listStale {
+		if time.Since(c.fetched) >= listFresh && lock.TryLock() {
+			go func() {
+				defer lock.Unlock()
+				bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+				defer cancel()
+				_, _ = s.fetchList(bctx, uid, provider, key)
+			}()
+		}
 		return c.entries, nil
 	}
+	lock.Lock()
+	defer lock.Unlock()
+	if c, ok := s.cachedList(key); ok && time.Since(c.fetched) < listFresh {
+		return c.entries, nil
+	}
+	return s.fetchList(ctx, uid, provider, key)
+}
+
+func (s *JobService) cachedList(key string) (cachedList, bool) {
+	s.listMu.Lock()
+	defer s.listMu.Unlock()
+	c, ok := s.listCache[key]
+	return c, ok
+}
+
+func (s *JobService) fetchList(ctx context.Context, uid int64, provider, key string) ([]catalog.Entry, error) {
 	p, actx, ok := s.trackerSession(ctx, uid, provider)
 	if !ok {
 		return nil, fmt.Errorf("%s is not connected", provider)
@@ -800,10 +915,12 @@ func (s *JobService) cachedEntries(ctx context.Context, uid int64, provider stri
 	if err != nil {
 		return nil, err
 	}
+	s.listMu.Lock()
 	if s.listCache == nil {
 		s.listCache = map[string]cachedList{}
 	}
-	s.listCache[key] = cachedList{entries, time.Now().Add(recommendationTTL)}
+	s.listCache[key] = cachedList{entries, time.Now()}
+	s.listMu.Unlock()
 	return entries, nil
 }
 
@@ -818,11 +935,11 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 	if cached && time.Now().Before(c.expires) {
 		return c.items, true
 	}
-	p, actx, ok := s.trackerSession(ctx, uid, provider)
-	if !ok {
+	entries, err := s.cachedEntries(ctx, uid, provider)
+	if err != nil {
 		return nil, false
 	}
-	entries, err := s.cachedEntries(ctx, uid, provider)
+	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return nil, false
 	}
@@ -851,7 +968,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 	for _, id := range seeds {
 		var recs []catalog.Manga
 		if r, ok := p.(catalog.Recommender); ok {
-			recs, err = r.Recommendations(actx, id, 24)
+			recs, err = r.Recommendations(ctx, id, 24)
 		} else {
 			_, recs, err = s.relatedCached(ctx, p, id, 24)
 		}
@@ -859,14 +976,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 			lists = append(lists, recs)
 		}
 	}
-	items := mergeManga(lists, exclude, 0)
-	for i, m := range items {
-		if len(m.Genres) == 0 && len(m.Tags) == 0 {
-			if stored, ok, _ := s.catalog.repo.MangaByProvider(ctx, m.Provider, m.ProviderID); ok && len(stored.Genres) > 0 {
-				items[i] = stored
-			}
-		}
-	}
+	items := s.fillFromStore(ctx, provider, mergeManga(lists, exclude, 0))
 	s.recMu.Lock()
 	if s.sugCache == nil {
 		s.sugCache = map[string]cachedRecs{}

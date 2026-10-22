@@ -52,6 +52,7 @@ type JobService struct {
 	sugCache   map[string]cachedRecs
 	listMu     sync.Mutex
 	listCache  map[string]cachedList
+	listLocks  sync.Map // "user:provider" -> *sync.Mutex held while downloading that list
 	relMu      sync.Mutex
 	relCache   map[string]cachedRelated
 	adultMu    sync.Mutex
@@ -1016,7 +1017,7 @@ func (s *JobService) cacheRecs(uid int64, items []catalog.Manga) {
 	s.recCache[uid] = cachedRecs{items: append([]catalog.Manga(nil), items...), expires: time.Now().Add(recommendationTTL)}
 }
 
-// invalidateRecs drops a user's cached recommendations on tracker changes.
+// invalidateRecs drops a user's cached recommendations on tracker changes and marks their lists for a background refresh.
 func (s *JobService) invalidateRecs(userID int64) {
 	prefix := fmt.Sprintf("%d:", userID)
 	s.recMu.Lock()
@@ -1027,10 +1028,12 @@ func (s *JobService) invalidateRecs(userID int64) {
 		}
 	}
 	s.recMu.Unlock()
+	stale := time.Now().Add(-listFresh)
 	s.listMu.Lock()
-	for key := range s.listCache {
-		if strings.HasPrefix(key, prefix) {
-			delete(s.listCache, key)
+	for key, c := range s.listCache {
+		if strings.HasPrefix(key, prefix) && c.fetched.After(stale) {
+			c.fetched = stale
+			s.listCache[key] = c
 		}
 	}
 	s.listMu.Unlock()

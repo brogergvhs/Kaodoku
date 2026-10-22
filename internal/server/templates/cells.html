@@ -317,9 +317,9 @@
 <div id="chapters-table"
   hx-get="{{.PageURL .Page}}" hx-swap="outerHTML" hx-sync="this:drop"
   hx-trigger="{{if .Poll}}load delay:4s, {{end}}title-job-started from:body">
-  <div class="divide-y divide-line/25 rounded-xl overflow-hidden">
+  <div class="divide-y divide-line/25 rounded-xl">
     {{range .Chapters}}
-    <div class="flex items-center gap-3 p-4 {{.Tint}}">
+    <div class="flex items-center gap-3 p-4 first:rounded-t-xl last:rounded-b-xl {{.Tint}}">
       <div class="min-w-0 flex-1">
         {{template "chapterName" .ChapterStatus}}
         <div class="mt-0.5 flex items-center gap-2 text-xs text-base-content/50 sm:hidden">
@@ -617,7 +617,7 @@
     <tbody>
       {{$canAdd := .CanAdd}}{{range .Items}}
       <tr {{if .IsAdult}}class="outline outline-1 -outline-offset-1 outline-error"{{end}}>
-        <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a></td>
+        <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{coverURL .Manga}}" alt="" loading="lazy"></a></td>
         <td class="min-w-0">
           <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}">{{mangaTitle .Manga}}</a>
           <div class="text-xs text-base-content/50">{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
@@ -637,8 +637,8 @@
   <div class="card bg-base-100 p-4{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
     <div class="flex gap-5 max-sm:flex-col">
       <figure class="shrink-0 max-sm:self-center">
-        {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a>
-        {{else}}<a href="{{mangaURL .Manga}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
+        {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{coverURL .Manga}}" alt="" loading="lazy"></a>
+        {{else}}<a href="{{mangaURL .Manga}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{coverURL .Manga}}" alt="" loading="lazy"></a>{{end}}
       </figure>
       <div class="flex min-w-0 flex-1 flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
@@ -659,8 +659,8 @@
   {{$canAdd := .CanAdd}}{{range .Items}}
   <div class="flex min-w-0 flex-col">
     <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
-      {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>
-      {{else}}<a href="{{mangaURL .Manga}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
+      {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{coverURL .Manga}}" alt="" loading="lazy"></a>
+      {{else}}<a href="{{mangaURL .Manga}}"><img class="h-full w-full object-cover" src="{{coverURL .Manga}}" alt="" loading="lazy"></a>{{end}}
       {{if $.ShowProvider}}<span class="pointer-events-none badge badge-sm absolute left-2 top-2 bg-base-100">{{providerLabel .Provider}}</span>{{end}}
       {{if $.ShowRelations}}<div class="pointer-events-none absolute inset-x-2 bottom-2 flex">
         <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
@@ -921,7 +921,7 @@
     {{range .Results}}
     {{$cur := eq .ProviderID $.Current}}
     <div class="flex items-center gap-3 py-2">
-      <img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy">
+      <img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{coverURL .}}" alt="" loading="lazy">
       <div class="min-w-0 flex-1">
         <div class="truncate text-sm font-medium">{{mangaTitle .}}</div>
         <div class="text-xs text-base-content/50">{{.Format}}{{if .Year}} · {{.Year}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}} · <a class="link-hover" href="{{providerURL .Provider .ProviderID}}" target="_blank" rel="noreferrer noopener">#{{.ProviderID}} ↗</a></div>

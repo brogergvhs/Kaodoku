@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -49,8 +50,16 @@ func (h *health) observe(ctx context.Context, err error) error {
 	return err
 }
 
+// transportError treats refused, reset or unresolvable connections as an outage, but not a single slow request.
+func transportError(label string, err error) error {
+	if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
+		return fmt.Errorf("%s request: %w", label, err)
+	}
+	return fmt.Errorf("%s %w: %w", label, ErrUnavailable, err)
+}
+
 func outageReason(data []byte) string {
-	var body struct{ Message, Error string }
+	var body struct{ Message string }
 	if json.Unmarshal(data, &body) == nil && body.Message != "" {
 		return body.Message
 	}
@@ -78,12 +87,12 @@ type Favouriter interface {
 	ToggleFavourite(ctx context.Context, id string) error
 }
 
-// Vocabulary lists a provider's own genre and tag names, the ones its search filters and manga use.
 // Recommender returns community recommendations alone, cheaper than Related when relations need extra requests.
 type Recommender interface {
 	Recommendations(ctx context.Context, id string, limit int) ([]Manga, error)
 }
 
+// Vocabulary lists a provider's own genre and tag names, the ones its search filters and manga use.
 type Vocabulary interface {
 	TagVocabulary(ctx context.Context) ([]ContentTag, error)
 }

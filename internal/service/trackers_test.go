@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -484,11 +486,12 @@ func TestTrackerPrefsDriveLinkingSyncAndRelated(t *testing.T) {
 
 type recommendingProvider struct {
 	*fakeProvider
-	lists, related int
+	lists   atomic.Int32
+	related int
 }
 
 func (r *recommendingProvider) ListEntries(ctx context.Context) ([]catalog.Entry, error) {
-	r.lists++
+	r.lists.Add(1)
 	return r.fakeProvider.ListEntries(ctx)
 }
 func (r *recommendingProvider) Related(ctx context.Context, id string, limit int) ([]catalog.Manga, []catalog.Manga, error) {
@@ -510,17 +513,206 @@ func TestSuggestionsShareOneListDownloadAndUseCheapRecommendations(t *testing.T)
 		t.Fatal(err)
 	}
 
-	svc.TrackerSuggestions(ctx, catalog.MangaUpdatesProvider)
+	if _, err := svc.catalog.repo.UpsertManga(ctx, catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "1", TitleRomaji: "Listed", CoverImage: "https://c/1.jpg", Genres: []string{"Drama"}}); err != nil {
+		t.Fatal(err)
+	}
+	if listed := svc.TrackerSuggestions(ctx, catalog.MangaUpdatesProvider); len(listed) != 1 || listed[0].CoverImage != "https://c/1.jpg" {
+		t.Fatalf("list entry without a cover should use the stored one: %+v", listed)
+	}
 	got, ok := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider)
 	if !ok || len(got) != 1 || got[0].TitleRomaji != "Known" || got[0].IsAdult {
 		t.Fatalf("suggestions = %+v, want the stub filled from the stored record", got)
 	}
-	if mu.lists != 1 || mu.related != 0 {
-		t.Fatalf("list downloads = %d, Related calls = %d; want 1 and 0", mu.lists, mu.related)
+	if mu.lists.Load() != 1 || mu.related != 0 {
+		t.Fatalf("list downloads = %d, Related calls = %d; want 1 and 0", mu.lists.Load(), mu.related)
 	}
 	svc.invalidateRecs(1)
 	svc.TrackerSuggestions(ctx, catalog.MangaUpdatesProvider)
-	if mu.lists != 2 {
-		t.Fatal("a sync must drop the cached list")
+	waitFor(t, func() bool { return mu.lists.Load() == 2 }, "a sync must refresh the cached list in the background")
+	if err := svc.DisconnectTracker(ctx, 1, catalog.MangaUpdatesProvider); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider); ok {
+		t.Fatal("a disconnected tracker must not serve its cached list")
+	}
+}
+
+func TestListCacheRefreshesInTheBackground(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	kitsu := &recommendingProvider{fakeProvider: newFake(catalog.KitsuProvider)}
+	kitsu.entries["1"] = catalog.Entry{Status: "CURRENT"}
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	if got := svc.TrackerSuggestions(ctx, catalog.KitsuProvider); len(got) != 1 {
+		t.Fatalf("first load = %+v", got)
+	}
+	kitsu.mu.Lock()
+	delete(kitsu.entries, "1")
+	kitsu.mu.Unlock()
+	if got := svc.TrackerSuggestions(ctx, catalog.KitsuProvider); len(got) != 1 || kitsu.lists.Load() != 1 {
+		t.Fatal("a fresh list must be served from memory")
+	}
+	svc.listMu.Lock()
+	for k, c := range svc.listCache {
+		c.fetched = time.Now().Add(-time.Minute)
+		svc.listCache[k] = c
+	}
+	svc.listMu.Unlock()
+	if got := svc.TrackerSuggestions(ctx, catalog.KitsuProvider); len(got) != 1 {
+		t.Fatal("an aging list is still served right away")
+	}
+	waitFor(t, func() bool { return len(svc.TrackerSuggestions(ctx, catalog.KitsuProvider)) == 0 }, "the background refresh should drop the removed entry")
+}
+
+func waitFor(t *testing.T, ok func() bool, msg string) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	t.Fatal(msg)
+}
+
+type favProvider struct {
+	*fakeProvider
+	favs map[string]bool
+	fail bool
+}
+
+func (f *favProvider) Favourites(context.Context) ([]string, error) {
+	var out []string
+	for id, on := range f.favs {
+		if on {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+func (f *favProvider) IsFavourite(_ context.Context, id string) (bool, error) { return f.favs[id], nil }
+func (f *favProvider) ToggleFavourite(_ context.Context, id string) error {
+	if f.fail {
+		return errors.New("down")
+	}
+	f.favs[id] = !f.favs[id]
+	return nil
+}
+
+func TestFavouriteSyncKeepsRemovalsFromEitherSide(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	kitsu := &favProvider{fakeProvider: newFake(catalog.KitsuProvider), favs: map[string]bool{"9": true}}
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Fav"}, 1, 0)
+	local := func() bool {
+		var n int
+		_ = svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_favourites WHERE user_id = 1 AND title_id = ?`, titleID).Scan(&n)
+		return n > 0
+	}
+	sync := func() {
+		t.Helper()
+		_ = svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil)
+	}
+
+	sync()
+	if !local() {
+		t.Fatal("first sync should pull the remote favourite")
+	}
+	kitsu.fail = true
+	if _, err := svc.lib.ToggleFavourite(ctx, titleID); err != nil {
+		t.Fatal(err)
+	}
+	sync()
+	kitsu.fail = false
+	sync()
+	if local() || kitsu.favs["9"] {
+		t.Fatalf("local removal undone or not pushed: local=%v remote=%v", local(), kitsu.favs["9"])
+	}
+	kitsu.favs["9"] = true
+	sync()
+	if !local() {
+		t.Fatal("a new remote favourite should be pulled")
+	}
+	kitsu.favs["9"] = false
+	sync()
+	if local() {
+		t.Fatal("a remote removal should be pulled")
+	}
+
+	kitsu.favs["9"] = true
+	sync()
+	if err := svc.DisconnectTracker(ctx, 1, catalog.KitsuProvider); err != nil {
+		t.Fatal(err)
+	}
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	kitsu.favs["9"] = false
+	sync()
+	if !local() || !kitsu.favs["9"] {
+		t.Fatalf("a reconnected account must start fresh, not drop the local favourite: local=%v remote=%v", local(), kitsu.favs["9"])
+	}
+}
+
+func TestSearchKeepsStoredRecords(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	mu := newFake(catalog.MangaUpdatesProvider)
+	svc.catalog.providers[catalog.MangaUpdatesProvider] = mu
+	full := catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "55", TitleRomaji: "Solo", Authors: []string{"Chugong"}, Synonyms: []string{"Na Honjaman"}, Status: "FINISHED"}
+	stored, err := svc.catalog.repo.UpsertManga(ctx, full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.search = []catalog.Manga{{Provider: catalog.MangaUpdatesProvider, ProviderID: "55", TitleRomaji: "Solo", Status: "RELEASING"}, {Provider: catalog.MangaUpdatesProvider, ProviderID: "56", TitleRomaji: "New"}}
+	got, _, err := svc.SearchManga(ctx, catalog.MangaUpdatesProvider, "solo", 5, catalog.SearchFilter{})
+	if err != nil || len(got) != 2 || got[0].ID != stored.ID || got[1].ID == 0 {
+		t.Fatalf("results = %+v, %v", got, err)
+	}
+	after, _ := svc.catalog.repo.GetManga(ctx, stored.ID)
+	if after.Status != "FINISHED" || len(after.Authors) != 1 || len(after.Synonyms) != 1 {
+		t.Fatalf("a partial search result overwrote the stored record: %+v", after)
+	}
+}
+
+type barrierProvider struct {
+	*fakeProvider
+	started *sync.WaitGroup
+	outage  string
+	calls   atomic.Int32
+}
+
+func (b *barrierProvider) Outage() string { return b.outage }
+func (b *barrierProvider) ListEntries(ctx context.Context) ([]catalog.Entry, error) {
+	b.calls.Add(1)
+	b.started.Done()
+	done := make(chan struct{})
+	go func() { b.started.Wait(); close(done) }()
+	select {
+	case <-done:
+		return b.fakeProvider.ListEntries(ctx)
+	case <-time.After(2 * time.Second):
+		return nil, errors.New("lists were downloaded one after another")
+	}
+}
+
+func TestTrackerListsDownloadSideBySideAndSkipOutages(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	var started sync.WaitGroup
+	started.Add(2)
+	kitsu := &barrierProvider{fakeProvider: newFake(catalog.KitsuProvider), started: &started}
+	mu := &barrierProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider), started: &started}
+	down := &barrierProvider{fakeProvider: newFake(catalog.AniListProvider), started: &started, outage: "maintenance"}
+	kitsu.entries["1"], mu.entries["2"], down.entries["3"] = catalog.Entry{Status: "CURRENT"}, catalog.Entry{Status: "CURRENT"}, catalog.Entry{Status: "CURRENT"}
+	svc.catalog.providers[catalog.KitsuProvider], svc.catalog.providers[catalog.MangaUpdatesProvider], svc.catalog.providers[catalog.AniListProvider] = kitsu, mu, down
+	for _, p := range []string{catalog.KitsuProvider, catalog.MangaUpdatesProvider, catalog.AniListProvider} {
+		connect(t, svc, ctx, p, time.Now())
+	}
+	if got := svc.TrackerSuggestions(ctx, ""); len(got) != 2 {
+		t.Fatalf("suggestions = %+v, want both reachable lists", got)
+	}
+	if down.calls.Load() != 0 {
+		t.Fatal("a tracker in outage must not be asked for its list")
 	}
 }

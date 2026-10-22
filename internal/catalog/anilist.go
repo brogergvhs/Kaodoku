@@ -335,7 +335,7 @@ func (c *AniListClient) send(ctx context.Context, body []byte) (*http.Response, 
 		bearer(ctx, req.Header)
 		resp, err := c.client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("anilist %w: %w", ErrUnavailable, err)
+			return nil, transportError("anilist", err)
 		}
 		if resp.StatusCode != http.StatusTooManyRequests {
 			return resp, nil

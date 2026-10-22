@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -372,11 +373,13 @@ func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id s
 	if err != nil {
 		return nil, nil, err
 	}
+	now := time.Now()
 	s.relMu.Lock()
 	if s.relCache == nil {
 		s.relCache = map[string]cachedRelated{}
 	}
-	s.relCache[key] = cachedRelated{rel, recs, time.Now().Add(relatedCacheTTL)}
+	maps.DeleteFunc(s.relCache, func(_ string, c cachedRelated) bool { return now.After(c.expires) })
+	s.relCache[key] = cachedRelated{rel, recs, now.Add(relatedCacheTTL)}
 	s.relMu.Unlock()
 	return rel, recs, nil
 }
@@ -506,13 +509,10 @@ func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog
 	for k := range s.LibraryIndex(ctx) {
 		exclude[k] = true
 	}
-	for _, name := range s.connectedTrackers(ctx, uid) {
-		if p, actx, ok := s.trackerSession(ctx, uid, name); ok {
-			entries, _ := p.ListEntries(actx)
-			for _, e := range entries {
-				for _, k := range catalog.Keys(e.Manga) {
-					exclude[k] = true
-				}
+	for _, entries := range s.trackerLists(ctx, uid, s.connectedTrackers(ctx, uid)) {
+		for _, e := range entries {
+			for _, k := range catalog.Keys(e.Manga) {
+				exclude[k] = true
 			}
 		}
 	}
@@ -674,6 +674,9 @@ func (s *JobService) LinkExternalID(ctx context.Context, titleID int64, provider
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM tracker_title_sync WHERE title_id = ? AND provider = ?`, titleID, provider); err != nil {
 			return err
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM tracker_favourites WHERE title_id = ? AND provider = ?`, titleID, provider); err != nil {
+		return err
 	}
 	return s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: provider, ProviderID: id, Method: "user", Confirmed: id != ""})
 }

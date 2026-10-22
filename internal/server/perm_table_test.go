@@ -14,6 +14,7 @@ func TestRequiredPerm(t *testing.T) {
 		method, path, want string
 	}{
 		{"GET", "/library", auth.PermLibraryView},
+		{"GET", "/ui/covers/mangaupdates/55", auth.PermLibraryView},
 		{"POST", "/ui/library/add", auth.PermLibraryAdd},
 		{"POST", "/ui/library/5/remove", auth.PermLibraryManage},
 		{"POST", "/ui/library/5/chapters/9/remove", auth.PermLibraryManage},

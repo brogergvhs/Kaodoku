@@ -362,9 +362,13 @@ func (r *Repository) ToggleFavourite(ctx context.Context, titleID int64) (bool, 
 	return true, err
 }
 
-// SetFavourite marks a title favourite without toggling (AniList pull merge).
-func (r *Repository) SetFavourite(ctx context.Context, userID, titleID int64) error {
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO user_favourites (user_id, title_id) VALUES (?, ?)`, userID, titleID)
+// SetFavourite sets a user's favourite mark without toggling (tracker pull merge).
+func (r *Repository) SetFavourite(ctx context.Context, userID, titleID int64, on bool) error {
+	query := `DELETE FROM user_favourites WHERE user_id = ? AND title_id = ?`
+	if on {
+		query = `INSERT OR IGNORE INTO user_favourites (user_id, title_id) VALUES (?, ?)`
+	}
+	_, err := r.db.ExecContext(ctx, query, userID, titleID)
 	return err
 }
 
@@ -1037,7 +1041,7 @@ func (r *Repository) MarkChapterRangeRead(ctx context.Context, titleID int64, fr
 }
 
 // MarkChaptersReadThrough marks every chapter with number <= maxNumber as
-// read for the acting user, in one transaction (AniList pull-merge).
+// read for the acting user, in one transaction (tracker pull-merge).
 func (r *Repository) MarkChaptersReadThrough(ctx context.Context, titleID int64, maxNumber int) (int, error) {
 	chapters, err := r.ListChapters(ctx, titleID)
 	if err != nil {

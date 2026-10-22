@@ -80,7 +80,7 @@
 
   <div class="rounded-xl bg-base-100 p-4 mb-4">
     <h3 class="text-sm font-semibold text-base-content/70 mb-1">Reading time</h3>
-    <p class="text-xs text-base-content/50 mb-3">Only page-by-page reading in the app is timed; bulk/AniList-marked chapters are excluded. Time per page differs between book-paged manga and long-strip webtoons, so dwell is reported per cohort and the headline is per chapter.</p>
+    <p class="text-xs text-base-content/50 mb-3">Only page-by-page reading in the app is timed; bulk- and tracker-marked chapters are excluded. Time per page differs between book-paged manga and long-strip webtoons, so dwell is reported per cohort and the headline is per chapter.</p>
     <div class="grid gap-4 sm:grid-cols-3 text-sm">
       <div><div class="text-2xl font-bold">≈{{f1 .P.M.ReadingTime.MinutesPerChapter}}<span class="text-base-content/40 text-base"> min</span></div><div class="text-base-content/60">per chapter (all formats)</div></div>
       <div><div class="text-2xl font-bold">≈{{f1 .P.M.ReadingTime.PagedSecPerPage}}<span class="text-base-content/40 text-base"> s</span></div><div class="text-base-content/60">per book page · {{.P.M.ReadingTime.PagedChapters}} chapters</div></div>

@@ -434,6 +434,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/import/candidates", u.importCandidates)
 	mux.HandleFunc("GET /ui/import/titles", u.importTitleOptions)
 	mux.HandleFunc("GET /ui/library/{id}/related", u.relatedManga)
+	mux.HandleFunc("GET /ui/covers/{provider}/{id}", u.catalogCover)
 	mux.HandleFunc("GET /ui/search/trending", u.trendingManga)
 	mux.HandleFunc("GET /anilist/connect", u.trackerConnect)
 	mux.HandleFunc("GET /anilist/callback", u.trackerCallback)
@@ -624,6 +625,18 @@ func (u *webUI) trendingManga(w http.ResponseWriter, r *http.Request) {
 func (u *webUI) guardedBrowse(ctx context.Context, c searchControls) mangaResults {
 	items := guardedBrowseManga(ctx, u.svc, c.Provider, c.Sort, c.Dir)
 	return u.mangaResultsView(ctx, "", c.View, items)
+}
+
+// searchFilter turns the picked tags, the sort and the acting user's guards into a provider filter.
+func searchFilter(ctx context.Context, options []catalog.ContentTag, query, sort, dir string, include, exclude []string) catalog.SearchFilter {
+	f := catalog.SearchFilter{Sort: anilistSort(sort, dir)}
+	if query == "" && f.Sort == "" {
+		f.Sort = "POPULARITY_DESC"
+	}
+	f.GenreIn, f.TagIn = splitByKind(include, options)
+	f.GenreNotIn, f.TagNotIn = splitByKind(exclude, options)
+	excludeBlocked(ctx, &f, options)
+	return f
 }
 
 // excludeBlocked asks the provider to leave out the acting user's blocked and adult tags, so pages aren't emptied by the local guard.
@@ -3134,15 +3147,7 @@ func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 	if page < 1 {
 		page = 1
 	}
-	filter := catalog.SearchFilter{Sort: anilistSort(c.Sort, c.Dir)}
-	if c.Q == "" && filter.Sort == "" {
-		filter.Sort = "POPULARITY_DESC"
-	}
-	if filtered {
-		filter.GenreIn, filter.TagIn = splitByKind(c.IncludeTags, options)
-		filter.GenreNotIn, filter.TagNotIn = splitByKind(c.ExcludeTags, options)
-	}
-	excludeBlocked(r.Context(), &filter, options)
+	filter := searchFilter(r.Context(), options, c.Q, c.Sort, c.Dir, c.IncludeTags, c.ExcludeTags)
 	view := searchResultsView{Controls: c, View: c.View, Append: page > 1}
 	if c.Q == "" && !filtered && c.Sort == "" {
 		pool, _ := u.svc.ProviderSuggestions(r.Context(), c.Provider)
@@ -4172,6 +4177,24 @@ func secretSetting(key string) bool {
 	return key == service.SettingAniListClientSecret || key == service.SettingMALClientSecret
 }
 
+// coverURL falls back to the cover route, which fetches the work's details once, for records that came without one.
+func coverURL(m catalog.Manga) string {
+	if m.CoverImage != "" || m.ProviderID == "" {
+		return m.CoverImage
+	}
+	return "/ui/covers/" + url.PathEscape(m.Provider) + "/" + url.PathEscape(m.ProviderID)
+}
+
+func (u *webUI) catalogCover(w http.ResponseWriter, r *http.Request) {
+	m, err := u.svc.CatalogManga(r.Context(), r.PathValue("provider"), r.PathValue("id"))
+	if err != nil || !strings.HasPrefix(m.CoverImage, "https://") || !contentAllowed(r.Context(), m.IsAdult, mangaContentTags(m)) {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	http.Redirect(w, r, m.CoverImage, http.StatusFound)
+}
+
 func mangaURL(m catalog.Manga) string {
 	if m.Provider == catalog.AniListProvider || m.Provider == "" {
 		return "/manga/" + m.ProviderID
@@ -4402,6 +4425,7 @@ func (u *webUI) funcs() template.FuncMap {
 		},
 		"mangaTitle":  mangaTitle,
 		"mangaURL":    mangaURL,
+		"coverURL":    coverURL,
 		"providerURL": catalog.MangaURL,
 		"providerLabel": func(name string) string {
 			if u.svc == nil {
@@ -4460,7 +4484,7 @@ func (u *webUI) funcs() template.FuncMap {
 		"globalJobs": func() []map[string]string {
 			out := make([]map[string]string, 0, len(globalJobTypes))
 			for _, typ := range globalJobTypes {
-				out = append(out, map[string]string{"Type": typ, "Label": jobLabel(typ)})
+				out = append(out, map[string]string{"Type": typ, "Label": jobLabel(typ), "Desc": jobDesc(typ)})
 			}
 			return out
 		},
@@ -4580,6 +4604,26 @@ func mangaTitle(m catalog.Manga) string {
 		}
 	}
 	return "Untitled"
+}
+
+func jobDesc(typ string) string {
+	switch typ {
+	case jobs.TypeRefreshTitle:
+		return "Checks monitored titles with a linked source for new chapters, skipping ones checked recently."
+	case jobs.TypeScanDownloads:
+		return "Re-reads the download folders to see which chapters are on disk."
+	case jobs.TypeDownloadMissing:
+		return "Downloads chapters that monitored titles are still missing."
+	case jobs.TypeDetectCrops:
+		return "Measures page margins in downloaded chapters so the reader can trim them. Skips long-strip titles."
+	case jobs.TypeCatalogRefresh:
+		return "Re-fetches metadata for library titles and the tags and genres of every enabled tracker."
+	case jobs.TypeSyncTrackers:
+		return "Syncs reading progress with every user's connected trackers."
+	case jobs.TypeBackupUserData:
+		return "Saves progress, settings, users and library metadata to a backup file."
+	}
+	return ""
 }
 
 func jobLabel(typ string) string {

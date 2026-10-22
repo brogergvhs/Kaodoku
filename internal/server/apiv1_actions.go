@@ -580,16 +580,9 @@ func toSearchItems(views []searchResultView) []searchItemDTO {
 func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	term := strings.TrimSpace(q.Get("q"))
-	include, exclude := splitCSV(q.Get("include_tags")), splitCSV(q.Get("exclude_tags"))
-	filter := catalog.SearchFilter{Sort: anilistSort(q.Get("sort"), q.Get("dir"))}
-	if term == "" && filter.Sort == "" {
-		filter.Sort = "POPULARITY_DESC"
-	}
-	if options, err := a.svc.ProviderTags(r.Context(), cmp.Or(q.Get("provider"), a.svc.DefaultProvider(r.Context()))); err == nil && len(options) > 0 {
-		filter.GenreIn, filter.TagIn = splitByKind(include, options)
-		filter.GenreNotIn, filter.TagNotIn = splitByKind(exclude, options)
-		excludeBlocked(r.Context(), &filter, options)
-	}
+	picked := searchControls{IncludeTags: splitCSV(q.Get("include_tags")), ExcludeTags: splitCSV(q.Get("exclude_tags"))}
+	options, _ := a.svc.ProviderTags(r.Context(), cmp.Or(q.Get("provider"), a.svc.DefaultProvider(r.Context())))
+	filter := searchFilter(r.Context(), options, term, q.Get("sort"), q.Get("dir"), picked.IncludeTags, picked.ExcludeTags)
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page < 1 {
 		page = 1
@@ -604,7 +597,7 @@ func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 			v1err(w, http.StatusBadGateway, "unavailable", err.Error())
 			return
 		}
-		views, more = stripItems(r.Context(), a.svc, fetched), m
+		views, more = stripItems(r.Context(), a.svc, filterManga(fetched, picked)), m
 		if len(views) > 0 || !more {
 			break
 		}

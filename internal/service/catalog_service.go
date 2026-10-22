@@ -57,13 +57,27 @@ func (s *CatalogService) Provider(name string) (catalog.Provider, error) {
 	return nil, fmt.Errorf("unknown provider %q", name)
 }
 
+// Search stores unseen results; known ones keep their stored record, since search results can be partial (no authors or synonyms).
 func (s *CatalogService) Search(ctx context.Context, p catalog.Provider, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {
 	items, more, err := p.Search(ctx, strings.TrimSpace(query), limit, filter)
 	if err != nil {
 		return nil, false, err
 	}
+	ids := make([]string, len(items))
+	for i, item := range items {
+		ids[i] = item.ProviderID
+	}
+	known, err := s.repo.MangaByProviderIDs(ctx, p.Name(), ids)
+	if err != nil {
+		return nil, false, err
+	}
 	out := make([]catalog.Manga, 0, len(items))
 	for _, item := range items {
+		if m, ok := known[item.ProviderID]; ok {
+			item.ID, item.Wanted = m.ID, m.Wanted
+			out = append(out, item)
+			continue
+		}
 		stored, err := s.repo.UpsertManga(ctx, item)
 		if err != nil {
 			return nil, false, err

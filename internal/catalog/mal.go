@@ -164,10 +164,11 @@ func (c *MALClient) Search(ctx context.Context, query string, limit int, f Searc
 	return c.page(ctx, "/manga", q)
 }
 
-// malGenres is MyAnimeList's fixed manga genre list; the official API has no endpoint for it.
-var malGenres = map[string][]string{
-	"genre": {"Action", "Adventure", "Avant Garde", "Award Winning", "Boys Love", "Comedy", "Drama", "Ecchi", "Erotica", "Fantasy", "Girls Love",
-		"Gourmet", "Hentai", "Horror", "Mystery", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Suspense"},
+// malGenres and malTags are MyAnimeList's fixed manga lists; the official API has no endpoint for them.
+var malGenres = []string{"Action", "Adventure", "Avant Garde", "Award Winning", "Boys Love", "Comedy", "Drama", "Ecchi", "Erotica", "Fantasy",
+	"Girls Love", "Gourmet", "Hentai", "Horror", "Mystery", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Suspense"}
+
+var malTags = map[string][]string{
 	"Theme": {"Adult Cast", "Anthropomorphic", "CGDCT", "Childcare", "Combat Sports", "Crossdressing", "Delinquents", "Detective", "Educational",
 		"Gag Humor", "Gore", "Harem", "High Stakes Game", "Historical", "Idols (Female)", "Idols (Male)", "Isekai", "Iyashikei", "Love Polygon",
 		"Love Status Quo", "Magical Sex Shift", "Mahou Shoujo", "Martial Arts", "Mecha", "Medical", "Memoir", "Military", "Music", "Mythology",
@@ -179,13 +180,12 @@ var malGenres = map[string][]string{
 
 func (c *MALClient) TagVocabulary(context.Context) ([]ContentTag, error) {
 	var out []ContentTag
-	for group, names := range malGenres {
+	for _, n := range malGenres {
+		out = append(out, ContentTag{Name: n, Kind: "genre"})
+	}
+	for category, names := range malTags {
 		for _, n := range names {
-			t := ContentTag{Name: n, Kind: "tag", Category: group}
-			if group == "genre" {
-				t.Kind, t.Category = "genre", ""
-			}
-			out = append(out, t)
+			out = append(out, ContentTag{Name: n, Kind: "tag", Category: category})
 		}
 	}
 	return out, nil

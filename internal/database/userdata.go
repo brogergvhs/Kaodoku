@@ -33,6 +33,7 @@ var userDataTables = []string{
 	"library_screens",
 	"user_favourites",
 	"tracker_title_sync",
+	"tracker_favourites",
 }
 
 var restoreClearOnlyTables = []string{
@@ -43,7 +44,6 @@ var restoreClearOnlyTables = []string{
 	"title_source_matches",
 	"catalog_relations",
 	"content_tags",
-	"provider_tags",
 }
 
 func BackupUserData(ctx context.Context, dbPath, outPath string) error {

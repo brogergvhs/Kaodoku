@@ -79,7 +79,7 @@ func (c *restClient) send(ctx context.Context, method, path string, body, out an
 		}
 		resp, err := c.client.Do(req)
 		if err != nil {
-			return fmt.Errorf("%s %w: %w", c.label, ErrUnavailable, err)
+			return transportError(c.label, err)
 		}
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		resp.Body.Close()
