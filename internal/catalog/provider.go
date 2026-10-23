@@ -84,7 +84,7 @@ func (h *health) TakeCalls() map[Call]int64 {
 	return out
 }
 
-var imageHosts = map[string]string{"anilist.co": AniListProvider, "anili.st": AniListProvider, "myanimelist.net": MALProvider, "kitsu.app": KitsuProvider, "kitsu.io": KitsuProvider, "mangaupdates.com": MangaUpdatesProvider}
+var imageHosts = map[string]string{"anilist.co": AniListProvider, "anili.st": AniListProvider, "myanimelist.net": MALProvider, "kitsu.app": KitsuProvider, "kitsu.io": KitsuProvider, "mangaupdates.com": MangaUpdatesProvider, "mangabaka.dev": MangaBakaProvider}
 
 // ImageProvider names the tracker whose servers host an image URL, or "" for any other host.
 func ImageProvider(raw string) string {

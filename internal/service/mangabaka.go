@@ -173,7 +173,7 @@ func (s *JobService) setSuggestion(ctx context.Context, catalogID int64, provide
 		catalogID, provider, id)
 }
 
-// linkLibrary runs MangaBaka linking over every library work.
+// linkLibrary links every library work from MangaBaka and refreshes its details from it.
 func (s *JobService) linkLibrary(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT catalog_manga_id FROM titles WHERE catalog_manga_id IS NOT NULL`)
 	if err != nil {
@@ -195,6 +195,11 @@ func (s *JobService) linkLibrary(ctx context.Context) error {
 	}
 	for chunk := range slices.Chunk(works, 200) {
 		s.mbLink(ctx, chunk)
+	}
+	for _, m := range works {
+		if s.mbRefresh(ctx, &m) {
+			_, _ = s.catalog.repo.UpsertManga(ctx, m)
+		}
 	}
 	return ctx.Err()
 }
@@ -337,7 +342,7 @@ func (s *JobService) mbTrending(ctx context.Context, limit int) []catalog.Manga 
 }
 
 // mbRefresh updates a work's release status and final counts from MangaBaka, filling only blank details, when its
-// data is under 8 days old or aggressive mode is on.
+// data is under 8 days old or aggressive mode is on; aggressive mode also moves its cover to MangaBaka's CDN.
 func (s *JobService) mbRefresh(ctx context.Context, m *catalog.Manga) bool {
 	if !s.mbOn(ctx) {
 		return false
@@ -350,6 +355,9 @@ func (s *JobService) mbRefresh(ctx context.Context, m *catalog.Manga) bool {
 	m.Status = cmp.Or(fresh.Status, m.Status)
 	if sr.Status == "completed" || sr.Status == "cancelled" {
 		m.Chapters, m.Volumes = cmp.Or(fresh.Chapters, m.Chapters), cmp.Or(fresh.Volumes, m.Volumes)
+	}
+	if s.mbAggressive(ctx) {
+		m.CoverImage = cmp.Or(fresh.CoverImage, m.CoverImage)
 	}
 	fresh.Chapters = nil
 	fillBlanks(m, fresh)

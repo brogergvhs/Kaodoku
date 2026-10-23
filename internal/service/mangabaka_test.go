@@ -239,8 +239,8 @@ func TestCatalogRefreshUsesMangaBaka(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := svc.catalog.GetManga(ctx, work.ID)
-	if got.Status != "FINISHED" || got.Chapters == nil || *got.Chapters != 40 || got.CoverImage != "https://s4.anilist.co/a.jpg" || al.calls.Load() != 0 {
-		t.Fatalf("refreshed %+v with %d calls, want MangaBaka's status and count, the old cover, no calls", got, al.calls.Load())
+	if got.Status != "FINISHED" || got.Chapters == nil || *got.Chapters != 40 || !strings.HasPrefix(got.CoverImage, "https://cdn.mangabaka.dev/") || al.calls.Load() != 0 {
+		t.Fatalf("refreshed %+v with %d calls, want MangaBaka's status, count and cover, no calls", got, al.calls.Load())
 	}
 	if err := svc.SetSetting(ctx, SettingMangaBakaAggressive, "false"); err != nil {
 		t.Fatal(err)
