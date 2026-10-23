@@ -128,8 +128,20 @@ struct ChapterProgress: Decodable, Identifiable, Hashable {
   var lastReadAt: String?
 }
 
+struct TitleRating: Decodable {
+  struct Missing: Decodable, Hashable {
+    var provider: String
+    var label: String
+  }
+
+  var rating: Int
+  var from: String?
+  var missing: [Missing]?
+}
+
 struct TitleReadProgress: Decodable {
   var title: Title
+  var rating: TitleRating?
   var manga: MangaDetail?
   var chapters: [ChapterProgress]
   var readChapters: Int
@@ -146,12 +158,22 @@ struct TrackerList: Decodable {
     var connected: Bool
     var name: String?
     var unavailable: String?
+    var settings: TrackerSettings?
     var id: String {
       provider
     }
   }
 
   var items: [Tracker]
+}
+
+struct TrackerSettings: Codable, Hashable {
+  var autoLink: Bool
+  var autoProgressive: Bool
+  var relations: Bool
+  var recommendations: Bool
+  var ratingSync: String
+  var source: String
 }
 
 struct TitleActivity: Decodable {

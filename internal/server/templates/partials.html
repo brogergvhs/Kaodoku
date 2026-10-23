@@ -85,6 +85,11 @@
   {{if .Rating}}<span class="text-sm tabular-nums text-base-content/70">{{.Rating}}/10</span>
   <button type="button" class="btn btn-ghost btn-xs" hx-post="/ui/library/{{.TitleID}}/rating" hx-vals='{"rating":"0"}' hx-target="#title-rating" hx-swap="outerHTML">Clear</button>{{end}}
   {{with .From}}<span class="text-xs text-base-content/50">from {{.}}</span>{{end}}
+  {{range .Missing}}<div class="flex w-full flex-wrap items-center gap-2 text-sm">
+    <span class="text-base-content/70">{{.Label}} has no rating for this title.</span>
+    <button type="button" class="btn btn-xs" hx-post="/ui/library/{{$.TitleID}}/rating/missing" hx-vals='{"provider":"{{.Provider}}","action":"send"}' hx-target="#title-rating" hx-swap="outerHTML">Send {{$.Rating}}/10</button>
+    <button type="button" class="btn btn-ghost btn-xs" hx-post="/ui/library/{{$.TitleID}}/rating/missing" hx-vals='{"provider":"{{.Provider}}","action":"keep"}' hx-target="#title-rating" hx-swap="outerHTML">Keep</button>
+  </div>{{end}}
 </form>
 {{end}}
 

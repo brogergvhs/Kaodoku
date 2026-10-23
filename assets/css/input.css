@@ -264,9 +264,13 @@
     background: color-mix(in srgb, var(--color-info) 14%, transparent);
     color: var(--color-info);
   }
+  .badge-soft.badge-primary {
+    background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+    color: var(--color-primary);
+  }
   .badge-soft:not(.badge-success):not(.badge-warning):not(.badge-error):not(
       .badge-info
-    ) {
+    ):not(.badge-primary) {
     background: var(--color-neutral);
     color: var(--color-base-content);
   }

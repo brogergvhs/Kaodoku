@@ -71,6 +71,37 @@ func (a *apiV1) setFavourite(want bool) http.HandlerFunc {
 	}
 }
 
+func (a *apiV1) setRating(w http.ResponseWriter, r *http.Request) {
+	id, ok := a.guardedTitleID(w, r)
+	var body struct {
+		Rating int `json:"rating"`
+	}
+	if !ok || !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.SetTitleRating(r.Context(), id, body.Rating); err != nil {
+		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, a.svc.TitleRating(r.Context(), id))
+}
+
+func (a *apiV1) answerMissingRating(w http.ResponseWriter, r *http.Request) {
+	id, ok := a.guardedTitleID(w, r)
+	var body struct {
+		Provider string `json:"provider"`
+		Action   string `json:"action"`
+	}
+	if !ok || !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.AnswerMissingRating(r.Context(), id, body.Provider, body.Action == "send"); err != nil {
+		v1err(w, http.StatusBadGateway, "unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, a.svc.TitleRating(r.Context(), id))
+}
+
 func (a *apiV1) patchTitle(w http.ResponseWriter, r *http.Request) {
 	id, ok := a.guardedTitleID(w, r)
 	if !ok {
@@ -474,6 +505,7 @@ func (a *apiV1) trackers(r *http.Request) []trackerDTO {
 		d := trackerDTO{Provider: c.Provider, Label: c.Label, Login: c.Login, Outage: c.Outage}
 		if c.Account != nil {
 			d.Connected, d.Name, d.ExpiresAt, d.LastError = true, c.Account.Name, c.Account.ExpiresAt, c.Account.LastError
+			d.Settings, d.Position = &c.Account.TrackerPrefs, c.Account.Position
 		}
 		out = append(out, d)
 	}
@@ -512,8 +544,34 @@ func (a *apiV1) trackerLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (a *apiV1) anilistSync(w http.ResponseWriter, r *http.Request) {
+func (a *apiV1) syncAllTrackers(w http.ResponseWriter, r *http.Request) {
 	a.syncTrackers(w, r, "")
+}
+
+func (a *apiV1) trackerSettings(w http.ResponseWriter, r *http.Request) {
+	var body service.TrackerPrefs
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.SetTrackerPrefs(r.Context(), r.PathValue("provider"), body); err != nil {
+		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	a.trackersList(w, r)
+}
+
+func (a *apiV1) trackerOrder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Providers []string `json:"providers"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.ReorderTrackers(r.Context(), body.Providers); err != nil {
+		v1err(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	a.trackersList(w, r)
 }
 
 func (a *apiV1) trackerSync(w http.ResponseWriter, r *http.Request) {

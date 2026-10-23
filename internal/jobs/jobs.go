@@ -12,6 +12,7 @@ const (
 	TypeAttachVolumes   = "attach_volumes"
 	TypeVerifySource    = "verify_source"
 	TypeMatchSources    = "match_sources"
+	TypeImportList      = "import_list"
 	TypeBackupUserData  = "backup_user_data"
 	TypeDetectCrops     = "detect_crops"
 )

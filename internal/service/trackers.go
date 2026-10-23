@@ -31,27 +31,32 @@ type TrackerAccount struct {
 	TrackerPrefs
 }
 
-// TrackerPrefs RatingSync is "" to follow progressive sync, "on" or "off"; RatingSource is "kaodoku" or "tracker", whichever wins.
+// TrackerPrefs RatingSync is "" to follow progressive sync, "on" or "off"; Source is "kaodoku" or "tracker",
+// the side progress, favourites and ratings flow from.
 type TrackerPrefs struct {
-	AutoLink, AutoProgressive, Relations, Recommendations bool
-	RatingSync, RatingSource                              string
+	AutoLink        bool   `json:"auto_link"`
+	AutoProgressive bool   `json:"auto_progressive"`
+	Relations       bool   `json:"relations"`
+	Recommendations bool   `json:"recommendations"`
+	RatingSync      string `json:"rating_sync"`
+	Source          string `json:"source"`
 }
 
 const (
-	RatingFromKaodoku = "kaodoku"
-	RatingFromTracker = "tracker"
+	SourceKaodoku = "kaodoku"
+	SourceTracker = "tracker"
 )
 
-// ratingFor is where a title's rating comes from on this tracker, or "" when it does not sync.
+// ratingFor is the source of a title's rating on this tracker, or "" when ratings do not sync.
 func (p TrackerPrefs) ratingFor(progressive bool) string {
 	if p.RatingSync == "on" || p.RatingSync == "" && progressive {
-		return p.RatingSource
+		return p.Source
 	}
 	return ""
 }
 
 func (s *JobService) TrackerAccounts(ctx context.Context, userID int64) []TrackerAccount {
-	rows, err := s.db.QueryContext(ctx, `SELECT provider, remote_name, expires_at, last_error, refresh_token = '', auto_link, auto_progressive, use_relations, use_recommendations, rating_sync, rating_source, position FROM tracker_accounts WHERE user_id = ? ORDER BY created_at, rowid`, userID)
+	rows, err := s.db.QueryContext(ctx, `SELECT provider, remote_name, expires_at, last_error, refresh_token = '', auto_link, auto_progressive, use_relations, use_recommendations, rating_sync, source, position FROM tracker_accounts WHERE user_id = ? ORDER BY created_at, rowid`, userID)
 	if err != nil {
 		return nil
 	}
@@ -60,7 +65,7 @@ func (s *JobService) TrackerAccounts(ctx context.Context, userID int64) []Tracke
 	for rows.Next() {
 		var a TrackerAccount
 		var noRefresh bool
-		if rows.Scan(&a.Provider, &a.Name, &a.ExpiresAt, &a.LastError, &noRefresh, &a.AutoLink, &a.AutoProgressive, &a.Relations, &a.Recommendations, &a.RatingSync, &a.RatingSource, &a.Position) != nil {
+		if rows.Scan(&a.Provider, &a.Name, &a.ExpiresAt, &a.LastError, &noRefresh, &a.AutoLink, &a.AutoProgressive, &a.Relations, &a.Recommendations, &a.RatingSync, &a.Source, &a.Position) != nil {
 			continue
 		}
 		if _, known := s.catalog.providers[a.Provider]; !known {
@@ -85,13 +90,13 @@ func (s *JobService) trackerAccount(ctx context.Context, userID int64, provider 
 }
 
 func (s *JobService) SetTrackerPrefs(ctx context.Context, provider string, p TrackerPrefs) error {
-	p.RatingSource = cmp.Or(p.RatingSource, RatingFromKaodoku)
-	if !slices.Contains([]string{"", "on", "off"}, p.RatingSync) || !slices.Contains([]string{RatingFromKaodoku, RatingFromTracker}, p.RatingSource) {
+	p.Source = cmp.Or(p.Source, SourceKaodoku)
+	if !slices.Contains([]string{"", "on", "off"}, p.RatingSync) || !slices.Contains([]string{SourceKaodoku, SourceTracker}, p.Source) {
 		return fmt.Errorf("unknown rating sync setting")
 	}
 	uid := auth.UserID(ctx)
-	res, err := s.db.ExecContext(ctx, `UPDATE tracker_accounts SET auto_link = ?, auto_progressive = ?, use_relations = ?, use_recommendations = ?, rating_sync = ?, rating_source = ? WHERE user_id = ? AND provider = ?`,
-		p.AutoLink, p.AutoProgressive, p.Relations, p.Recommendations, p.RatingSync, p.RatingSource, uid, provider)
+	res, err := s.db.ExecContext(ctx, `UPDATE tracker_accounts SET auto_link = ?, auto_progressive = ?, use_relations = ?, use_recommendations = ?, rating_sync = ?, source = ? WHERE user_id = ? AND provider = ?`,
+		p.AutoLink, p.AutoProgressive, p.Relations, p.Recommendations, p.RatingSync, p.Source, uid, provider)
 	if err != nil {
 		return err
 	}
@@ -483,10 +488,6 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	if err != nil {
 		return err
 	}
-	syncedFav, err := s.syncedFavourites(ctx, user.ID, p.Name())
-	if err != nil {
-		return err
-	}
 	handle := progress.Register(p.Name() + " sync")
 	handle.SetTotal(len(tracked))
 	defer handle.MarkDone()
@@ -496,15 +497,21 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 		n++
 		handle.Update(n, len(tracked), 0)
 		on, t := enabled(titleID), byID[titleID]
-		rating := a.ratingFor(on)
+		push, pull, rating := on && a.Source == SourceKaodoku, on && a.Source == SourceTracker, a.ratingFor(on)
 		if !on && rating == "" || !contentAllowedFor(user, t.IsAdult, t.ContentTags) {
 			continue
 		}
-		if canFav && on {
-			errs = append(errs, s.mergeFavourite(ctx, actx, fav, user.ID, titleID, p.Name(), pid, localFav[pid], remoteFav[pid], syncedFav))
+		switch {
+		case !canFav || localFav[pid] == remoteFav[pid]:
+		case push:
+			if err := fav.ToggleFavourite(actx, pid); err != nil {
+				errs = append(errs, fmt.Errorf("favourite %s: %w", pid, err))
+			}
+		case pull && s.sourceLeader(ctx, user.ID, titleID) == p.Name():
+			errs = append(errs, s.lib.SetFavourite(ctx, user.ID, titleID, remoteFav[pid]))
 		}
 		e, listed := remote[pid]
-		if on && listed && e.Progress > 0 {
+		if pull && listed && e.Progress > 0 {
 			local, _, err := s.localTrackerState(ctx, user.ID, titleID)
 			if err != nil {
 				errs = append(errs, err)
@@ -522,11 +529,11 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 		}
 		score := s.syncRating(ctx, user.ID, titleID, p.Name(), rating, e.Score)
 		if !listed && score == 0 {
-			if _, status, err := s.localTrackerState(ctx, user.ID, titleID); !on || err == nil && status == "PLANNING" && !ownsTitle(user.ID, owners[titleID]) {
+			if _, status, err := s.localTrackerState(ctx, user.ID, titleID); !push || err == nil && status == "PLANNING" && !ownsTitle(user.ID, owners[titleID]) {
 				continue
 			}
 		}
-		if err := s.pushEntry(ctx, actx, p, pid, user.ID, titleID, e, listed, on, false, score); err != nil {
+		if err := s.pushEntry(ctx, actx, p, pid, user.ID, titleID, e, listed, push, false, score); err != nil {
 			errs = append(errs, fmt.Errorf("push %s: %w", pid, err))
 		}
 	}
@@ -683,7 +690,7 @@ func (s *JobService) pushTitle(ctx context.Context, userID, titleID int64, progr
 	var names []string
 	ratings := map[string]string{}
 	for _, t := range s.titleSyncs(ctx, userID, titleID) {
-		if progress && t.progress || !progress && t.rating == RatingFromKaodoku {
+		if progress && t.progress && t.source == SourceKaodoku || !progress && t.rating == SourceKaodoku {
 			names, ratings[t.provider] = append(names, t.provider), t.rating
 		}
 	}
@@ -740,7 +747,13 @@ func (s *JobService) pushFavourite(ctx context.Context, userID, titleID int64, w
 	if !ok {
 		return
 	}
-	go s.eachTracker(ctx, userID, s.progressiveTrackers(ctx, userID, titleID), func(actx context.Context, p catalog.Provider) error {
+	var names []string
+	for _, t := range s.titleSyncs(ctx, userID, titleID) {
+		if t.progress && t.source == SourceKaodoku {
+			names = append(names, t.provider)
+		}
+	}
+	go s.eachTracker(ctx, userID, names, func(actx context.Context, p catalog.Provider) error {
 		fav, ok := p.(catalog.Favouriter)
 		id := s.confirmedID(actx, m, p.Name())
 		if !ok || id == "" {
@@ -750,64 +763,13 @@ func (s *JobService) pushFavourite(ctx context.Context, userID, titleID int64, w
 		if err == nil && remote != want {
 			err = fav.ToggleFavourite(actx, id)
 		}
-		if err != nil {
-			return err
-		}
-		return s.markFavouriteSynced(ctx, userID, titleID, p.Name(), want)
+		return err
 	})
 }
 
-// mergeFavourite is a three-way merge against the last state both sides agreed on, so removals win on either side;
-// the first sync of a title keeps a favourite from either side.
-func (s *JobService) mergeFavourite(ctx, actx context.Context, fav catalog.Favouriter, userID, titleID int64, provider, pid string, local, remote bool, synced map[int64]bool) error {
-	want := local
-	if last, known := synced[titleID]; (known && local == last) || (!known && remote) {
-		want = remote
-	}
-	if want != local {
-		if err := s.lib.SetFavourite(ctx, userID, titleID, want); err != nil {
-			return err
-		}
-	}
-	if want != remote {
-		if err := fav.ToggleFavourite(actx, pid); err != nil {
-			return fmt.Errorf("favourite %s: %w", pid, err)
-		}
-	}
-	return s.markFavouriteSynced(ctx, userID, titleID, provider, want)
-}
-
-func (s *JobService) syncedFavourites(ctx context.Context, userID int64, provider string) (map[int64]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT title_id, favourite FROM tracker_favourites WHERE user_id = ? AND provider = ?`, userID, provider)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[int64]bool{}
-	for rows.Next() {
-		var id int64
-		var on bool
-		if err := rows.Scan(&id, &on); err != nil {
-			return nil, err
-		}
-		out[id] = on
-	}
-	return out, rows.Err()
-}
-
-// forgetTrackerState drops the favourite and rating baselines, so the next sync with a (re)connected account starts fresh.
+// forgetTrackerState drops the ratings last seen on a tracker, so a (re)connected account starts fresh.
 func (s *JobService) forgetTrackerState(ctx context.Context, userID int64, provider string) error {
-	for _, table := range []string{"tracker_favourites", "tracker_ratings"} {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM `+table+` WHERE user_id = ? AND provider = ?`, userID, provider); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *JobService) markFavouriteSynced(ctx context.Context, userID, titleID int64, provider string, on bool) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tracker_favourites (user_id, title_id, provider, favourite) VALUES (?, ?, ?, ?)
-		ON CONFLICT(user_id, title_id, provider) DO UPDATE SET favourite = excluded.favourite`, userID, titleID, provider, on)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM tracker_ratings WHERE user_id = ? AND provider = ?`, userID, provider)
 	return err
 }
 
@@ -852,7 +814,10 @@ func (s *JobService) SyncTrackersTitle(ctx context.Context, titleID int64, provi
 	if !ok {
 		return fmt.Errorf("title has no catalog entry")
 	}
-	ratings := map[string]string{}
+	sources, ratings := map[string]string{}, map[string]string{}
+	for _, a := range s.TrackerAccounts(ctx, userID) {
+		sources[a.Provider] = a.Source
+	}
 	for _, t := range s.titleSyncs(ctx, userID, titleID) {
 		ratings[t.provider] = t.rating
 	}
@@ -868,7 +833,7 @@ func (s *JobService) SyncTrackersTitle(ctx context.Context, titleID int64, provi
 			continue
 		}
 		linked++
-		errs = append(errs, s.trackerAuthError(ctx, userID, name, s.syncTitle(ctx, actx, p, id, userID, titleID, ratings[name])))
+		errs = append(errs, s.trackerAuthError(ctx, userID, name, s.syncTitle(ctx, actx, p, id, userID, titleID, sources[name], ratings[name])))
 	}
 	if linked == 0 {
 		return fmt.Errorf("title is not linked on any connected tracker")
@@ -893,9 +858,9 @@ func (s *JobService) SetProgressiveSync(ctx context.Context, titleID int64, prov
 }
 
 type titleSync struct {
-	provider, rating string
-	progress         bool
-	position         int
+	provider, rating, source string
+	progress                 bool
+	position                 int
 }
 
 // titleSyncs lists the trackers syncing a title's progress or rating.
@@ -907,7 +872,7 @@ func (s *JobService) titleSyncs(ctx context.Context, userID, titleID int64) []ti
 		}
 		on := a.AutoProgressive
 		_ = s.db.QueryRowContext(ctx, `SELECT enabled FROM tracker_title_sync WHERE user_id = ? AND title_id = ? AND provider = ?`, userID, titleID, a.Provider).Scan(&on)
-		if t := (titleSync{a.Provider, a.ratingFor(on), on, a.Position}); t.progress || t.rating != "" {
+		if t := (titleSync{a.Provider, a.ratingFor(on), a.Source, on, a.Position}); t.progress || t.rating != "" {
 			out = append(out, t)
 		}
 	}
@@ -925,11 +890,18 @@ func (s *JobService) progressiveTrackers(ctx context.Context, userID, titleID in
 }
 
 type TitleRating struct {
-	Rating int
-	From   string
+	Rating  int           `json:"rating"`
+	From    string        `json:"from,omitempty"`
+	Missing []ProviderRef `json:"missing,omitempty"`
 }
 
-// TitleRating is the acting user's rating, 0 for none, and the tracker it is taken from when one leads it.
+type ProviderRef struct {
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+}
+
+// TitleRating is the acting user's rating, 0 for none, the tracker it is taken from when one leads it,
+// and the leading trackers with no rating for it that still need an answer.
 func (s *JobService) TitleRating(ctx context.Context, titleID int64) TitleRating {
 	uid := auth.UserID(ctx)
 	r, _ := s.userRating(ctx, uid, titleID)
@@ -937,7 +909,76 @@ func (s *JobService) TitleRating(ctx context.Context, titleID int64) TitleRating
 	if p, _ := s.ratingLeader(ctx, uid, titleID); p != "" {
 		out.From = s.ProviderLabel(p)
 	}
+	for _, t := range s.titleSyncs(ctx, uid, titleID) {
+		if t.rating == SourceTracker && r > 0 && s.unratedOn(ctx, uid, titleID, t.provider) {
+			out.Missing = append(out.Missing, ProviderRef{t.provider, s.ProviderLabel(t.provider)})
+		}
+	}
 	return out
+}
+
+func (s *JobService) unratedOn(ctx context.Context, userID, titleID int64, provider string) bool {
+	var n int
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tracker_ratings WHERE user_id = ? AND title_id = ? AND provider = ? AND rating = 0 AND choice = ''`, userID, titleID, provider).Scan(&n)
+	return n > 0
+}
+
+type MissingRating struct {
+	library.Title
+	Rating int
+}
+
+// MissingRatings lists titles rated in Kaodoku that a tracker leading their ratings has none for.
+func (s *JobService) MissingRatings(ctx context.Context, provider string) ([]MissingRating, error) {
+	uid := auth.UserID(ctx)
+	rows, err := s.db.QueryContext(ctx, `SELECT ur.title_id, ur.rating FROM tracker_ratings tr JOIN user_ratings ur ON ur.user_id = tr.user_id AND ur.title_id = tr.title_id
+		WHERE tr.user_id = ? AND tr.provider = ? AND tr.rating = 0 AND tr.choice = '' AND ur.rating > 0`, uid, provider)
+	if err != nil {
+		return nil, err
+	}
+	ratings := map[int64]int{}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		var r int
+		if rows.Scan(&id, &r) == nil {
+			ids, ratings[id] = append(ids, id), r
+		}
+	}
+	rows.Close()
+	titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
+	var out []MissingRating
+	for _, t := range titles {
+		if slices.ContainsFunc(s.titleSyncs(ctx, uid, t.ID), func(ts titleSync) bool { return ts.provider == provider && ts.rating == SourceTracker }) {
+			out = append(out, MissingRating{t, ratings[t.ID]})
+		}
+	}
+	slices.SortFunc(out, func(a, b MissingRating) int {
+		return strings.Compare(strings.ToLower(a.DisplayTitle), strings.ToLower(b.DisplayTitle))
+	})
+	return out, err
+}
+
+// AnswerMissingRating sends the Kaodoku rating to a tracker that has none, or keeps it unrated there.
+func (s *JobService) AnswerMissingRating(ctx context.Context, titleID int64, provider string, send bool) error {
+	uid := auth.UserID(ctx)
+	if !send {
+		_, err := s.db.ExecContext(ctx, `UPDATE tracker_ratings SET choice = 'keep' WHERE user_id = ? AND title_id = ? AND provider = ?`, uid, titleID, provider)
+		return err
+	}
+	ctx = catalog.WithReason(ctx, "Rating push")
+	m, ok := s.titleWork(ctx, titleID)
+	p, actx, connected := s.trackerSession(ctx, uid, provider)
+	id := s.confirmedID(ctx, m, provider)
+	if !ok || !connected || id == "" {
+		return fmt.Errorf("%s is not linked for this title", s.ProviderLabel(provider))
+	}
+	r, _ := s.userRating(ctx, uid, titleID)
+	remote, found, err := p.GetEntry(actx, id)
+	if err != nil {
+		return s.trackerAuthError(ctx, uid, provider, err)
+	}
+	return s.trackerAuthError(ctx, uid, provider, s.pushEntry(ctx, actx, p, id, uid, titleID, remote, found, false, false, r))
 }
 
 // SetTitleRating stores the acting user's rating, 0 for none, and sends it to the trackers kaodoku leads.
@@ -947,6 +988,9 @@ func (s *JobService) SetTitleRating(ctx context.Context, titleID int64, rating i
 	}
 	uid := auth.UserID(ctx)
 	if err := s.storeRating(ctx, uid, titleID, rating); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE tracker_ratings SET choice = '' WHERE user_id = ? AND title_id = ?`, uid, titleID); err != nil {
 		return err
 	}
 	go s.pushTitle(context.WithoutCancel(ctx), uid, titleID, false, false)
@@ -965,7 +1009,7 @@ func (s *JobService) syncRating(ctx context.Context, userID, titleID int64, prov
 	case remote < 0 && known:
 		remote = seen
 	}
-	if from == RatingFromTracker {
+	if from == SourceTracker {
 		if p, r := s.ratingLeader(ctx, userID, titleID); p != "" {
 			if local, set := s.userRating(ctx, userID, titleID); (!set || local != r) && s.storeRating(ctx, userID, titleID, r) == nil {
 				go s.pushTitle(context.WithoutCancel(ctx), userID, titleID, false, false)
@@ -980,11 +1024,22 @@ func (s *JobService) syncRating(ctx context.Context, userID, titleID int64, prov
 	return cmp.Or(local, catalog.ScoreClear)
 }
 
+// sourceLeader is the tracker that is the source of a title it syncs and comes first in the user's precedence.
+func (s *JobService) sourceLeader(ctx context.Context, userID, titleID int64) string {
+	leader, first := "", 0
+	for _, t := range s.titleSyncs(ctx, userID, titleID) {
+		if t.progress && t.source == SourceTracker && (leader == "" || t.position < first) {
+			leader, first = t.provider, t.position
+		}
+	}
+	return leader
+}
+
 // ratingLeader is the tracker ratings come from that holds a rating for the title and comes first in the user's precedence.
 func (s *JobService) ratingLeader(ctx context.Context, userID, titleID int64) (string, int) {
 	leader, rating, first := "", 0, 0
 	for _, t := range s.titleSyncs(ctx, userID, titleID) {
-		if r, ok := s.trackerRating(ctx, userID, titleID, t.provider); t.rating == RatingFromTracker && ok && r > 0 && (leader == "" || t.position < first) {
+		if r, ok := s.trackerRating(ctx, userID, titleID, t.provider); t.rating == SourceTracker && ok && r > 0 && (leader == "" || t.position < first) {
 			leader, rating, first = t.provider, r, t.position
 		}
 	}
@@ -1040,20 +1095,20 @@ func (s *JobService) progressiveTitles(ctx context.Context, userID int64, provid
 	}, rows.Err()
 }
 
-func (s *JobService) syncTitle(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64, rating string) error {
+func (s *JobService) syncTitle(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64, source, rating string) error {
 	remote, found, err := p.GetEntry(actx, id)
 	if err != nil {
 		return err
 	}
 	if local, _, err := s.localTrackerState(ctx, userID, titleID); err != nil {
 		return err
-	} else if found && remote.Progress > local {
+	} else if source == SourceTracker && found && remote.Progress > local {
 		if _, err := s.lib.MarkChaptersReadThrough(ctx, titleID, remote.Progress); err != nil {
 			return err
 		}
 	}
 	score := s.syncRating(ctx, userID, titleID, p.Name(), rating, remote.Score)
-	return s.pushEntry(ctx, actx, p, id, userID, titleID, remote, found, true, false, score)
+	return s.pushEntry(ctx, actx, p, id, userID, titleID, remote, found, source == SourceKaodoku, false, score)
 }
 
 // TrackerSuggestions merges the user's lists on provider, or on every reachable connected tracker when empty.
@@ -1187,6 +1242,7 @@ func (s *JobService) storeList(ctx context.Context, uid int64, provider string, 
 	if data, err := json.Marshal(entries); err == nil {
 		_, _ = s.db.ExecContext(ctx, `UPDATE tracker_accounts SET list_json = ?, list_fetched_at = ? WHERE user_id = ? AND provider = ?`, data, database.FormatTime(now), uid, provider)
 	}
+	s.trimLists(ctx)
 }
 
 // ProviderSuggestions approximates a backend's own suggestions from community
@@ -1242,6 +1298,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 		s.sugCache = map[string]cachedRecs{}
 	}
 	s.sugCache[key] = cachedRecs{items: items, expires: time.Now().Add(recommendationTTL)}
+	trimOldest(s.sugCache, s.cacheLimit(ctx, SettingCacheRecs), cachedRecs.expiry)
 	s.recMu.Unlock()
 	return items, true
 }

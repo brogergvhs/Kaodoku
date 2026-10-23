@@ -17,12 +17,14 @@ import (
 
 // CatalogService owns metadata providers, the local catalog and matching catalog works to download sources.
 type CatalogService struct {
-	repo      *catalog.Repository
-	sources   *sources.Repository
-	library   *library.Repository
-	providers map[string]catalog.Provider
-	searchMu  sync.Mutex
-	searches  map[string]cachedSearch
+	db          database.Handle
+	repo        *catalog.Repository
+	sources     *sources.Repository
+	library     *library.Repository
+	providers   map[string]catalog.Provider
+	searchMu    sync.Mutex
+	searches    map[string]cachedSearch
+	searchLimit func(context.Context) int
 }
 
 type cachedSearch struct {
@@ -51,6 +53,7 @@ func OpenCatalog(ctx context.Context, dbPath string) (*CatalogService, func(), e
 
 func newCatalogService(db database.Handle) *CatalogService {
 	return &CatalogService{
+		db:      db,
 		repo:    catalog.NewRepository(db),
 		sources: sources.NewRepository(db),
 		library: library.NewRepository(db),
@@ -101,6 +104,23 @@ func (s *CatalogService) Search(ctx context.Context, p catalog.Provider, query s
 	return out, more, nil
 }
 
+// FlushRequests adds each tracker's calls since the last flush to today's rows.
+func (s *CatalogService) FlushRequests(ctx context.Context) {
+	day := time.Now().UTC().Format(time.DateOnly)
+	for name, p := range s.providers {
+		c, ok := p.(callCounter)
+		if !ok {
+			continue
+		}
+		for call, n := range c.TakeCalls() {
+			if _, err := s.db.ExecContext(ctx, `INSERT INTO tracker_calls (provider, day, kind, reason, count) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT (provider, day, kind, reason) DO UPDATE SET count = count + excluded.count`, name, day, call.Kind, call.Reason, n); err != nil {
+				c.Count(call, n)
+			}
+		}
+	}
+}
+
 func (s *CatalogService) searchCached(ctx context.Context, p catalog.Provider, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {
 	key := fmt.Sprintf("%s|%q|%d|%#v", p.Name(), query, limit, filter)
 	now := time.Now()
@@ -114,12 +134,17 @@ func (s *CatalogService) searchCached(ctx context.Context, p catalog.Provider, q
 	if err != nil {
 		return nil, false, err
 	}
+	keep := 500
+	if s.searchLimit != nil {
+		keep = s.searchLimit(ctx)
+	}
 	s.searchMu.Lock()
 	if s.searches == nil {
 		s.searches = map[string]cachedSearch{}
 	}
 	maps.DeleteFunc(s.searches, func(_ string, c cachedSearch) bool { return now.After(c.expires) })
 	s.searches[key] = cachedSearch{items, more, now.Add(searchTTL)}
+	trimOldest(s.searches, keep, func(c cachedSearch) time.Time { return c.expires })
 	s.searchMu.Unlock()
 	return items, more, nil
 }

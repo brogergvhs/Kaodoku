@@ -135,6 +135,7 @@ func toMangaDetailDTO(m catalog.Manga) *mangaDetailDTO {
 
 type titleReadProgressDTO struct {
 	Title         titleDTO             `json:"title"`
+	Rating        *service.TitleRating `json:"rating,omitempty"`
 	Manga         *mangaDetailDTO      `json:"manga,omitempty"`
 	Chapters      []chapterProgressDTO `json:"chapters"`
 	ReadChapters  int                  `json:"read_chapters"`

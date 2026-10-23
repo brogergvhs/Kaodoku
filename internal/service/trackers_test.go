@@ -207,7 +207,7 @@ func TestUnauthorizedTrackerDisconnectsOnlyItself(t *testing.T) {
 	}
 }
 
-func TestTrackersConvergeThroughLibrary(t *testing.T) {
+func TestProgressFlowsFromTheSourceSide(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	anilist, mal := newFake(catalog.AniListProvider), newFake(catalog.MALProvider)
 	svc.catalog.providers[catalog.AniListProvider], svc.catalog.providers[catalog.MALProvider] = anilist, mal
@@ -218,20 +218,28 @@ func TestTrackersConvergeThroughLibrary(t *testing.T) {
 	connect(t, svc, ctx, catalog.MALProvider, time.Now())
 	work := catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "1", TitleRomaji: "Berserk", Status: "RELEASING", ExternalIDs: map[string]string{catalog.MALProvider: "10"}}
 	anilist.works["1"] = work
-	seedTitle(t, svc, ctx, work, 8, 0)
+	titleID, _ := seedTitle(t, svc, ctx, work, 8, 0)
+	if err := svc.SetTrackerPrefs(asUser(svc, ctx, t), catalog.MALProvider, TrackerPrefs{Source: SourceTracker}); err != nil {
+		t.Fatal(err)
+	}
 	mal.entries["10"] = catalog.Entry{Progress: 5, Status: "CURRENT"}
-
-	if err := svc.runTrackerSync(ctx, 1, catalog.MALProvider, nil); err != nil {
-		t.Fatalf("mal sync: %v", err)
+	sync := func(name string) {
+		if err := svc.runTrackerSync(ctx, 1, name, nil); err != nil {
+			t.Fatalf("%s sync: %v", name, err)
+		}
 	}
-	if err := svc.runTrackerSync(ctx, 1, catalog.AniListProvider, nil); err != nil {
-		t.Fatalf("anilist sync: %v", err)
-	}
+	sync(catalog.MALProvider)
+	sync(catalog.AniListProvider)
 	if got := anilist.savesCopy(); len(got) != 1 || got[0] != "1:5:CURRENT" {
-		t.Fatalf("anilist saves = %v, want progress pulled from MAL pushed up", got)
+		t.Fatalf("anilist saves = %v, want MAL's progress pushed up", got)
 	}
 	if got := mal.savesCopy(); len(got) != 0 {
-		t.Fatalf("mal saves = %v, want none (already current)", got)
+		t.Fatalf("mal saves = %v, want nothing sent to the source", got)
+	}
+	anilist.entries["1"] = catalog.Entry{Progress: 7, Status: "CURRENT"}
+	sync(catalog.AniListProvider)
+	if progress, _, _ := svc.localTrackerState(ctx, 1, titleID); progress != 5 {
+		t.Fatalf("local progress = %d, want AniList's 7 ignored while Kaodoku is its source", progress)
 	}
 }
 
@@ -315,7 +323,7 @@ func TestTrackerCallsAddUpByReasonAndKind(t *testing.T) {
 	}
 	search := catalog.Call{Kind: "Search", Reason: "Search"}
 	mal.Count(search, 5)
-	svc.flushRequests(ctx)
+	svc.FlushRequests(ctx)
 	mal.Count(search, 3)
 	mal.Count(catalog.Call{Kind: "Details", Reason: "Title page"}, 1)
 	mu.Count(catalog.Call{Kind: "List", Reason: "Tracker sync"}, 2)
@@ -684,58 +692,41 @@ func (f *favProvider) ToggleFavourite(_ context.Context, id string) error {
 	return nil
 }
 
-func TestFavouriteSyncKeepsRemovalsFromEitherSide(t *testing.T) {
+func TestFavouritesFlowFromTheSourceSide(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
 	kitsu := &favProvider{fakeProvider: newFake(catalog.KitsuProvider), favs: map[string]bool{"9": true}}
-	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	al := &favProvider{fakeProvider: newFake(catalog.AniListProvider), favs: map[string]bool{}}
+	svc.catalog.providers[catalog.KitsuProvider], svc.catalog.providers[catalog.AniListProvider] = kitsu, al
 	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
-	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Fav"}, 1, 0)
+	connect(t, svc, ctx, catalog.AniListProvider, time.Now().Add(time.Minute))
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Fav", ExternalIDs: map[string]string{catalog.AniListProvider: "1"}}, 1, 0)
 	local := func() bool {
 		var n int
 		_ = svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_favourites WHERE user_id = 1 AND title_id = ?`, titleID).Scan(&n)
 		return n > 0
 	}
-	sync := func() {
-		t.Helper()
-		_ = svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil)
-	}
+	sync := func(name string) { _ = svc.runTrackerSync(ctx, 1, name, nil) }
 
-	sync()
-	if !local() {
-		t.Fatal("first sync should pull the remote favourite")
-	}
-	kitsu.fail = true
-	if _, err := svc.lib.ToggleFavourite(ctx, titleID); err != nil {
-		t.Fatal(err)
-	}
-	sync()
-	kitsu.fail = false
-	sync()
+	sync(catalog.KitsuProvider)
 	if local() || kitsu.favs["9"] {
-		t.Fatalf("local removal undone or not pushed: local=%v remote=%v", local(), kitsu.favs["9"])
+		t.Fatalf("Kaodoku leads: local=%v remote=%v, want Kaodoku's unfavourited state pushed", local(), kitsu.favs["9"])
+	}
+	for _, name := range []string{catalog.KitsuProvider, catalog.AniListProvider} {
+		if err := svc.SetTrackerPrefs(ctx, name, TrackerPrefs{Source: SourceTracker}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	kitsu.favs["9"] = true
-	sync()
-	if !local() {
-		t.Fatal("a new remote favourite should be pulled")
+	sync(catalog.KitsuProvider)
+	sync(catalog.AniListProvider)
+	if !local() || al.favs["1"] {
+		t.Fatalf("Kitsu leads first: local=%v anilist=%v, want Kitsu's favourite and AniList untouched", local(), al.favs["1"])
 	}
 	kitsu.favs["9"] = false
-	sync()
+	sync(catalog.KitsuProvider)
 	if local() {
-		t.Fatal("a remote removal should be pulled")
-	}
-
-	kitsu.favs["9"] = true
-	sync()
-	if err := svc.DisconnectTracker(ctx, 1, catalog.KitsuProvider); err != nil {
-		t.Fatal(err)
-	}
-	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
-	kitsu.favs["9"] = false
-	sync()
-	if !local() || !kitsu.favs["9"] {
-		t.Fatalf("a reconnected account must start fresh, not drop the local favourite: local=%v remote=%v", local(), kitsu.favs["9"])
+		t.Fatal("a removal on the source should be pulled")
 	}
 }
 
@@ -930,7 +921,7 @@ func TestRatingsFollowEachTrackersLeadAndOrder(t *testing.T) {
 	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "1", TitleRomaji: "Rated", ExternalIDs: map[string]string{catalog.KitsuProvider: "1", catalog.MangaUpdatesProvider: "1"}}, 3, 1)
 	uctx := asUser(svc, ctx, t)
 	for _, name := range []string{catalog.AniListProvider, catalog.KitsuProvider} {
-		if err := svc.SetTrackerPrefs(uctx, name, TrackerPrefs{RatingSource: RatingFromTracker}); err != nil {
+		if err := svc.SetTrackerPrefs(uctx, name, TrackerPrefs{Source: SourceTracker}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -942,7 +933,7 @@ func TestRatingsFollowEachTrackersLeadAndOrder(t *testing.T) {
 		}
 	}
 	sync(catalog.KitsuProvider, catalog.AniListProvider, catalog.MangaUpdatesProvider)
-	if got := svc.TitleRating(uctx, titleID); got != (TitleRating{8, "AniList"}) || len(al.savesCopy())+len(kitsu.savesCopy()) != 0 {
+	if got := svc.TitleRating(uctx, titleID); got.Rating != 8 || got.From != "AniList" || len(al.savesCopy())+len(kitsu.savesCopy()) != 0 {
 		t.Fatalf("rating = %+v, tracker-led saves %v %v; want AniList's 8 and nothing sent to the leaders", got, al.savesCopy(), kitsu.savesCopy())
 	}
 	waitFor(t, func() bool { saves := mu.savesCopy(); return len(saves) > 0 && saves[len(saves)-1] == "1:-1::score=8" }, "MangaUpdates should end at AniList's 8")
@@ -955,7 +946,7 @@ func TestRatingsFollowEachTrackersLeadAndOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	sync(catalog.AniListProvider)
-	if got := svc.TitleRating(uctx, titleID); got != (TitleRating{6, "Kitsu"}) {
+	if got := svc.TitleRating(uctx, titleID); got.Rating != 6 || got.From != "Kitsu" {
 		t.Fatalf("after moving Kitsu up: rating %+v, want Kitsu's 6", got)
 	}
 	waitFor(t, func() bool { saves := mu.savesCopy(); return saves[len(saves)-1] == "1:-1::score=6" }, "the new rating should reach MangaUpdates right away")
@@ -986,5 +977,45 @@ func TestKaodokuLedRatingsPushOnlyWhatWasSet(t *testing.T) {
 	}
 	if got := fmt.Sprint(kitsu.savesCopy()); got != "[9:-1::score=9 9:-1::score=-1]" {
 		t.Fatalf("saves = %s, want the rating set then cleared without progress", got)
+	}
+}
+
+func TestMissingRatingsAreAskedUntilAnswered(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	kitsu := newFake(catalog.KitsuProvider)
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	kitsu.entries["9"] = catalog.Entry{Progress: 1, Status: "CURRENT"}
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Rated"}, 3, 1)
+	uctx := asUser(svc, ctx, t)
+	if err := svc.SetTrackerPrefs(uctx, catalog.KitsuProvider, TrackerPrefs{Source: SourceTracker}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.storeRating(ctx, 1, titleID, 7); err != nil {
+		t.Fatal(err)
+	}
+	sync := func() {
+		if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	missing := func() bool {
+		list, _ := svc.MissingRatings(uctx, catalog.KitsuProvider)
+		return len(svc.TitleRating(uctx, titleID).Missing) == 1 && len(list) == 1
+	}
+	sync()
+	if !missing() {
+		t.Fatal("an unrated title on the source should be flagged")
+	}
+	if err := svc.AnswerMissingRating(uctx, titleID, catalog.KitsuProvider, true); err != nil || fmt.Sprint(kitsu.savesCopy()) != "[9:-1::score=7]" || missing() {
+		t.Fatalf("send: saves %v, err %v, still missing %v", kitsu.savesCopy(), err, missing())
+	}
+	kitsu.entries["9"] = catalog.Entry{Progress: 1, Status: "CURRENT"}
+	sync()
+	if err := svc.AnswerMissingRating(uctx, titleID, catalog.KitsuProvider, false); err != nil || missing() {
+		t.Fatalf("keep should stop asking: %v", err)
+	}
+	if err := svc.SetTitleRating(uctx, titleID, 8); err != nil || !missing() {
+		t.Fatalf("a changed rating should ask again: %v", err)
 	}
 }

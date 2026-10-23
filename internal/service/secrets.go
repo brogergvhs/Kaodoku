@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -25,6 +27,7 @@ const encPrefix = "enc:v1:"
 // auto-generated kaodoku.key file next to the database.
 type tokenCipher struct {
 	aead cipher.AEAD
+	key  []byte
 }
 
 func newTokenCipher(dbPath string) (*tokenCipher, error) {
@@ -44,7 +47,7 @@ func cipherFromKey(key []byte) (*tokenCipher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &tokenCipher{aead: aead}, nil
+	return &tokenCipher{aead: aead, key: key}, nil
 }
 
 func keyFilePath(dbPath string) string {
@@ -75,6 +78,13 @@ func loadOrCreateKey(dbPath string) ([]byte, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+// Sign is a short HMAC of v, for URLs only the server should mint.
+func (c *tokenCipher) Sign(v string) string {
+	m := hmac.New(sha256.New, c.key)
+	m.Write([]byte(v))
+	return base64.RawURLEncoding.EncodeToString(m.Sum(nil)[:16])
 }
 
 func (c *tokenCipher) Encrypt(plain string) (string, error) {

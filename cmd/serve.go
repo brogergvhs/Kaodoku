@@ -126,6 +126,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		defer cancel()
 		_ = httpSrv.Shutdown(shutdownCtx)
 		svc.FlushPushes(10 * time.Second)
+		svc.FlushRequests(context.Background())
 	}()
 
 	go svc.WatchProviders(ctx)

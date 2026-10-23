@@ -263,6 +263,7 @@ CREATE TABLE IF NOT EXISTS settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+UPDATE OR IGNORE settings SET key = 'sync.trackers_every' WHERE key = 'sync.anilist_every';
 
 CREATE TABLE IF NOT EXISTS roles (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -344,13 +345,7 @@ CREATE TABLE IF NOT EXISTS tracker_ratings (
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
-CREATE TABLE IF NOT EXISTS tracker_favourites (
-	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
-	provider TEXT NOT NULL,
-	favourite INTEGER NOT NULL,
-	PRIMARY KEY (user_id, title_id, provider)
-);
+DROP TABLE IF EXISTS tracker_favourites;
 
 CREATE TABLE IF NOT EXISTS catalog_external_ids (
 	catalog_manga_id INTEGER NOT NULL REFERENCES catalog_manga(id) ON DELETE CASCADE,
@@ -478,6 +473,13 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	if oldSource, _, err := txHasColumn(ctx, tx, "tracker_accounts", "rating_source"); err != nil {
+		return err
+	} else if oldSource {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE tracker_accounts RENAME COLUMN rating_source TO source`); err != nil {
+			return err
+		}
+	}
 	for _, col := range []struct{ table, name, def string }{
 		{"jobs", "parent_id", "INTEGER"},
 		{"catalog_manga", "is_adult", "INTEGER NOT NULL DEFAULT 0"},
@@ -491,8 +493,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"tracker_accounts", "use_relations", "INTEGER NOT NULL DEFAULT 1"},
 		{"tracker_accounts", "use_recommendations", "INTEGER NOT NULL DEFAULT 1"},
 		{"tracker_accounts", "rating_sync", "TEXT NOT NULL DEFAULT ''"},
-		{"tracker_accounts", "rating_source", "TEXT NOT NULL DEFAULT 'kaodoku'"},
+		{"tracker_accounts", "source", "TEXT NOT NULL DEFAULT 'kaodoku'"},
 		{"tracker_accounts", "position", "INTEGER NOT NULL DEFAULT 0"},
+		{"tracker_ratings", "choice", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_json", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_fetched_at", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_title_sync", "enabled", "INTEGER NOT NULL DEFAULT 1"},

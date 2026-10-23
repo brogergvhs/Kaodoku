@@ -192,6 +192,12 @@ struct TitleDetailView: View {
 
   private func header(_ p: TitleReadProgress) -> some View {
     VStack(alignment: .leading, spacing: 12) {
+      if let rating = p.rating {
+        RatingRow(rating: rating, set: setRating) { provider, send in
+          post("/api/v1/library/\(titleID)/rating/missing",
+               body: ["provider": provider, "action": send ? "send" : "keep"], done: send ? "Rating sent" : "Kept as is")
+        }
+      }
       TitleProgressBlock(title: p.title)
       if let manga = p.manga {
         MangaDetailBlock(manga: manga)
@@ -321,7 +327,7 @@ struct TitleDetailView: View {
         Button("Sources…", systemImage: "link") { showSources = true }
         if trackersConnected {
           Button("Sync trackers", systemImage: "arrow.triangle.2.circlepath") {
-            post("/api/v1/anilist/sync", body: ["title_id": titleID], done: "Trackers synced")
+            post("/api/v1/trackers/sync", body: ["title_id": titleID], done: "Trackers synced")
           }
         }
         if p.title.linked {
@@ -425,6 +431,16 @@ struct TitleDetailView: View {
     Task {
       _ = try? await api.data(method, "/api/v1/library/\(titleID)/favourite")
       await load()
+    }
+  }
+
+  private func setRating(_ value: Int) {
+    guard let api = app.api else { return }
+    Task {
+      do {
+        _ = try await api.data("PUT", "/api/v1/library/\(titleID)/rating", body: ["rating": value])
+        await load()
+      } catch { note = error.localizedDescription }
     }
   }
 
@@ -690,6 +706,62 @@ struct TitleProgressBlock: View {
       parts.append("\(title.volumeReadCount)/\(title.volumeCount) vols")
     }
     return parts.joined(separator: " · ")
+  }
+}
+
+/// RatingRow is the user's 1–10 rating as five half-tappable stars.
+struct RatingRow: View {
+  let rating: TitleRating
+  let set: (Int) -> Void
+  let answer: (String, Bool) -> Void
+
+  static func symbol(_ star: Int, rating: Int) -> String {
+    rating >= star * 2 ? "star.fill" : rating == star * 2 - 1 ? "star.leadinghalf.filled" : "star"
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        HStack(spacing: 2) {
+          ForEach(1 ... 5, id: \.self) { star in
+            Image(systemName: Self.symbol(star, rating: rating.rating))
+              .foregroundStyle(Theme.warning)
+              .overlay {
+                HStack(spacing: 0) {
+                  Color.clear.contentShape(Rectangle()).onTapGesture { set(star * 2 - 1) }
+                  Color.clear.contentShape(Rectangle()).onTapGesture { set(star * 2) }
+                }
+              }
+          }
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Your rating")
+        .accessibilityValue(rating.rating > 0 ? "\(rating.rating) out of 10" : "None")
+        .accessibilityAdjustableAction { direction in
+          if direction == .increment {
+            set(min(rating.rating + 1, 10))
+          }
+          if direction == .decrement {
+            set(max(rating.rating - 1, 0))
+          }
+        }
+        if rating.rating > 0 {
+          Text("\(rating.rating)/10").font(.subheadline).foregroundStyle(.secondary)
+          Button("Clear") { set(0) }.font(.footnote)
+        }
+        if let from = rating.from {
+          Text("from \(from)").font(.caption).foregroundStyle(.tertiary)
+        }
+      }
+      ForEach(rating.missing ?? [], id: \.self) { m in
+        HStack {
+          Text("\(m.label) has no rating for this title.").font(.caption).foregroundStyle(.secondary)
+          Button("Send \(rating.rating)/10") { answer(m.provider, true) }.font(.caption)
+          Button("Keep") { answer(m.provider, false) }.font(.caption)
+        }
+      }
+    }
+    .buttonStyle(.borderless)
   }
 }
 

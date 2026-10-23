@@ -20,7 +20,6 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/auth"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/service"
-	"github.com/brogergvhs/kaodoku/internal/util"
 )
 
 const maxPageBytes = 64 << 20 // per-image download cap
@@ -80,6 +79,8 @@ func registerAPIV1(mux *http.ServeMux, svc *service.JobService, runJobs func(con
 	mux.HandleFunc("POST /api/v1/reader/titles/{id}/volumes/read-range", a.volumesReadRange)
 
 	mux.HandleFunc("PUT /api/v1/library/{id}/favourite", a.setFavourite(true))
+	mux.HandleFunc("PUT /api/v1/library/{id}/rating", a.setRating)
+	mux.HandleFunc("POST /api/v1/library/{id}/rating/missing", a.answerMissingRating)
 	mux.HandleFunc("DELETE /api/v1/library/{id}/favourite", a.setFavourite(false))
 	mux.HandleFunc("PATCH /api/v1/library/{id}", a.patchTitle)
 	mux.HandleFunc("DELETE /api/v1/library/{id}", a.deleteTitle)
@@ -103,7 +104,10 @@ func registerAPIV1(mux *http.ServeMux, svc *service.JobService, runJobs func(con
 	mux.HandleFunc("GET /api/v1/me/settings", a.meSettingsGet)
 	mux.HandleFunc("PUT /api/v1/me/settings", a.meSettingsPut)
 	mux.HandleFunc("GET /api/v1/anilist", a.anilistStatus)
-	mux.HandleFunc("POST /api/v1/anilist/sync", a.anilistSync)
+	mux.HandleFunc("POST /api/v1/anilist/sync", a.syncAllTrackers)
+	mux.HandleFunc("POST /api/v1/trackers/sync", a.syncAllTrackers)
+	mux.HandleFunc("PUT /api/v1/trackers/order", a.trackerOrder)
+	mux.HandleFunc("PUT /api/v1/trackers/{provider}/settings", a.trackerSettings)
 	mux.HandleFunc("DELETE /api/v1/anilist", a.anilistDisconnect)
 	mux.HandleFunc("GET /api/v1/trackers", a.trackersList)
 	mux.HandleFunc("POST /api/v1/trackers/{provider}/login", a.trackerLogin)
@@ -168,14 +172,16 @@ type meDTO struct {
 }
 
 type trackerDTO struct {
-	Provider  string `json:"provider"`
-	Label     string `json:"label"`
-	Login     string `json:"login,omitempty"`
-	Connected bool   `json:"connected"`
-	Name      string `json:"name,omitempty"`
-	ExpiresAt string `json:"expires_at,omitempty"`
-	LastError string `json:"last_error,omitempty"`
-	Outage    string `json:"unavailable,omitempty"`
+	Provider  string                `json:"provider"`
+	Label     string                `json:"label"`
+	Login     string                `json:"login,omitempty"`
+	Connected bool                  `json:"connected"`
+	Name      string                `json:"name,omitempty"`
+	ExpiresAt string                `json:"expires_at,omitempty"`
+	LastError string                `json:"last_error,omitempty"`
+	Outage    string                `json:"unavailable,omitempty"`
+	Settings  *service.TrackerPrefs `json:"settings,omitempty"`
+	Position  int                   `json:"position"`
 }
 
 type meUserDTO struct {
@@ -212,7 +218,7 @@ func (a *apiV1) meta(w http.ResponseWriter, _ *http.Request) {
 		ServerVersion: serverVersion(),
 		APIVersion:    1,
 		AuthRequired:  authEnabled(),
-		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "anilist", "trackers"},
+		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "anilist", "trackers", "ratings"},
 		ImageFormats:  []string{"jpg", "jpeg", "png", "webp", "gif", "avif"},
 		MaxPageBytes:  maxPageBytes,
 		InstanceID:    a.instanceID,
@@ -303,10 +309,6 @@ func (a *apiV1) revokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
-// coverClient fetches remote covers with the private-network guard so the proxy
-// can't be aimed at internal services.
-var coverClient, _ = util.NewHTTPClient(util.HTTPClientOptions{Timeout: 20 * time.Second, BlockPrivateNetworks: true})
 
 // serveChapterPage streams one page image from a downloaded chapter's CBZ.
 func serveChapterPage(w http.ResponseWriter, r *http.Request, svc *service.JobService) {
@@ -461,27 +463,14 @@ func proxyRemoteImage(w http.ResponseWriter, r *http.Request, svc *service.JobSe
 		http.NotFound(w, r)
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+	data, err := svc.Image(r.Context(), url, reason)
 	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	svc.CountImage(url, reason)
-	resp, err := coverClient.Do(req)
-	if err != nil {
-		http.Error(w, "image fetch failed", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
 		http.Error(w, "image unavailable", http.StatusBadGateway)
 		return
 	}
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
+	w.Header().Set("Content-Type", http.DetectContentType(data))
 	w.Header().Set("Cache-Control", "private, max-age=604800")
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = w.Write(data)
 }
 
 func (a *apiV1) libraryList(w http.ResponseWriter, r *http.Request) {
@@ -593,6 +582,8 @@ func (a *apiV1) readerTitle(w http.ResponseWriter, r *http.Request) {
 			dto.Manga = toMangaDetailDTO(m)
 		}
 	}
+	rating := a.svc.TitleRating(r.Context(), id)
+	dto.Rating = &rating
 	writeJSON(w, http.StatusOK, dto)
 }
 

@@ -33,7 +33,8 @@ var userDataTables = []string{
 	"library_screens",
 	"user_favourites",
 	"tracker_title_sync",
-	"tracker_favourites",
+	"user_ratings",
+	"tracker_ratings",
 }
 
 var restoreClearOnlyTables = []string{

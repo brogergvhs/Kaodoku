@@ -71,6 +71,8 @@ type cachedRecs struct {
 	expires time.Time
 }
 
+func (c cachedRecs) expiry() time.Time { return c.expires }
+
 const recommendationTTL = 6 * time.Hour
 
 // errJobCancelled aborts an in-flight job on explicit user cancellation.
@@ -78,14 +80,15 @@ var errJobCancelled = errors.New("cancelled by user")
 
 // JobPayload is the common payload for background jobs.
 type JobPayload struct {
-	TitleID              int64  `json:"title_id,omitempty"`
-	SourceID             string `json:"source_id,omitempty"`
-	CatalogID            int64  `json:"catalog_id,omitempty"`
-	ResetFailed          bool   `json:"reset_failed,omitempty"`
-	UserID               int64  `json:"user_id,omitempty"`
-	DownloadAfterRefresh bool   `json:"download_after_refresh,omitempty"`
-	Folder               string `json:"folder,omitempty"`
-	Provider             string `json:"provider,omitempty"`
+	TitleID              int64       `json:"title_id,omitempty"`
+	SourceID             string      `json:"source_id,omitempty"`
+	CatalogID            int64       `json:"catalog_id,omitempty"`
+	ResetFailed          bool        `json:"reset_failed,omitempty"`
+	UserID               int64       `json:"user_id,omitempty"`
+	DownloadAfterRefresh bool        `json:"download_after_refresh,omitempty"`
+	Folder               string      `json:"folder,omitempty"`
+	Provider             string      `json:"provider,omitempty"`
+	Import               *ListImport `json:"import,omitempty"`
 }
 
 // RunSummary describes one queue drain.
@@ -119,7 +122,7 @@ const (
 
 	SettingServicesHealthInterval = "services.health_interval"
 
-	SettingServeTrackerSyncEvery = "sync.anilist_every"
+	SettingServeTrackerSyncEvery = "sync.trackers_every"
 	SettingServeCatalogEvery     = "catalog.refresh_every"
 	SettingRateLimitIntervalMS   = "ratelimit.interval_ms"
 	SettingRateLimitBurst        = "ratelimit.burst"
@@ -184,6 +187,14 @@ func SettingDefault(key string) string {
 	case SettingServeCatalogEvery:
 		return "168h" // stale release status would block Completed pushes
 	case SettingRateLimitIntervalMS:
+		return "200"
+	case SettingCacheImagesMB, SettingCacheSearches:
+		return "500"
+	case SettingCacheListsMB:
+		return "50"
+	case SettingCacheRelatedMB:
+		return "100"
+	case SettingCacheRecs:
 		return "200"
 	case SettingRateLimitBurst:
 		return "2"
@@ -254,6 +265,11 @@ func SettingKeys() []string {
 		SettingRateLimitIntervalMS,
 		SettingRateLimitBurst,
 		SettingRateLimitDisabled,
+		SettingCacheImagesMB,
+		SettingCacheListsMB,
+		SettingCacheRelatedMB,
+		SettingCacheSearches,
+		SettingCacheRecs,
 		SettingAniListClientID,
 		SettingAniListClientSecret,
 		SettingMALClientID,
@@ -299,7 +315,7 @@ func ValidateSetting(key, value string) error {
 		if _, err := strconv.ParseBool(value); err != nil {
 			return fmt.Errorf("invalid bool for %s", key)
 		}
-	case SettingRateLimitIntervalMS, SettingRateLimitBurst:
+	case SettingRateLimitIntervalMS, SettingRateLimitBurst, SettingCacheImagesMB, SettingCacheListsMB, SettingCacheRelatedMB, SettingCacheSearches, SettingCacheRecs:
 		if n, err := strconv.Atoi(value); err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative number", key)
 		}
@@ -380,6 +396,7 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 
 	svc := newJobService(db)
 	svc.dbPath = dbPath
+	svc.catalog.searchLimit = func(ctx context.Context) int { return svc.cacheLimit(ctx, SettingCacheSearches) }
 	if svc.secrets, err = newTokenCipher(dbPath); err != nil {
 		_ = db.Close()
 		return nil, nil, err
@@ -991,7 +1008,7 @@ func (s *JobService) RecommendedManga(ctx context.Context, limit int) ([]catalog
 		}
 		// Fallbacks stay uncached so a fresh connect shows up immediately.
 		if personalized {
-			s.cacheRecs(uid, items)
+			s.cacheRecs(ctx, uid, items)
 		}
 	}
 	if len(items) > limit {
@@ -1010,13 +1027,14 @@ func (s *JobService) recsFromCache(uid int64) ([]catalog.Manga, bool) {
 	return append([]catalog.Manga(nil), c.items...), true
 }
 
-func (s *JobService) cacheRecs(uid int64, items []catalog.Manga) {
+func (s *JobService) cacheRecs(ctx context.Context, uid int64, items []catalog.Manga) {
 	s.recMu.Lock()
 	defer s.recMu.Unlock()
 	if s.recCache == nil {
 		s.recCache = map[int64]cachedRecs{}
 	}
 	s.recCache[uid] = cachedRecs{items: append([]catalog.Manga(nil), items...), expires: time.Now().Add(recommendationTTL)}
+	trimOldest(s.recCache, s.cacheLimit(ctx, SettingCacheRecs), cachedRecs.expiry)
 }
 
 // invalidateRecs drops a user's cached recommendations and suggestions on tracker changes.
@@ -1881,6 +1899,9 @@ func (s *JobService) Maintain(ctx context.Context) error {
 			err = errors.Join(err, fmt.Errorf("optimize database: %w", e))
 		}
 	}
+	s.trimImages(int64(s.cacheLimit(ctx, SettingCacheImagesMB)) << 20)
+	s.trimLists(ctx)
+	s.trimRelated(ctx)
 	if pruned > 10000 {
 		if _, e := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); e != nil {
 			err = errors.Join(err, fmt.Errorf("checkpoint database: %w", e))
@@ -2159,6 +2180,8 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 	case jobs.TypeMatchSources:
 		_, err := s.catalog.MatchSources(ctx, cfg, logSvc, payload.CatalogID)
 		return err
+	case jobs.TypeImportList:
+		return s.runListImport(ctx, payload.UserID, payload.Import, progress)
 	default:
 		return fmt.Errorf("unknown job type %q", job.Type)
 	}
@@ -2314,6 +2337,10 @@ func validateJob(typ string, payload JobPayload) error {
 	case jobs.TypeMatchSources:
 		if payload.CatalogID <= 0 {
 			return fmt.Errorf("catalog id is required")
+		}
+	case jobs.TypeImportList:
+		if payload.UserID <= 0 || payload.Import == nil {
+			return fmt.Errorf("user and entries are required")
 		}
 	default:
 		return fmt.Errorf("unknown job type %q", typ)

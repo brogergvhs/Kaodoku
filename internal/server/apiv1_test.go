@@ -331,6 +331,15 @@ func TestAPIV1Actions(t *testing.T) {
 	if rec := do(t, api, http.MethodPut, "/api/v1/library/"+tid+"/favourite", "", nil); rec.Code != http.StatusOK {
 		t.Fatalf("favourite status = %d; %s", rec.Code, rec.Body.String())
 	}
+	if rec := do(t, api, http.MethodPut, "/api/v1/library/"+tid+"/rating", "", map[string]int{"rating": 7}); rec.Code != http.StatusOK {
+		t.Fatalf("rating = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, api, http.MethodGet, "/api/v1/reader/titles/"+tid, "", nil); !strings.Contains(rec.Body.String(), `"rating":{"rating":7}`) {
+		t.Fatalf("reader title misses the rating: %s", rec.Body.String())
+	}
+	if rec := do(t, api, http.MethodPut, "/api/v1/library/"+tid+"/rating", "", map[string]int{"rating": 11}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("out-of-range rating = %d", rec.Code)
+	}
 	var tdto titleDTO
 	rec := do(t, api, http.MethodGet, "/api/v1/library/"+tid, "", nil)
 	_ = json.NewDecoder(rec.Body).Decode(&tdto)
@@ -483,6 +492,7 @@ func TestAPIV1RequiresAuth(t *testing.T) {
 		"POST /api/v1/reader/progress/batch", "POST /api/v1/reader/volumes/1/read",
 		"POST /api/v1/reader/volumes/1/unread", "POST /api/v1/reader/titles/1/volumes/read-range",
 		"PUT /api/v1/library/1/favourite", "DELETE /api/v1/library/1/favourite",
+		"PUT /api/v1/library/1/rating", "POST /api/v1/library/1/rating/missing",
 		"PATCH /api/v1/library/1", "DELETE /api/v1/library/1",
 		"GET /api/v1/collections", "POST /api/v1/collections", "GET /api/v1/collections/1",
 		"PATCH /api/v1/collections/1", "DELETE /api/v1/collections/1",
@@ -492,6 +502,7 @@ func TestAPIV1RequiresAuth(t *testing.T) {
 		"DELETE /api/v1/screens/1", "POST /api/v1/screens/reorder",
 		"GET /api/v1/me/settings", "PUT /api/v1/me/settings",
 		"GET /api/v1/anilist", "POST /api/v1/anilist/sync", "DELETE /api/v1/anilist",
+		"POST /api/v1/trackers/sync", "PUT /api/v1/trackers/order", "PUT /api/v1/trackers/anilist/settings",
 		"GET /api/v1/wanted/search", "GET /api/v1/wanted/trending", "GET /api/v1/wanted",
 		"POST /api/v1/wanted", "GET /api/v1/wanted/matches", "POST /api/v1/wanted/matches",
 		"POST /api/v1/wanted/track",

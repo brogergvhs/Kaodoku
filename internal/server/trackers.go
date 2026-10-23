@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"slices"
@@ -147,16 +148,76 @@ func (u *webUI) trackerUnlinked(w http.ResponseWriter, r *http.Request) {
 	u.frag(w, "trackerUnlinked", unlinkedView{Provider: provider, Label: u.svc.ProviderLabel(provider), Titles: titles})
 }
 
+type missingView struct {
+	Provider, Label string
+	Titles          []service.MissingRating
+}
+
+func (u *webUI) missingRatings(r *http.Request, provider string) missingView {
+	titles, _ := u.svc.MissingRatings(r.Context(), provider)
+	titles = slices.DeleteFunc(titles, func(t service.MissingRating) bool { return !contentAllowed(r.Context(), t.IsAdult, t.ContentTags) })
+	return missingView{provider, u.svc.ProviderLabel(provider), titles}
+}
+
+func (u *webUI) trackerMissingRatings(w http.ResponseWriter, r *http.Request) {
+	provider := pathProvider(r)
+	if r.Method == http.MethodPost {
+		for _, t := range u.missingRatings(r, provider).Titles {
+			if err := u.svc.AnswerMissingRating(r.Context(), t.ID, provider, r.FormValue("action") == "send"); err != nil {
+				u.fail(w, err)
+				return
+			}
+		}
+	}
+	u.frag(w, "trackerMissingRatings", u.missingRatings(r, provider))
+}
+
+type malXMLView struct {
+	Exported, Skipped int
+	CanLink           bool
+	Result            *service.ListImportResult
+	Error             string
+}
+
+func (u *webUI) malXML(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var view malXMLView
+	if r.Method == http.MethodPost {
+		file, _, err := r.FormFile("file")
+		if err == nil {
+			defer file.Close()
+			opts := service.ListImport{Progress: r.FormValue("progress") != "", Ratings: r.FormValue("ratings") != "", Overwrite: r.FormValue("ratings") == "all", AddMissing: r.FormValue("add") != ""}
+			res, ierr := u.svc.ImportMALXML(ctx, file, opts, r.FormValue("apply") != "")
+			view.Result, err = &res, ierr
+		}
+		if err != nil {
+			view.Error = err.Error()
+		}
+		u.kick()
+	}
+	view.Exported, view.Skipped, _ = u.svc.ExportMALXML(ctx, io.Discard)
+	view.CanLink = userFrom(ctx).Can(auth.PermLibraryManage) && slices.ContainsFunc(u.svc.Trackers(ctx), func(p catalog.Provider) bool { return p.Name() == catalog.MALProvider })
+	u.frag(w, "malXML", view)
+}
+
+func (u *webUI) malXMLExport(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("Content-Disposition", `attachment; filename="kaodoku-mal.xml"`)
+	if _, _, err := u.svc.ExportMALXML(r.Context(), w); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func (u *webUI) trackerPrefsSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	on := func(k string) bool { v := r.Form[k]; return len(v) > 0 && v[len(v)-1] == "true" }
-	source := service.RatingFromTracker
-	if on("rating_from_kaodoku") {
-		source = service.RatingFromKaodoku
+	source := service.SourceTracker
+	if on("kaodoku_leads") {
+		source = service.SourceKaodoku
 	}
 	if err := u.svc.SetTrackerPrefs(r.Context(), pathProvider(r), service.TrackerPrefs{
 		AutoLink: on("auto_link"), AutoProgressive: on("auto_progressive"), Relations: on("relations"), Recommendations: on("recommendations"),
-		RatingSync: r.FormValue("rating_sync"), RatingSource: source,
+		RatingSync: r.FormValue("rating_sync"), Source: source,
 	}); err != nil {
 		u.fail(w, err)
 		return
@@ -226,6 +287,7 @@ type trackerCardView struct {
 	Outage   string
 	Account  *service.TrackerAccount
 	Unlinked int
+	Missing  int
 }
 
 type trackersView struct {
@@ -240,7 +302,7 @@ func (u *webUI) trackerCards(r *http.Request) trackersView {
 	accounts, leaders := map[string]service.TrackerAccount{}, 0
 	for _, a := range u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context())) {
 		accounts[a.Provider] = a
-		if a.RatingSource == service.RatingFromTracker && a.RatingSync != "off" {
+		if a.Source == service.SourceTracker {
 			leaders++
 		}
 	}
@@ -252,6 +314,9 @@ func (u *webUI) trackerCards(r *http.Request) trackersView {
 			if out.CanManage {
 				titles, _ := u.unlinked(r, p.Name())
 				card.Unlinked = len(titles)
+			}
+			if a.Source == service.SourceTracker {
+				card.Missing = len(u.missingRatings(r, p.Name()).Titles)
 			}
 		}
 		out.Cards = append(out.Cards, card)

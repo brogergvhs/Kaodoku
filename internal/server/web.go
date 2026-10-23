@@ -206,6 +206,7 @@ type settingField struct {
 	Kind                    string // "", "select", "multi", "bool", "color", "secret"
 	Options                 []providerOption
 	Selected                []string
+	Clear                   bool
 }
 
 func multiSetting(key string) bool { return key == service.SettingProvidersDisabled }
@@ -216,6 +217,16 @@ func settingMeta(key string) (label, desc string) {
 		return token, ""
 	}
 	switch key {
+	case service.SettingCacheImagesMB:
+		return "Tracker images (MB)", "Covers and banners from trackers, kept on disk."
+	case service.SettingCacheListsMB:
+		return "Tracker lists (MB)", "Users' tracker lists, so pages don't download them again."
+	case service.SettingCacheRelatedMB:
+		return "Related titles (MB)", "Related titles and recommendations from trackers, kept for a week."
+	case service.SettingCacheSearches:
+		return "Search results", "Searches kept for 10 minutes."
+	case service.SettingCacheRecs:
+		return "Recommendations", "Home recommendations and list suggestions kept per user for 6 hours."
 	case service.SettingServeTrackerSyncEvery:
 		return "Tracker sync", "How often connected tracker accounts sync reading progress (e.g. 12h). Empty disables."
 	case service.SettingServeCatalogEvery:
@@ -358,6 +369,9 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/library/{id}/monitored", u.libMonitored)
 	mux.HandleFunc("POST /ui/library/{id}/favourite", u.libFavourite)
 	mux.HandleFunc("POST /ui/library/{id}/rating", u.libRating)
+	mux.HandleFunc("POST /ui/library/{id}/rating/missing", u.libRatingMissing)
+	mux.HandleFunc("GET /ui/trackers/{provider}/missing-ratings", u.trackerMissingRatings)
+	mux.HandleFunc("POST /ui/trackers/{provider}/missing-ratings", u.trackerMissingRatings)
 	mux.HandleFunc("POST /ui/library/{id}/language-mode", u.libLanguageMode)
 	mux.HandleFunc("POST /ui/library/{id}/refresh-interval", u.libRefreshInterval)
 	mux.HandleFunc("POST /ui/library/{id}/remove", u.libRemove)
@@ -443,6 +457,8 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/import/titles", u.importTitleOptions)
 	mux.HandleFunc("GET /ui/library/{id}/related", u.relatedManga)
 	mux.HandleFunc("GET /ui/covers/{provider}/{id}", u.catalogCover)
+	mux.HandleFunc("GET /img/{sig}/{key}", u.image)
+	mux.HandleFunc("POST /ui/settings/caches/{key}/clear", u.clearCache)
 	mux.HandleFunc("GET /ui/search/trending", u.trendingManga)
 	mux.HandleFunc("GET /anilist/connect", u.trackerConnect)
 	mux.HandleFunc("GET /anilist/callback", u.trackerCallback)
@@ -455,6 +471,9 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/trackers/{provider}/unlinked", u.trackerUnlinked)
 	mux.HandleFunc("POST /ui/trackers/{provider}/settings", u.trackerPrefsSave)
 	mux.HandleFunc("POST /ui/trackers/reorder", u.trackerReorder)
+	mux.HandleFunc("GET /ui/lists/mal", u.malXML)
+	mux.HandleFunc("POST /ui/lists/mal", u.malXML)
+	mux.HandleFunc("GET /ui/lists/mal.xml", u.malXMLExport)
 	mux.HandleFunc("GET /ui/trackers/suggestions", u.trackerSuggestions)
 	mux.HandleFunc("POST /ui/library/{id}/tracker-sync", u.trackerSyncTitle)
 	mux.HandleFunc("POST /ui/library/{id}/providers/progressive", u.titleProgressiveSync)
@@ -2336,6 +2355,28 @@ func (u *webUI) libRating(w http.ResponseWriter, r *http.Request) {
 	u.frag(w, "titleRating", ratingView{id, u.svc.TitleRating(r.Context(), id)})
 }
 
+func (u *webUI) libRatingMissing(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	if !titleAllowed(r.Context(), u.svc, id) {
+		http.NotFound(w, r)
+		return
+	}
+	provider := r.FormValue("provider")
+	if err := u.svc.AnswerMissingRating(r.Context(), id, provider, r.FormValue("action") == "send"); err != nil {
+		u.fail(w, err)
+		return
+	}
+	if r.FormValue("row") != "" {
+		u.frag(w, "missingLeft", u.missingRatings(r, provider))
+		return
+	}
+	u.frag(w, "titleRating", ratingView{id, u.svc.TitleRating(r.Context(), id)})
+}
+
 func (u *webUI) titleProgress(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -2476,27 +2517,8 @@ func fetchCover(ctx context.Context, svc *service.JobService, coverURL string) (
 	if strings.TrimSpace(coverURL) == "" {
 		return "", nil, false
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, coverURL, nil)
+	data, err := svc.Image(ctx, coverURL, "ZIP export")
 	if err != nil {
-		return "", nil, false
-	}
-	client, err := util.NewHTTPClient(util.HTTPClientOptions{Timeout: 20 * time.Second, BlockPrivateNetworks: true})
-	if err != nil {
-		return "", nil, false
-	}
-	svc.CountImage(coverURL, "ZIP export")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", nil, false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, false
-	}
-	data, err = io.ReadAll(io.LimitReader(resp.Body, 20<<20))
-	if err != nil || len(data) == 0 {
 		return "", nil, false
 	}
 	ext := strings.ToLower(path.Ext(coverURL))
@@ -4195,6 +4217,7 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 				service.SettingBrowserDownloaderEnabled, service.SettingBrowserDownloaderEndpoint,
 				service.SettingBrowserDownloaderTimeoutSeconds, service.SettingServicesHealthInterval)},
 			settingGroup{Title: "Sources", Fields: fields(service.SettingSourceRegistryURL)},
+			settingGroup{Title: "Caches", Fields: u.cacheFields(ctx, fields(service.CacheKeys()...))},
 			settingGroup{Title: "Metadata & tracking", Fields: fields(service.SettingProvidersDefault, service.SettingProvidersDisabled), Apps: []settingApp{
 				{Provider: catalog.AniListProvider, Label: "AniList", Fields: fields(service.SettingAniListClientID, service.SettingAniListClientSecret)},
 				{Provider: catalog.MALProvider, Label: "MyAnimeList", Fields: fields(service.SettingMALClientID, service.SettingMALClientSecret)},
@@ -4202,6 +4225,18 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 		)
 	}
 	return settingsView{Groups: groups}
+}
+
+func (u *webUI) cacheFields(ctx context.Context, fields []settingField) []settingField {
+	usage := u.svc.CacheUsage(ctx)
+	for i, f := range fields {
+		used := strconv.FormatInt(usage[f.Key], 10)
+		if strings.HasSuffix(f.Key, "_mb") {
+			used = util.Human(usage[f.Key])
+		}
+		fields[i].Desc, fields[i].Clear = f.Desc+" Using "+used+". 0 turns it off.", true
+	}
+	return fields
 }
 
 func secretSetting(key string) bool {
@@ -4223,7 +4258,28 @@ func (u *webUI) catalogCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "private, max-age=86400")
-	http.Redirect(w, r, m.CoverImage, http.StatusFound)
+	http.Redirect(w, r, u.svc.ImageURL(m.CoverImage), http.StatusFound)
+}
+
+func (u *webUI) image(w http.ResponseWriter, r *http.Request) {
+	raw := u.svc.SignedImage(r.PathValue("sig"), r.PathValue("key"))
+	if raw == "" {
+		http.NotFound(w, r)
+		return
+	}
+	proxyRemoteImage(w, r, u.svc, raw, "Web image")
+}
+
+func (u *webUI) clearCache(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).Can(auth.PermSettingsManage) {
+		writeError(w, http.StatusForbidden, "managing caches needs the settings permission")
+		return
+	}
+	if err := u.svc.ClearCache(r.Context(), r.PathValue("key")); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.frag(w, "toast", toastView{OK: true, Msg: "Cache cleared ✓"})
 }
 
 func mangaURL(m catalog.Manga) string {
@@ -4527,6 +4583,7 @@ func (u *webUI) funcs() template.FuncMap {
 		"imported":   func(s string) bool { return strings.HasPrefix(s, "local:") },
 		"pathEscape": url.PathEscape,
 		"humanBytes": util.Human,
+		"img":        u.svc.ImageURL,
 		"releaseStatus": func(s string) string {
 			return strings.ToLower(strings.ReplaceAll(s, "_", " "))
 		},
@@ -4653,6 +4710,8 @@ func jobDesc(typ string) string {
 		return "Syncs reading progress with every user's connected trackers."
 	case jobs.TypeBackupUserData:
 		return "Saves progress, settings, users and library metadata to a backup file."
+	case jobs.TypeImportList:
+		return "Adds the titles from an imported MyAnimeList list that weren't in the library."
 	}
 	return ""
 }
@@ -4675,6 +4734,8 @@ func jobLabel(typ string) string {
 		return "Verify source"
 	case jobs.TypeMatchSources:
 		return "Match sources"
+	case jobs.TypeImportList:
+		return "Import list"
 	case jobs.TypeBackupUserData:
 		return "Back up user data"
 	case jobs.TypeDetectCrops:

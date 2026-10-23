@@ -7,7 +7,6 @@ struct SettingsView: View {
   @State private var trackers: TrackerList?
   @State private var meta: Meta?
   @State private var confirmClear = false
-  @State private var note: String?
   @State private var editingServer: SavedServer?
 
   var body: some View {
@@ -42,9 +41,20 @@ struct SettingsView: View {
           Section("Trackers") {
             if let trackers {
               ForEach(trackers.items) { t in
-                LabeledContent(t.label, value: t.unavailable != nil ? "Unavailable" : t.connected ? t.name ?? "Connected" : "Not connected")
-                if t.connected, t.unavailable == nil {
-                  Button("Sync \(t.label) now") { syncTracker(t) }
+                let status = t.unavailable != nil ? "Unavailable" : t.connected ? t.name ?? "Connected" : "Not connected"
+                if let settings = t.settings {
+                  NavigationLink {
+                    TrackerSettingsView(tracker: t, settings: settings) { self.trackers = $0 }
+                  } label: {
+                    LabeledContent(t.label, value: status)
+                  }
+                } else {
+                  LabeledContent(t.label, value: status)
+                }
+              }
+              if trackers.items.count(where: { $0.settings?.source == "tracker" }) >= 2 {
+                NavigationLink("Precedence") {
+                  TrackerPrecedenceView(trackers: trackers.items.filter(\.connected)) { self.trackers = $0 }
                 }
               }
               if !trackers.items.contains(where: \.connected) {
@@ -95,16 +105,6 @@ struct SettingsView: View {
           }
         }
       }
-      .overlay(alignment: .bottom) {
-        if let note {
-          Text(note)
-            .font(.footnote)
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.thinMaterial, in: Capsule())
-            .padding(.bottom, 12)
-            .task { try? await Task.sleep(for: .seconds(4)); self.note = nil }
-        }
-      }
     }
   }
 
@@ -119,14 +119,106 @@ struct SettingsView: View {
   private var totalSize: Int64 {
     app.store.titles.reduce(0) { $0 + $1.size }
   }
+}
 
-  private func syncTracker(_ t: TrackerList.Tracker) {
+struct TrackerSettingsView: View {
+  @Environment(AppState.self) private var app
+  let tracker: TrackerList.Tracker
+  @State var settings: TrackerSettings
+  let saved: (TrackerList) -> Void
+  @State private var note: String?
+
+  var body: some View {
+    List {
+      Group {
+        Section {
+          Toggle("Link new titles automatically", isOn: $settings.autoLink)
+          Toggle("Progressive sync for linked titles", isOn: $settings.autoProgressive)
+          Toggle("Use its related manga", isOn: $settings.relations)
+          Toggle("Use its recommendations", isOn: $settings.recommendations)
+          Picker("Sync ratings", selection: $settings.ratingSync) {
+            Text("Same as progressive sync").tag("")
+            Text("Always").tag("on")
+            Text("Never").tag("off")
+          }
+          Toggle("Kaodoku is the source of truth", isOn: Binding(
+            get: { settings.source == "kaodoku" },
+            set: { settings.source = $0 ? "kaodoku" : "tracker" }
+          ))
+        } footer: {
+          Text(settings.source == "kaodoku"
+            ? "Kaodoku sends progress, favourites and ratings to \(tracker.label)."
+            : "Kaodoku takes progress, favourites and ratings from \(tracker.label).")
+        }
+        Section {
+          Button("Sync \(tracker.label) now", action: sync).disabled(tracker.unavailable != nil)
+        } footer: {
+          if let note {
+            Text(note)
+          }
+        }
+      }
+      .nordRows()
+    }
+    .nordScreen()
+    .navigationTitle(tracker.label)
+    .onChange(of: settings) {
+      guard let api = app.api else { return }
+      let body = settings
+      Task {
+        do {
+          let list: TrackerList = try await api.put("/api/v1/trackers/\(tracker.provider)/settings", body: body)
+          saved(list)
+          note = nil
+        } catch { note = error.localizedDescription }
+      }
+    }
+  }
+
+  private func sync() {
     guard let api = app.api else { return }
     Task {
       do {
-        _ = try await api.data("POST", "/api/v1/trackers/\(t.provider)/sync")
-        note = "\(t.label) sync started"
+        _ = try await api.data("POST", "/api/v1/trackers/\(tracker.provider)/sync")
+        note = "\(tracker.label) sync started"
       } catch { note = error.localizedDescription }
+    }
+  }
+}
+
+struct TrackerPrecedenceView: View {
+  @Environment(AppState.self) private var app
+  @State var trackers: [TrackerList.Tracker]
+  let saved: (TrackerList) -> Void
+  @State private var error: String?
+
+  var body: some View {
+    List {
+      Section {
+        ForEach(trackers) { Text($0.label) }
+          .onMove { from, to in
+            trackers.move(fromOffsets: from, toOffset: to)
+            save()
+          }
+      } footer: {
+        Text(error ?? "When several trackers are the source of truth, the higher one wins.")
+      }
+      .nordRows()
+    }
+    .environment(\.editMode, .constant(.active))
+    .nordScreen()
+    .navigationTitle("Precedence")
+  }
+
+  private func save() {
+    guard let api = app.api else { return }
+    let body = ["providers": trackers.map(\.provider)]
+    Task {
+      do {
+        let list: TrackerList = try await api.put("/api/v1/trackers/order", body: body)
+        saved(list)
+        error = nil
+      } catch { self.error = error.localizedDescription }
     }
   }
 }

@@ -1,4 +1,4 @@
-{{define "cellCover"}}<img id="row-cover-{{.ID}}" hx-preserve class="h-14 w-10 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy">{{end}}
+{{define "cellCover"}}<img id="row-cover-{{.ID}}" hx-preserve class="h-14 w-10 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
 
 {{define "addToCollection"}}
 <div class="grid gap-4">
@@ -41,7 +41,7 @@
   {{if .Members}}
   {{range .Members}}
   <div class="flex items-center gap-2 rounded-lg p-1 hover:bg-base-200">
-    <img class="h-10 w-7 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy">
+    <img class="h-10 w-7 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">
     <span class="min-w-0 flex-1 truncate text-sm">{{.DisplayTitle}}</span>
     {{if $.SmartKey}}
     <button class="btn btn-xs btn-ghost text-error" hx-post="/ui/collections/smart/{{pathEscape $.SmartKey}}/remove" hx-vals='{"title":"{{.ID}}"}' hx-target="#collection-manage" hx-swap="outerHTML">Unpin</button>
@@ -418,7 +418,7 @@
 <div class="relative min-w-0">
   {{if .CanManage}}<input form="library-bulk" type="checkbox" class="checkbox checkbox-sm absolute left-1 top-1 z-10 bg-base-100" name="title_id" value="{{.Title.ID}}" aria-label="Select {{.Title.DisplayTitle}}" data-bulk-title>{{end}}
   <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .Title.IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
-    <a href="/library/{{.Title.ID}}{{if .Screen}}?screen={{.Screen}}{{end}}"><img id="card-cover-{{.Title.ID}}" hx-preserve class="h-full w-full object-cover" src="{{.Title.CoverImage}}" alt="" loading="lazy"></a>
+    <a href="/library/{{.Title.ID}}{{if .Screen}}?screen={{.Screen}}{{end}}"><img id="card-cover-{{.Title.ID}}" hx-preserve class="h-full w-full object-cover" src="{{img .Title.CoverImage}}" alt="" loading="lazy"></a>
   </div>
   <div class="absolute right-1 top-1 z-10 flex items-center rounded-lg bg-base-300/70">{{template "favToggle" .Title}}{{if .CanManage}}{{template "monitorToggle" .Title}}{{template "libraryTitleActions" .}}{{end}}</div>
   <a href="/library/{{.Title.ID}}{{if .Screen}}?screen={{.Screen}}{{end}}" class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{.Title.DisplayTitle}}</a>
@@ -490,7 +490,7 @@
     {{range .Fulls}}
     <div class="card bg-base-100 p-4{{if .Title.IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
       <div class="flex gap-5 max-sm:flex-col">
-        <figure class="shrink-0 max-sm:self-center"><a href="/library/{{.Title.ID}}{{if $.Screen}}?screen={{$.Screen}}{{end}}"><img id="full-cover-{{.Title.ID}}" hx-preserve class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.Title.CoverImage}}" alt="" loading="lazy"></a></figure>
+        <figure class="shrink-0 max-sm:self-center"><a href="/library/{{.Title.ID}}{{if $.Screen}}?screen={{$.Screen}}{{end}}"><img id="full-cover-{{.Title.ID}}" hx-preserve class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{img .Title.CoverImage}}" alt="" loading="lazy"></a></figure>
         <div class="flex min-w-0 flex-1 flex-col gap-2">
           <div class="flex items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-2">
@@ -617,7 +617,7 @@
     <tbody>
       {{$canAdd := .CanAdd}}{{range .Items}}
       <tr {{if .IsAdult}}class="outline outline-1 -outline-offset-1 outline-error"{{end}}>
-        <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{coverURL .Manga}}" alt="" loading="lazy"></a></td>
+        <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a></td>
         <td class="min-w-0">
           <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}">{{mangaTitle .Manga}}</a>
           <div class="text-xs text-base-content/50">{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
@@ -637,8 +637,8 @@
   <div class="card bg-base-100 p-4{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
     <div class="flex gap-5 max-sm:flex-col">
       <figure class="shrink-0 max-sm:self-center">
-        {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{coverURL .Manga}}" alt="" loading="lazy"></a>
-        {{else}}<a href="{{mangaURL .Manga}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{coverURL .Manga}}" alt="" loading="lazy"></a>{{end}}
+        {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>
+        {{else}}<a href="{{mangaURL .Manga}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>{{end}}
       </figure>
       <div class="flex min-w-0 flex-1 flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
@@ -659,8 +659,8 @@
   {{$canAdd := .CanAdd}}{{range .Items}}
   <div class="flex min-w-0 flex-col">
     <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
-      {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{coverURL .Manga}}" alt="" loading="lazy"></a>
-      {{else}}<a href="{{mangaURL .Manga}}"><img class="h-full w-full object-cover" src="{{coverURL .Manga}}" alt="" loading="lazy"></a>{{end}}
+      {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>
+      {{else}}<a href="{{mangaURL .Manga}}"><img class="h-full w-full object-cover" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>{{end}}
       {{if $.ShowProvider}}<span class="pointer-events-none badge badge-sm absolute left-2 top-2 bg-base-100">{{providerLabel .Provider}}</span>{{end}}
       {{if $.ShowRelations}}<div class="pointer-events-none absolute inset-x-2 bottom-2 flex">
         <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
@@ -851,7 +851,7 @@
       {{range .Links}}
       {{$linked := and .ID .Confirmed}}
       <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0{{if .Outage}} opacity-60{{end}}">
-        {{if .Cover}}<img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{.Cover}}" alt="" loading="lazy">{{end}}
+        {{if .Cover}}<img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{img .Cover}}" alt="" loading="lazy">{{end}}
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2 text-sm font-medium">
             {{.Label}}
@@ -924,7 +924,7 @@
     {{range .Results}}
     {{$cur := eq .ProviderID $.Current}}
     <div class="flex items-center gap-3 py-2">
-      <img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{coverURL .}}" alt="" loading="lazy">
+      <img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{img (coverURL .)}}" alt="" loading="lazy">
       <div class="min-w-0 flex-1">
         <div class="truncate text-sm font-medium">{{mangaTitle .}}</div>
         <div class="text-xs text-base-content/50">{{.Format}}{{if .Year}} · {{.Year}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}} · <a class="link-hover" href="{{providerURL .Provider .ProviderID}}" target="_blank" rel="noreferrer noopener">#{{.ProviderID}} ↗</a></div>
@@ -956,7 +956,7 @@
 <div id="tracker-rows" class="contents"{{if .OOB}} hx-swap-oob="true"{{end}}>
   {{$connected := false}}{{range .Cards}}{{if .Account}}{{$connected = true}}{{end}}{{end}}
   {{if $connected}}
-  {{if .Reorder}}<p class="text-xs text-base-content/60">Drag the trackers that ratings come from to pick which one wins first.</p>{{end}}
+  {{if .Reorder}}<p class="text-xs text-base-content/60">Drag the trackers that are the source of truth to pick which one wins first.</p>{{end}}
   <div class="divide-y divide-line/25"{{if .Reorder}} data-reorder="/ui/trackers/reorder"{{end}}>
     {{range .Cards}}{{if .Account}}{{$c := .}}{{with .Account}}
     <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0 [&.dragging]:opacity-50"{{if $.Reorder}} draggable="true" data-reorder-id="{{.Provider}}"{{end}}>
@@ -967,9 +967,9 @@
           <div class="flex gap-1">
             {{if .AutoLink}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Links new titles automatically" aria-label="Links new titles automatically">{{template "iconLink"}}</span>{{end}}
             {{if .AutoProgressive}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Progressive sync for linked titles" aria-label="Progressive sync for linked titles">{{template "iconRefresh"}}</span>{{end}}
-            {{if ne .RatingSync "off"}}{{$when := "same as progressive sync"}}{{if eq .RatingSync "on"}}{{$when = "always"}}{{end}}
-            {{if eq .RatingSource "tracker"}}<span class="badge badge-sm badge-info badge-soft tip" tabindex="0" data-tip="Ratings come from {{.Label}}, {{$when}}" aria-label="Ratings come from {{.Label}}, {{$when}}">{{template "iconStar"}}</span>
-            {{else}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Ratings sent to {{.Label}}, {{$when}}" aria-label="Ratings sent to {{.Label}}, {{$when}}">{{template "iconStar"}}</span>{{end}}{{end}}
+            {{if eq .Source "tracker"}}<span class="badge badge-sm badge-info badge-soft tip" tabindex="0" data-tip="{{.Label}} is the source of truth" aria-label="{{.Label}} is the source of truth">{{template "iconDownload"}}</span>
+            {{else}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Kaodoku is the source of truth" aria-label="Kaodoku is the source of truth">{{template "iconUpload"}}</span>{{end}}
+            {{if ne .RatingSync "off"}}{{$when := "same as progressive sync"}}{{if eq .RatingSync "on"}}{{$when = "always"}}{{end}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Ratings sync, {{$when}}" aria-label="Ratings sync, {{$when}}">{{template "iconStar"}}</span>{{end}}
             {{if .Relations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its related manga" aria-label="Uses its related manga">{{template "iconLayers"}}</span>{{end}}
             {{if .Recommendations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its recommendations" aria-label="Uses its recommendations">{{template "iconUsers"}}</span>{{end}}
           </div>
@@ -983,6 +983,7 @@
         <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-max whitespace-nowrap p-2 shadow-lg border border-base-300">
           <li><button hx-get="/ui/trackers/{{.Provider}}/settings" hx-target="#tracker-prefs-body" onclick="tracker_prefs_modal.showModal()">{{template "iconEdit"}}Edit</button></li>
           {{if and $.CanManage (not $c.Outage) $c.Unlinked}}<li data-unlinked-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/unlinked" hx-target="#tracker-unlinked-body" onclick="openLoading('tracker_unlinked_modal')">{{template "iconUnlink"}}Unlinked titles<span class="badge badge-sm badge-ghost" data-unlinked-count="{{.Provider}}">{{$c.Unlinked}}</span></button></li>{{end}}
+          {{if $c.Missing}}<li data-missing-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/missing-ratings" hx-target="#tracker-missing-body" onclick="openLoading('tracker_missing_modal')">{{template "iconStar"}}Missing ratings<span class="badge badge-sm badge-ghost" data-missing-count="{{.Provider}}">{{$c.Missing}}</span></button></li>{{end}}
           {{if not $c.Outage}}<li><button hx-post="/ui/trackers/{{.Provider}}/sync" hx-target="#toast">{{template "iconRefresh"}}Sync now</button></li>{{end}}
           {{if and .ExpiringSoon (eq $c.Login "oauth")}}<li><a href="/trackers/{{.Provider}}/connect">{{template "iconLink"}}Reconnect</a></li>{{end}}
           <li><button class="text-error" hx-post="/ui/trackers/{{.Provider}}/disconnect" hx-swap="none" hx-confirm="Disconnect your {{.Label}} account?">{{template "iconPower"}}Disconnect</button></li>
@@ -999,7 +1000,10 @@
 <div class="card bg-base-100 card-body p-4 gap-2 mb-4">
   <div class="flex items-center justify-between gap-2">
     <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Tracking accounts</h2>
-    {{if .CanConnect}}<button type="button" class="btn btn-sm btn-primary" onclick="tracker_connect_modal.showModal()">{{template "iconPlus"}}Connect</button>{{end}}
+    <div class="flex gap-2">
+      <button type="button" class="btn btn-sm" hx-get="/ui/lists/mal" hx-target="#mal-xml-body" onclick="openLoading('mal_xml_modal')">MyAnimeList XML</button>
+      {{if .CanConnect}}<button type="button" class="btn btn-sm btn-primary" onclick="tracker_connect_modal.showModal()">{{template "iconPlus"}}Connect</button>{{end}}
+    </div>
   </div>
   {{template "trackerRows" .}}
 </div>
@@ -1039,6 +1043,18 @@
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
+<dialog id="mal_xml_modal" class="modal">
+  <div class="modal-box grid max-w-lg gap-3">
+    <div id="mal-xml-body" class="contents" data-loading></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+<dialog id="tracker_missing_modal" class="modal">
+  <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
+    <div id="tracker-missing-body" class="contents" data-loading></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
 {{if .CanManage}}
 <dialog id="tracker_unlinked_modal" class="modal">
   <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
@@ -1064,7 +1080,7 @@
     {{range .Titles}}
     <details class="group" data-unlinked data-filter-row>
       <summary class="flex cursor-pointer list-none items-center gap-3 p-2 text-sm hover:bg-base-200 group-open:bg-base-200 [&::-webkit-details-marker]:hidden">
-        {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy">{{end}}
+        {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
         <span class="min-w-0 flex-1">
           <span class="block truncate font-medium">{{.DisplayTitle}}</span>
           <span class="block text-xs text-base-content/50">{{providerLabel .Provider}}{{with .Format}} · {{.}}{{end}}{{with .Year}} · {{.}}{{end}}{{with .AverageScore}} · ★ {{.}}%{{end}}</span>
@@ -1088,6 +1104,73 @@
   {{else}}<p class="text-sm text-base-content/50">Every title is linked or marked as not on {{.Label}}.</p>{{end}}
 </div>
 {{end}}
+
+{{define "trackerMissingRatings"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">No rating on {{.Label}}</h3>
+    <p class="text-sm text-base-content/60">Titles you rated in Kaodoku that {{.Label}}, their source of truth, has no rating for.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="min-h-0 flex-1 divide-y divide-line/25 overflow-y-auto rounded-lg border border-line/40">
+  {{range .Titles}}
+  <div class="flex items-center gap-3 p-2" data-missing-row>
+    {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+    <div class="min-w-0 flex-1">
+      <div class="truncate text-sm font-medium">{{.DisplayTitle}}</div>
+      <div class="text-xs text-base-content/60">Your rating {{.Rating}}/10</div>
+    </div>
+    <button class="btn btn-sm" hx-post="/ui/library/{{.ID}}/rating/missing" hx-vals='{"provider":"{{$.Provider}}","action":"send","row":"1"}' hx-target="closest [data-missing-row]" hx-swap="outerHTML" hx-disabled-elt="this">Send</button>
+    <button class="btn btn-ghost btn-sm" hx-post="/ui/library/{{.ID}}/rating/missing" hx-vals='{"provider":"{{$.Provider}}","action":"keep","row":"1"}' hx-target="closest [data-missing-row]" hx-swap="outerHTML" hx-disabled-elt="this">Keep</button>
+  </div>
+  {{end}}
+  <p class="hidden px-3 py-2 text-sm text-base-content/60 first:block">Nothing left to answer.</p>
+</div>
+{{if .Titles}}<div class="flex justify-end gap-2">
+  <button class="btn btn-ghost btn-sm" hx-post="/ui/trackers/{{.Provider}}/missing-ratings" hx-vals='{"action":"keep"}' hx-target="#tracker-missing-body" hx-disabled-elt="this">Keep all</button>
+  <button class="btn btn-primary btn-sm" hx-post="/ui/trackers/{{.Provider}}/missing-ratings" hx-vals='{"action":"send"}' hx-target="#tracker-missing-body" hx-disabled-elt="this">Send all</button>
+</div>{{end}}
+{{template "missingLeft" .}}
+{{end}}
+
+{{define "malXML"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">MyAnimeList XML</h3>
+    <p class="text-sm text-base-content/60">MyAnimeList's export format, which other sites import too.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="grid gap-2">
+  <h4 class="text-sm font-semibold">Export</h4>
+  <p class="text-sm">{{.Exported}} to export.{{if .Skipped}} {{.Skipped}} have no MyAnimeList link and are left out.{{if .CanLink}} <button type="button" class="link" hx-get="/ui/trackers/mal/unlinked" hx-target="#tracker-unlinked-body" onclick="mal_xml_modal.close(); openLoading('tracker_unlinked_modal')">Link them</button>{{end}}{{end}}</p>
+  <a class="btn btn-sm btn-primary justify-self-start" href="/ui/lists/mal.xml">Download XML</a>
+</div>
+<form class="grid gap-2" hx-post="/ui/lists/mal" hx-encoding="multipart/form-data" hx-target="#mal-xml-body" hx-disabled-elt="find button">
+  <h4 class="text-sm font-semibold">Import</h4>
+  <label class="btn btn-sm justify-start">
+    <input type="file" class="sr-only" name="file" accept=".xml,text/xml" required onchange="this.nextElementSibling.textContent=this.files[0]?this.files[0].name:'Choose file'">
+    <span class="truncate">Choose file</span>
+  </label>
+  <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-sm" name="progress" value="1" checked>Raise read progress (never lowers it)</label>
+  <select class="select select-sm" name="ratings" aria-label="Ratings">
+    <option value="missing">Set ratings where I have none</option>
+    <option value="all">Overwrite my ratings</option>
+    <option value="">Leave my ratings</option>
+  </select>
+  <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-sm" name="add" value="1">Add titles that aren't in the library</label>
+  <div class="flex gap-2">
+    <button class="btn btn-sm" name="apply" value="">Preview</button>
+    <button class="btn btn-sm btn-primary" name="apply" value="1">Import</button>
+  </div>
+  {{with .Result}}<p class="text-sm">{{if .Applied}}Raised progress on {{.Raised}} and set {{.Rated}} ratings.{{if .Queued}} Adding {{.Queued}} titles in the background.{{end}}{{else}}{{.InLibrary}} titles are in your library, {{.NotInLibrary}} aren't.{{end}}{{if .Ignored}} {{.Ignored}} are Dropped or On-Hold, which Kaodoku doesn't keep.{{end}}</p>{{end}}
+  {{with .Error}}<p class="text-sm text-error">{{.}}</p>{{end}}
+</form>
+{{end}}
+
+{{define "missingLeft"}}<span hx-swap-oob="innerHTML:[data-missing-count={{.Provider}}]">{{len .Titles}}</span>
+{{if not .Titles}}<div hx-swap-oob="delete:[data-missing-item={{.Provider}}]"></div>{{end}}{{end}}
 
 {{define "unlinkedLeft"}}<span hx-swap-oob="innerHTML:[data-unlinked-count={{.Provider}}]">{{len .Titles}}</span>
 {{if not .Titles}}<div hx-swap-oob="delete:[data-unlinked-item={{.Provider}}]"></div>{{end}}{{end}}
@@ -1113,7 +1196,7 @@
       <option value="off"{{if eq .RatingSync "off"}} selected{{end}}>Never</option>
     </select>
   </div>
-  {{template "trackerPrefToggle" (pref "rating_from_kaodoku" "Ratings come from Kaodoku" (printf "On: Kaodoku sends your ratings to %s. Off: %s's ratings replace yours in Kaodoku." .Label .Label) (eq .RatingSource "kaodoku"))}}
+  {{template "trackerPrefToggle" (pref "kaodoku_leads" "Kaodoku is the source of truth" (printf "On: Kaodoku sends progress, favourites and ratings to %s. Off: Kaodoku takes them from %s." .Label .Label) (eq .Source "kaodoku"))}}
   <button class="btn btn-sm btn-primary mt-3">Save</button>
 </form>
 {{end}}

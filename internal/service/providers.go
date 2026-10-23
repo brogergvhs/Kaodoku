@@ -83,12 +83,11 @@ func (s *JobService) healthOutage(name string) string {
 	return ""
 }
 
-// WatchProviders flushes request counts, syncs missing tag lists and re-checks trackers in an outage; working trackers are never pinged, failing requests report outages.
+// WatchProviders saves request counts every minute, syncs missing tag lists and re-checks trackers in an outage; working trackers are never pinged, failing requests report outages.
 func (s *JobService) WatchProviders(ctx context.Context) {
-	defer s.flushRequests(context.WithoutCancel(ctx))
 	retries := map[string]outageRetry{}
 	for {
-		s.flushRequests(ctx)
+		s.catalog.FlushRequests(ctx)
 		s.SyncPendingVocabularies(ctx)
 		s.probeOutages(ctx, retries, time.Now())
 		select {
@@ -137,23 +136,6 @@ func (s *JobService) CountImage(url, reason string) {
 	}
 }
 
-// flushRequests adds each tracker's calls since the last flush to today's rows.
-func (s *JobService) flushRequests(ctx context.Context) {
-	day := time.Now().UTC().Format(time.DateOnly)
-	for name, p := range s.catalog.providers {
-		c, ok := p.(callCounter)
-		if !ok {
-			continue
-		}
-		for call, n := range c.TakeCalls() {
-			if _, err := s.db.ExecContext(ctx, `INSERT INTO tracker_calls (provider, day, kind, reason, count) VALUES (?, ?, ?, ?, ?)
-				ON CONFLICT (provider, day, kind, reason) DO UPDATE SET count = count + excluded.count`, name, day, call.Kind, call.Reason, n); err != nil {
-				c.Count(call, n)
-			}
-		}
-	}
-}
-
 type RequestCounts struct{ Today, Month, Total int64 }
 
 func (c RequestCounts) plus(o RequestCounts) RequestCounts {
@@ -182,8 +164,11 @@ type trackerCallRow struct {
 	TrackerCall
 }
 
+// FlushRequests saves the tracker calls counted since the last flush.
+func (s *JobService) FlushRequests(ctx context.Context) { s.catalog.FlushRequests(ctx) }
+
 func (s *JobService) trackerCallRows(ctx context.Context) []trackerCallRow {
-	s.flushRequests(ctx)
+	s.catalog.FlushRequests(ctx)
 	now := time.Now().UTC()
 	rows, err := s.db.QueryContext(ctx, `SELECT provider, reason, kind,
 		COALESCE(SUM(CASE WHEN day = ? THEN count END), 0), COALESCE(SUM(CASE WHEN day > ? THEN count END), 0), SUM(count)
@@ -562,6 +547,7 @@ func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id s
 	_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_related (provider, provider_id, relations_json, recommendations_json, fetched_at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (provider, provider_id) DO UPDATE SET relations_json = excluded.relations_json, recommendations_json = excluded.recommendations_json, fetched_at = excluded.fetched_at`,
 		p.Name(), id, relData, recData, database.FormatTime(time.Now()))
+	s.trimRelated(ctx)
 	return freshRel, freshRecs, nil
 }
 
@@ -865,10 +851,8 @@ func (s *JobService) LinkExternalID(ctx context.Context, titleID int64, provider
 			return err
 		}
 	}
-	for _, table := range []string{"tracker_favourites", "tracker_ratings"} {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM `+table+` WHERE title_id = ? AND provider = ?`, titleID, provider); err != nil {
-			return err
-		}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM tracker_ratings WHERE title_id = ? AND provider = ?`, titleID, provider); err != nil {
+		return err
 	}
 	return s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: provider, ProviderID: id, Method: "user", Confirmed: id != ""})
 }

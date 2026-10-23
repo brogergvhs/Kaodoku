@@ -189,6 +189,7 @@ func withWanted(fn func(context.Context, *service.CatalogService) error) error {
 		return err
 	}
 	defer closeDB()
+	defer svc.FlushRequests(ctx)
 	return fn(ctx, svc)
 }
 

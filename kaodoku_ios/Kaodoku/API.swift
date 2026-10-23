@@ -112,6 +112,10 @@ struct APIClient {
   func post<T: Decodable>(_ path: String, body: (any Encodable)? = nil) async throws -> T {
     try await Self.decoder.decode(T.self, from: data("POST", path, body: body))
   }
+
+  func put<T: Decodable>(_ path: String, body: (any Encodable)? = nil) async throws -> T {
+    try await Self.decoder.decode(T.self, from: data("PUT", path, body: body))
+  }
 }
 
 /// sameOrigin compares scheme, host, and port — the token is bound to the exact
