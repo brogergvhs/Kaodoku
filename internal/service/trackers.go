@@ -1157,7 +1157,7 @@ func (s *JobService) fillFromStore(ctx context.Context, provider string, items [
 	}
 	stored, _ := s.catalog.repo.MangaByProviderIDs(ctx, provider, ids)
 	for i, m := range items {
-		if known, ok := stored[m.ProviderID]; ok && (m.CoverImage == "" || len(m.Genres)+len(m.Tags) == 0) {
+		if known, ok := stored[m.ProviderID]; ok && m.Provider == provider && (m.CoverImage == "" || len(m.Genres)+len(m.Tags) == 0) {
 			known.ExternalIDs, known.RelationType = m.ExternalIDs, m.RelationType
 			items[i] = known
 		}
@@ -1278,7 +1278,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string, f
 	if err != nil {
 		return nil, false, false
 	}
-	aggressive := s.mbAggressive(ctx) && !fetch
+	aggressive := s.mbAggressive(ctx) && !fetch && provider != catalog.MangaBakaProvider
 	exclude := map[string]bool{}
 	for k := range s.LibraryIndex(ctx) {
 		exclude[k] = true

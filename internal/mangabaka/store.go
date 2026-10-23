@@ -172,6 +172,10 @@ func (s *Store) Refresh(ctx context.Context, client *http.Client, url, variant s
 		s.db = nil
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp)
+		if _, statErr := os.Stat(s.path); statErr == nil {
+			s.db, _ = openReadOnly(s.path)
+		}
 		return false, err
 	}
 	s.db, err = openReadOnly(s.path)

@@ -55,7 +55,6 @@ func (c ScreenConfig) Matches(t Title) bool {
 	return true
 }
 
-// HasAnyTag reports whether any wanted tag is present (case-insensitive).
 // HasAnyTag matches names ignoring case, spaces and punctuation, so "Sci Fi" is "Sci-Fi".
 func HasAnyTag(have, want []string) bool {
 	for _, w := range want {

@@ -313,11 +313,17 @@ func (s *JobService) DefaultProvider(ctx context.Context) string {
 	return available[0].Name()
 }
 
+// SearchManga searches a provider; in aggressive MangaBaka mode an empty-query browse stays on MangaBaka.
 func (s *JobService) SearchManga(ctx context.Context, provider, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {
 	ctx = catalog.WithReason(ctx, "Search")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return nil, false, err
+	}
+	if strings.TrimSpace(query) == "" && s.mbAggressive(ctx) {
+		if mb, err := s.Provider(ctx, catalog.MangaBakaProvider); err == nil {
+			p = mb
+		}
 	}
 	if tags, _ := s.catalog.repo.ProviderTags(ctx, p.Name()); len(tags) > 0 {
 		keys := map[string]string{}
@@ -434,13 +440,15 @@ func (s *JobService) resolveID(ctx context.Context, m catalog.Manga, p catalog.P
 	}
 	if s.mbOn(ctx) {
 		s.mbLink(ctx, []catalog.Manga{m})
-		if id := s.confirmedID(ctx, m, name); id != "" || !s.mbAggressive(ctx) {
+		if id := s.confirmedID(ctx, m, name); id != "" {
 			return id
 		}
-		if _, ok := maps[name]; !ok {
-			_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: name, Method: "miss"})
+		if s.mbAggressive(ctx) {
+			if _, ok := maps[name]; !ok {
+				_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: name, Method: "miss"})
+			}
+			return ""
 		}
-		return ""
 	}
 	if e, ok := maps[name]; ok {
 		if t, err := database.ParseTime(e.CheckedAt); err == nil && time.Since(t) < mappingRecheck {
@@ -596,8 +604,12 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 		self[k] = true
 	}
 	var rels, recs [][]catalog.Manga
-	if id := work.ExternalIDs[catalog.MangaBakaProvider]; id != "" {
-		rel, rec := s.mbRelated(ctx, id, limit)
+	mbID := work.ExternalIDs[catalog.MangaBakaProvider]
+	if m.Provider == catalog.MangaBakaProvider && s.mbOn(ctx) {
+		mbID = m.ProviderID
+	}
+	if mbID != "" {
+		rel, rec := s.mbRelated(ctx, mbID, limit)
 		rels, recs = append(rels, rel), append(recs, rec)
 	}
 	prefs := map[string]TrackerPrefs{}
@@ -853,6 +865,7 @@ func (s *JobService) refreshWork(ctx context.Context, m catalog.Manga) error {
 			continue
 		}
 		if sec, _, err := s.catalog.providers[prov].Get(ctx, e.ProviderID); err == nil {
+			sec.Chapters = nil // another tracker's count may be a releasing series' latest
 			fillBlanks(&fresh, sec)
 		}
 	}

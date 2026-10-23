@@ -158,8 +158,8 @@ func (v mangaBakaView) Total() int { return len(v.Links) + len(v.Suggestions) }
 
 func (u *webUI) mangaBakaLinks(r *http.Request, provider string) mangaBakaView {
 	links, suggestions, _ := u.svc.MangaBakaLinks(r.Context(), provider)
-	allowed := func(l service.MangaBakaLink) bool { return !contentAllowed(r.Context(), l.IsAdult, l.ContentTags) }
-	return mangaBakaView{provider, u.svc.ProviderLabel(provider), slices.DeleteFunc(links, allowed), slices.DeleteFunc(suggestions, allowed)}
+	blocked := func(l service.MangaBakaLink) bool { return !contentAllowed(r.Context(), l.IsAdult, l.ContentTags) }
+	return mangaBakaView{provider, u.svc.ProviderLabel(provider), slices.DeleteFunc(links, blocked), slices.DeleteFunc(suggestions, blocked)}
 }
 
 func (u *webUI) trackerMangaBaka(w http.ResponseWriter, r *http.Request) {

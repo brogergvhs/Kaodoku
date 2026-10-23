@@ -122,6 +122,13 @@ func TestAggressiveResolveMakesNoTrackerCalls(t *testing.T) {
 	if id := svc.resolveID(ctx, unknown, mu); id != "" || mu.calls.Load() != 0 {
 		t.Fatalf("resolved %q with %d tracker calls, want none in aggressive mode", id, mu.calls.Load())
 	}
+	if err := svc.SetSetting(ctx, SettingMangaBakaAggressive, "false"); err != nil {
+		t.Fatal(err)
+	}
+	_, other := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "6", TitleRomaji: "Also not in the dump"}, 1, 0)
+	if svc.resolveID(ctx, other, mu); mu.calls.Load() == 0 {
+		t.Fatal("not aggressive, a title MangaBaka lacks must fall back to a title search")
+	}
 }
 
 // spyProvider counts calls that would reach a tracker's API for shared data.
@@ -278,5 +285,19 @@ func TestMangaBakaIsALocalMetadataSource(t *testing.T) {
 	m, _ := svc.titleWork(ctx, title.ID)
 	if svc.confirmedID(ctx, m, catalog.AniListProvider) != "113956" || al.calls.Load() != 0 {
 		t.Fatalf("added work links anilist %q with %d calls", svc.confirmedID(ctx, m, catalog.AniListProvider), al.calls.Load())
+	}
+}
+
+func TestAggressiveBrowseStaysOnMangaBaka(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	useMangaBaka(t, svc, ctx, anthology)
+	al := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	svc.catalog.providers[catalog.AniListProvider] = al
+	if found, _, err := svc.SearchManga(ctx, catalog.AniListProvider, "", 10, catalog.SearchFilter{}); err != nil || len(found) != 1 || al.calls.Load() != 0 {
+		t.Fatalf("browse = %+v, %v with %d AniList calls", found, err, al.calls.Load())
+	}
+	if _, _, _ = svc.SearchManga(ctx, catalog.AniListProvider, "abyss", 10, catalog.SearchFilter{}); al.calls.Load() != 1 {
+		t.Fatal("a typed search should still go to the picked tracker")
 	}
 }
