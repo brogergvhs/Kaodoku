@@ -56,7 +56,7 @@ func (s *JobService) MangaBakaReady() bool { return s.mb.Ready() }
 
 func (s *JobService) setMangaBaka(store *mangabaka.Store) {
 	s.mb = store
-	s.catalog.providers[catalog.MangaBakaProvider] = catalog.NewMangaBakaClient(store)
+	s.catalog.providers[catalog.MangaBakaProvider] = catalog.NewMangaBakaClient(store, nil)
 }
 
 func (s *JobService) mangaBakaVariant(ctx context.Context) string {

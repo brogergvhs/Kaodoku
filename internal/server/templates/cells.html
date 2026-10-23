@@ -1039,6 +1039,12 @@
       {{if eq .Login "oauth"}}
       <p class="text-sm text-base-content/60">You'll approve access on {{.Label}}, then come back here.</p>
       <a class="btn btn-sm btn-primary" href="/trackers/{{.Provider}}/connect">Continue to {{.Label}}</a>
+      {{else if eq .Login "token"}}
+      <form class="grid gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
+        <input class="input input-sm w-full" type="password" name="password" placeholder="mb-…" aria-label="{{.Label}} personal access token" autocomplete="off" required>
+        <span class="text-xs text-base-content/50">Create a personal access token with library access in your {{.Label}} account settings.</span>
+        <button class="btn btn-sm btn-primary">Connect</button>
+      </form>
       {{else}}
       <form class="grid gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
         <input class="input input-sm w-full" name="username" placeholder="{{.Label}} username or email" aria-label="{{.Label}} username or email" autocomplete="off" required>

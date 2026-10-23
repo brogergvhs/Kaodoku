@@ -209,6 +209,9 @@ func (s *JobService) TrackerLogin(ctx context.Context, provider string) string {
 	if _, ok := p.(catalog.PasswordLogin); ok {
 		return "password"
 	}
+	if _, ok := p.(catalog.TokenLogin); ok {
+		return "token"
+	}
 	app := s.TrackerApp(ctx, provider, "")
 	if app.ClientID == "" || (provider == catalog.AniListProvider && app.ClientSecret == "") {
 		return ""
@@ -237,6 +240,13 @@ func (s *JobService) LoginTracker(ctx context.Context, userID int64, provider, u
 	ctx = catalog.WithReason(ctx, "Sign-in")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
+		return err
+	}
+	if _, ok := p.(catalog.TokenLogin); ok {
+		err := s.saveAccount(ctx, userID, p, catalog.Token{Access: strings.TrimSpace(password)})
+		if catalog.IsUnauthorized(err) {
+			return fmt.Errorf("%s rejected that access token", p.Label())
+		}
 		return err
 	}
 	l, ok := p.(catalog.PasswordLogin)
