@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
+	"github.com/brogergvhs/kaodoku/internal/mangabaka"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
 	"github.com/brogergvhs/kaodoku/internal/util"
@@ -56,6 +58,7 @@ type JobService struct {
 	pushMu     sync.Mutex
 	pushes     map[[2]int64]*pendingPush
 	pushLocks  sync.Map // [user, title] -> *sync.Mutex held while pushing that title
+	mb         *mangabaka.Store
 	adultMu    sync.Mutex
 	adultTags  []string // vocabulary names flagged adult, briefly cached
 	adultExp   time.Time
@@ -89,6 +92,7 @@ type JobPayload struct {
 	Folder               string      `json:"folder,omitempty"`
 	Provider             string      `json:"provider,omitempty"`
 	Import               *ListImport `json:"import,omitempty"`
+	Force                bool        `json:"force,omitempty"`
 }
 
 // RunSummary describes one queue drain.
@@ -196,6 +200,14 @@ func SettingDefault(key string) string {
 		return "100"
 	case SettingCacheRecs:
 		return "200"
+	case SettingMangaBakaEnabled:
+		return "false"
+	case SettingMangaBakaEvery:
+		return "168h"
+	case SettingMangaBakaVariant:
+		return "full"
+	case SettingMangaBakaAggressive:
+		return "true"
 	case SettingRateLimitBurst:
 		return "2"
 	case SettingRateLimitDisabled:
@@ -270,6 +282,10 @@ func SettingKeys() []string {
 		SettingCacheRelatedMB,
 		SettingCacheSearches,
 		SettingCacheRecs,
+		SettingMangaBakaEnabled,
+		SettingMangaBakaEvery,
+		SettingMangaBakaVariant,
+		SettingMangaBakaAggressive,
 		SettingAniListClientID,
 		SettingAniListClientSecret,
 		SettingMALClientID,
@@ -311,7 +327,15 @@ func ValidateSetting(key, value string) error {
 		return validateDurationSetting(key, value)
 	case SettingServeRefreshEvery, SettingServeScanEvery, SettingServeDownloadEvery, SettingServeSourceVerifyEvery, SettingServeRunEvery, SettingServicesHealthInterval:
 		return validateDurationSetting(key, value)
-	case SettingBrowserSolverEnabled, SettingBrowserDownloaderEnabled, SettingRateLimitDisabled:
+	case SettingMangaBakaEvery:
+		if d, err := time.ParseDuration(value); err != nil || d != 0 && d < 24*time.Hour {
+			return fmt.Errorf("%s must be 0 or at least 24h", key)
+		}
+	case SettingMangaBakaVariant:
+		if value != "full" && value != "default" {
+			return fmt.Errorf("%s must be full or default", key)
+		}
+	case SettingBrowserSolverEnabled, SettingBrowserDownloaderEnabled, SettingRateLimitDisabled, SettingMangaBakaEnabled, SettingMangaBakaAggressive:
 		if _, err := strconv.ParseBool(value); err != nil {
 			return fmt.Errorf("invalid bool for %s", key)
 		}
@@ -396,6 +420,7 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 
 	svc := newJobService(db)
 	svc.dbPath = dbPath
+	svc.mb = mangabaka.Open(filepath.Join(filepath.Dir(dbPath), "mangabaka.db"))
 	svc.catalog.searchLimit = func(ctx context.Context) int { return svc.cacheLimit(ctx, SettingCacheSearches) }
 	if svc.secrets, err = newTokenCipher(dbPath); err != nil {
 		_ = db.Close()
@@ -432,7 +457,7 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 			log.Printf("startup download stats scan failed: %v", err)
 		}
 	}()
-	return svc, func() { _ = db.Close() }, nil
+	return svc, func() { _ = svc.mb.Close(); _ = db.Close() }, nil
 }
 
 func newJobService(db database.Handle) *JobService {
@@ -448,6 +473,7 @@ func newJobService(db database.Handle) *JobService {
 		lib:     newLibraryService(db),
 		src:     newSourceService(db),
 		catalog: newCatalogService(db),
+		mb:      &mangabaka.Store{},
 	}
 	svc.lib.SetMangaLookup(svc.catalog.GetManga)
 	return svc
@@ -2182,6 +2208,8 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 		return err
 	case jobs.TypeImportList:
 		return s.runListImport(ctx, payload.UserID, payload.Import, progress)
+	case jobs.TypeMangaBakaRefresh:
+		return s.runMangaBakaRefresh(ctx, payload.Force, progress)
 	default:
 		return fmt.Errorf("unknown job type %q", job.Type)
 	}
@@ -2325,7 +2353,7 @@ func validateJob(typ string, payload JobPayload) error {
 		if payload.TitleID < 0 {
 			return fmt.Errorf("invalid title id %d", payload.TitleID)
 		}
-	case jobs.TypeSyncTrackers, jobs.TypeCatalogRefresh, jobs.TypeBackupUserData:
+	case jobs.TypeSyncTrackers, jobs.TypeCatalogRefresh, jobs.TypeBackupUserData, jobs.TypeMangaBakaRefresh:
 	case jobs.TypeAttachVolumes:
 		if payload.TitleID <= 0 || strings.TrimSpace(payload.Folder) == "" {
 			return fmt.Errorf("title id and folder are required")

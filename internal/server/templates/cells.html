@@ -1232,3 +1232,11 @@
   <input type="checkbox" class="toggle shrink-0" id="tp-{{.Key}}" name="{{.Key}}" value="true" {{if .On}}checked{{end}}>
 </div>
 {{end}}
+
+{{define "mangaBakaNote"}}<p class="mt-1 text-sm">{{.}}</p>{{end}}
+
+{{define "mangaBakaConfirm"}}
+<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">The published database is the one already imported. Re-import it anyway?
+  <button type="button" class="btn btn-xs btn-warning" hx-post="/ui/settings/mangabaka/refresh" hx-vals='{"force": "1", "confirm": "1"}' hx-target="#mangabaka-note">Re-import</button>
+</div>
+{{end}}

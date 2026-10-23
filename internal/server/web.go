@@ -191,9 +191,10 @@ type settingsView struct {
 	Content  *userEditView
 }
 type settingGroup struct {
-	Title  string
-	Fields []settingField
-	Apps   []settingApp
+	Title     string
+	Fields    []settingField
+	Apps      []settingApp
+	MangaBaka string // status line of the local MangaBaka copy
 }
 
 type settingApp struct {
@@ -227,6 +228,14 @@ func settingMeta(key string) (label, desc string) {
 		return "Search results", "Searches kept for 10 minutes."
 	case service.SettingCacheRecs:
 		return "Recommendations", "Home recommendations and list suggestions kept per user for 6 hours."
+	case service.SettingMangaBakaEnabled:
+		return "Use MangaBaka", "Downloads the MangaBaka database and uses it to link titles across trackers, fill in details and covers, and find related titles, saving calls to tracker APIs."
+	case service.SettingMangaBakaEvery:
+		return "Check for a new database", "How often to look for a newer MangaBaka database (e.g. 168h). It is rebuilt nightly, but titles change every few days. At least 24h; 0 only refreshes on Refresh now."
+	case service.SettingMangaBakaVariant:
+		return "Database download", "Full also keeps MangaUpdates recommendations, the only recommendations available without tracker calls. Default is about 300 MB smaller per download and has none."
+	case service.SettingMangaBakaAggressive:
+		return "Save tracker API calls aggressively", "Related titles, recommendations, trending, linking and title details use only MangaBaka and data trackers already sent. Tracker data loads only when someone clicks Fetch. Off, trackers are still asked when MangaBaka has nothing."
 	case service.SettingServeTrackerSyncEvery:
 		return "Tracker sync", "How often connected tracker accounts sync reading progress (e.g. 12h). Empty disables."
 	case service.SettingServeCatalogEvery:
@@ -459,6 +468,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/covers/{provider}/{id}", u.catalogCover)
 	mux.HandleFunc("GET /img/{sig}/{key}", u.image)
 	mux.HandleFunc("POST /ui/settings/caches/{key}/clear", u.clearCache)
+	mux.HandleFunc("POST /ui/settings/mangabaka/refresh", u.mangaBakaRefresh)
 	mux.HandleFunc("GET /ui/search/trending", u.trendingManga)
 	mux.HandleFunc("GET /anilist/connect", u.trackerConnect)
 	mux.HandleFunc("GET /anilist/callback", u.trackerCallback)
@@ -2089,6 +2099,7 @@ var globalJobTypes = []string{
 	jobs.TypeCatalogRefresh,
 	jobs.TypeSyncTrackers,
 	jobs.TypeBackupUserData,
+	jobs.TypeMangaBakaRefresh,
 }
 
 func (u *webUI) jobStart(w http.ResponseWriter, r *http.Request) {
@@ -4169,7 +4180,10 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 					f.Selected = append(f.Selected, o.Name)
 				}
 			}
-		case key == service.SettingBrowserSolverEnabled, key == service.SettingBrowserDownloaderEnabled, key == service.SettingRateLimitDisabled:
+		case key == service.SettingMangaBakaVariant:
+			f.Kind, f.Options = "select", []providerOption{{"full", "Full (about 850 MB)"}, {"default", "Default (about 550 MB)"}}
+		case key == service.SettingBrowserSolverEnabled, key == service.SettingBrowserDownloaderEnabled, key == service.SettingRateLimitDisabled,
+			key == service.SettingMangaBakaEnabled, key == service.SettingMangaBakaAggressive:
 			f.Kind = "bool"
 		case strings.HasPrefix(key, "ui.custom."):
 			f.Kind = "color"
@@ -4222,6 +4236,8 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 				{Provider: catalog.AniListProvider, Label: "AniList", Fields: fields(service.SettingAniListClientID, service.SettingAniListClientSecret)},
 				{Provider: catalog.MALProvider, Label: "MyAnimeList", Fields: fields(service.SettingMALClientID, service.SettingMALClientSecret)},
 			}},
+			settingGroup{Title: "MangaBaka", Fields: fields(service.SettingMangaBakaEnabled, service.SettingMangaBakaEvery,
+				service.SettingMangaBakaVariant, service.SettingMangaBakaAggressive), MangaBaka: mangaBakaNote(u.svc.MangaBakaStatus(ctx))},
 		)
 	}
 	return settingsView{Groups: groups}
@@ -4268,6 +4284,57 @@ func (u *webUI) image(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyRemoteImage(w, r, u.svc, raw, "Web image")
+}
+
+func mangaBakaNote(st service.MangaBakaStatus) string {
+	note := "Not downloaded yet."
+	if st.Series > 0 {
+		note = fmt.Sprintf("%s series, %s variant, imported %s, %s on disk.", humanCount(st.Series), st.Variant, st.ImportedAt.Local().Format("2 Jan 2006 15:04"), util.Human(st.Size))
+	}
+	if !st.Next.IsZero() {
+		note += " Next check " + st.Next.Local().Format("2 Jan 15:04") + "."
+	}
+	if st.LastError != "" {
+		note += " Last refresh failed: " + st.LastError
+	}
+	return note
+}
+
+func humanCount(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+// mangaBakaRefresh queues a refresh; a forced one of an unchanged dump asks first.
+func (u *webUI) mangaBakaRefresh(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !userFrom(ctx).Can(auth.PermSettingsManage) {
+		writeError(w, http.StatusForbidden, "refreshing MangaBaka needs the settings permission")
+		return
+	}
+	if !u.svc.MangaBakaEnabled(ctx) {
+		u.frag(w, "mangaBakaNote", "Turn on Use MangaBaka and save first.")
+		return
+	}
+	force := r.FormValue("force") != ""
+	if force && r.FormValue("confirm") == "" {
+		if same, err := u.svc.MangaBakaUnchanged(ctx); err != nil {
+			u.frag(w, "mangaBakaNote", "Couldn't reach MangaBaka: "+err.Error())
+			return
+		} else if same {
+			u.frag(w, "mangaBakaConfirm", nil)
+			return
+		}
+	}
+	if err := u.svc.RefreshMangaBaka(ctx, force); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.kick()
+	u.frag(w, "mangaBakaNote", "Refresh started. It shows in Jobs and takes a few minutes.")
 }
 
 func (u *webUI) clearCache(w http.ResponseWriter, r *http.Request) {
@@ -4712,6 +4779,8 @@ func jobDesc(typ string) string {
 		return "Saves progress, settings, users and library metadata to a backup file."
 	case jobs.TypeImportList:
 		return "Adds the titles from an imported MyAnimeList list that weren't in the library."
+	case jobs.TypeMangaBakaRefresh:
+		return "Downloads the MangaBaka database if a newer one is out, then links library titles from it."
 	}
 	return ""
 }
@@ -4740,6 +4809,8 @@ func jobLabel(typ string) string {
 		return "Back up user data"
 	case jobs.TypeDetectCrops:
 		return "Detect page crops"
+	case jobs.TypeMangaBakaRefresh:
+		return "MangaBaka refresh"
 	}
 	return typ
 }

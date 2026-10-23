@@ -930,6 +930,19 @@
       <button type="button" class="btn btn-sm {{if .Configured}}btn-outline{{else}}btn-primary{{end}} shrink-0" onclick="document.getElementById('app-{{.Provider}}').showModal()">{{if .Configured}}{{template "iconEdit"}}Edit{{else}}{{template "iconPlus"}}Connect{{end}}</button>
     </div>
     {{end}}
+    {{with .MangaBaka}}
+    <div class="flex items-start justify-between gap-4 py-3 max-sm:flex-col max-sm:gap-1">
+      <div class="min-w-0">
+        <div class="font-medium">Database</div>
+        <div class="text-sm text-base-content/60 max-w-prose">{{.}} Data from <a class="link" href="https://mangabaka.org" target="_blank" rel="noopener">MangaBaka</a>, CC BY-NC-SA 4.0.</div>
+        <div id="mangabaka-note"></div>
+      </div>
+      <div class="flex shrink-0 items-center gap-3">
+        <label class="flex items-center gap-2 text-sm tip" data-tip="Re-import even if the database didn't change"><input type="checkbox" class="checkbox checkbox-sm" name="force" value="1" form="mangabaka-refresh">Force</label>
+        <button class="btn btn-sm" form="mangabaka-refresh">Refresh now</button>
+      </div>
+    </div>
+    {{end}}
   </div>
   {{end}}
   {{end}}
@@ -937,6 +950,7 @@
     <button class="w-full btn btn-primary btn-sm">Save settings</button>
   </div>
 </form>
+<form id="mangabaka-refresh" hx-post="/ui/settings/mangabaka/refresh" hx-target="#mangabaka-note"></form>
 {{range .Groups}}{{range .Apps}}
 <dialog id="app-{{.Provider}}" class="modal">
   <form class="modal-box grid max-w-md gap-3" hx-put="/ui/settings" hx-target="#toast" hx-on::after-request="if (event.detail.successful) location.reload()">
