@@ -77,6 +77,7 @@ func (c *restClient) send(ctx context.Context, method, path string, body, out an
 		if c.auth != nil {
 			c.auth(ctx, req.Header)
 		}
+		c.requests.Add(1)
 		resp, err := c.client.Do(req)
 		if err != nil {
 			return transportError(c.label, err)

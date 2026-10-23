@@ -151,6 +151,8 @@
 {{end}}
 {{end}}
 
+{{define "requestCounts"}}<td class="text-right tabular-nums">{{.Today}}</td><td class="text-right tabular-nums">{{.Month}}</td><td class="text-right tabular-nums">{{.Total}}</td>{{end}}
+
 {{define "metricsOverview"}}
 <div class="stats bg-base-100 w-full mb-4">
   <div class="stat"><div class="stat-title">Titles</div><div class="stat-value text-3xl">{{.O.TotalTitles}}</div></div>
@@ -208,6 +210,23 @@
     {{template "barList" .O.Jobs}}
   </div>
 </div>
+
+{{with .O.TrackerRequests}}
+<div class="rounded-xl bg-base-100 p-4 mb-4">
+  <h3 class="text-sm font-semibold text-base-content/70 mb-3">Tracker API requests</h3>
+  <div class="overflow-x-auto">
+    <table class="table table-sm">
+      <thead>
+        <tr><th></th><th class="text-center" colspan="3">API</th><th class="text-center" colspan="3">Images</th></tr>
+        <tr><th>Tracker</th><th class="text-right">Today</th><th class="text-right">30 days</th><th class="text-right">All time</th><th class="text-right">Today</th><th class="text-right">30 days</th><th class="text-right">All time</th></tr>
+      </thead>
+      <tbody>
+        {{range .}}<tr{{if .All}} class="font-semibold"{{end}}><td>{{.Label}}</td>{{template "requestCounts" .API}}{{template "requestCounts" .Images}}</tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
 
 <div class="rounded-xl bg-base-100 p-4">
   <h3 class="text-sm font-semibold text-base-content/70 mb-3">System</h3>

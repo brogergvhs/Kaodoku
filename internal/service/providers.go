@@ -3,11 +3,12 @@ package service
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
@@ -24,10 +25,10 @@ const (
 )
 
 const (
-	mappingRecheck  = 14 * 24 * time.Hour
-	autoConfirm     = 0.92
-	suggestMatch    = 0.75
-	relatedCacheTTL = 30 * time.Minute
+	mappingRecheck = 14 * 24 * time.Hour
+	autoConfirm    = 0.92
+	suggestMatch   = 0.75
+	relatedTTL     = 7 * 24 * time.Hour
 )
 
 func ProviderNames() []string { return slices.Clone(providerOrder) }
@@ -64,8 +65,8 @@ func (s *JobService) providerEnabled(ctx context.Context, name string) bool {
 
 // ProviderOutage is why a provider is unusable right now: its last reported outage, or a tag list still to sync.
 func (s *JobService) ProviderOutage(name string) string {
-	if h, ok := s.catalog.providers[name].(interface{ Outage() string }); ok && h.Outage() != "" {
-		return h.Outage()
+	if o := s.healthOutage(name); o != "" {
+		return o
 	}
 	if s.vocabPending(name) {
 		return "syncing its tags and genres"
@@ -73,23 +74,131 @@ func (s *JobService) ProviderOutage(name string) string {
 	return ""
 }
 
-// WatchProviders syncs missing tag lists, pings providers in outage every minute and the rest every ten, so outages switch them off server-wide.
+func (s *JobService) healthOutage(name string) string {
+	if h, ok := s.catalog.providers[name].(interface{ Outage() string }); ok {
+		return h.Outage()
+	}
+	return ""
+}
+
+// WatchProviders flushes request counts, syncs missing tag lists and re-checks trackers in an outage; working trackers are never pinged, failing requests report outages.
 func (s *JobService) WatchProviders(ctx context.Context) {
-	for tick := 0; ; tick++ {
+	defer s.flushRequests(context.WithoutCancel(ctx))
+	retries := map[string]outageRetry{}
+	for {
+		s.flushRequests(ctx)
 		s.SyncPendingVocabularies(ctx)
-		for _, name := range providerOrder {
-			if s.providerConfigured(ctx, name) && (tick%10 == 0 || s.ProviderOutage(name) != "") {
-				pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				_, _ = s.catalog.providers[name].Trending(pctx, 1)
-				cancel()
-			}
-		}
+		s.probeOutages(ctx, retries, time.Now())
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(time.Minute):
 		}
 	}
+}
+
+type outageRetry struct {
+	wait time.Duration
+	at   time.Time
+}
+
+// probeOutages re-checks each tracker in an outage 1, 2, 4… up to 30 minutes apart until it answers again.
+func (s *JobService) probeOutages(ctx context.Context, retries map[string]outageRetry, now time.Time) {
+	for _, name := range providerOrder {
+		r, seen := retries[name]
+		switch {
+		case !s.providerConfigured(ctx, name) || s.healthOutage(name) == "":
+			delete(retries, name)
+		case !seen:
+			retries[name] = outageRetry{time.Minute, now.Add(time.Minute)}
+		case !now.Before(r.at):
+			pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			_, _ = s.catalog.providers[name].Trending(pctx, 1)
+			cancel()
+			r.wait = min(2*r.wait, 30*time.Minute)
+			retries[name] = outageRetry{r.wait, now.Add(r.wait)}
+		}
+	}
+}
+
+type requestCounters interface {
+	Requests() *atomic.Int64
+	Images() *atomic.Int64
+}
+
+// CountImage counts an image the server fetches itself from a tracker's servers.
+func (s *JobService) CountImage(url string) {
+	if c, ok := s.catalog.providers[catalog.ImageProvider(url)].(requestCounters); ok {
+		c.Images().Add(1)
+	}
+}
+
+// flushRequests adds each tracker's API request and image counts since the last flush to today's row.
+func (s *JobService) flushRequests(ctx context.Context) {
+	day := time.Now().UTC().Format(time.DateOnly)
+	for name, p := range s.catalog.providers {
+		c, ok := p.(requestCounters)
+		if !ok {
+			continue
+		}
+		n, img := c.Requests().Swap(0), c.Images().Swap(0)
+		if n == 0 && img == 0 {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO tracker_requests (provider, day, count, images) VALUES (?, ?, ?, ?)
+			ON CONFLICT (provider, day) DO UPDATE SET count = count + excluded.count, images = images + excluded.images`, name, day, n, img); err != nil {
+			c.Requests().Add(n)
+			c.Images().Add(img)
+		}
+	}
+}
+
+type RequestCounts struct{ Today, Month, Total int64 }
+
+func (c RequestCounts) plus(o RequestCounts) RequestCounts {
+	return RequestCounts{c.Today + o.Today, c.Month + o.Month, c.Total + o.Total}
+}
+
+type TrackerRequests struct {
+	Label       string
+	API, Images RequestCounts
+	All         bool
+}
+
+// TrackerRequestStats lists API requests and image fetches per tracker, with a final all-trackers row.
+func (s *JobService) TrackerRequestStats(ctx context.Context) []TrackerRequests {
+	s.flushRequests(ctx)
+	now := time.Now().UTC()
+	today, month := now.Format(time.DateOnly), now.AddDate(0, 0, -30).Format(time.DateOnly)
+	rows, err := s.db.QueryContext(ctx, `SELECT provider,
+		COALESCE(SUM(CASE WHEN day = ? THEN count END), 0), COALESCE(SUM(CASE WHEN day > ? THEN count END), 0), SUM(count),
+		COALESCE(SUM(CASE WHEN day = ? THEN images END), 0), COALESCE(SUM(CASE WHEN day > ? THEN images END), 0), SUM(images)
+		FROM tracker_requests GROUP BY provider`, today, month, today, month)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	byName := map[string]TrackerRequests{}
+	for rows.Next() {
+		var name string
+		var r TrackerRequests
+		if rows.Scan(&name, &r.API.Today, &r.API.Month, &r.API.Total, &r.Images.Today, &r.Images.Month, &r.Images.Total) == nil {
+			r.Label = s.ProviderLabel(name)
+			byName[name] = r
+		}
+	}
+	var out []TrackerRequests
+	all := TrackerRequests{Label: "All trackers", All: true}
+	for _, name := range providerOrder {
+		if r, ok := byName[name]; ok {
+			out = append(out, r)
+			all.API, all.Images = all.API.plus(r.API), all.Images.plus(r.Images)
+		}
+	}
+	if len(out) > 1 {
+		out = append(out, all)
+	}
+	return out
 }
 
 func (s *JobService) providerConfigured(ctx context.Context, name string) bool {
@@ -317,6 +426,9 @@ func crossLinks(provider string) bool {
 	return provider == catalog.AniListProvider || provider == catalog.KitsuProvider
 }
 
+// recommends is false for Kitsu, whose API has no community recommendations.
+func recommends(provider string) bool { return provider != catalog.KitsuProvider }
+
 // matchQueries lists the distinct romaji, English and native titles, since trackers index different ones.
 func matchQueries(m catalog.Manga) []string {
 	var out []string
@@ -363,32 +475,28 @@ func (s *JobService) resolveLibrary(ctx context.Context, p catalog.Provider, lim
 	}
 }
 
-type cachedRelated struct {
-	relations, recs []catalog.Manga
-	expires         time.Time
-}
-
-func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id string, limit int) ([]catalog.Manga, []catalog.Manga, error) {
-	key := fmt.Sprintf("%s:%s:%d", p.Name(), id, limit)
-	s.relMu.Lock()
-	c, ok := s.relCache[key]
-	s.relMu.Unlock()
-	if ok && time.Now().Before(c.expires) {
-		return c.relations, c.recs, nil
+// relatedCached keeps a work's relations and recommendations in the database for a week; a stale copy stands in while a refresh fails.
+func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id string) ([]catalog.Manga, []catalog.Manga, error) {
+	var relJSON, recJSON, fetched string
+	var rel, recs []catalog.Manga
+	err := s.db.QueryRowContext(ctx, `SELECT relations_json, recommendations_json, fetched_at FROM tracker_related WHERE provider = ? AND provider_id = ?`, p.Name(), id).Scan(&relJSON, &recJSON, &fetched)
+	stored := err == nil && json.Unmarshal([]byte(relJSON), &rel) == nil && json.Unmarshal([]byte(recJSON), &recs) == nil
+	if t, err := database.ParseTime(fetched); stored && err == nil && time.Since(t) < relatedTTL {
+		return rel, recs, nil
 	}
-	rel, recs, err := p.Related(ctx, id, limit)
-	if err != nil {
+	freshRel, freshRecs, err := p.Related(ctx, id, 24)
+	if err != nil && !catalog.IsNotFound(err) {
+		if stored {
+			return rel, recs, nil
+		}
 		return nil, nil, err
 	}
-	now := time.Now()
-	s.relMu.Lock()
-	if s.relCache == nil {
-		s.relCache = map[string]cachedRelated{}
-	}
-	maps.DeleteFunc(s.relCache, func(_ string, c cachedRelated) bool { return now.After(c.expires) })
-	s.relCache[key] = cachedRelated{rel, recs, now.Add(relatedCacheTTL)}
-	s.relMu.Unlock()
-	return rel, recs, nil
+	relData, _ := json.Marshal(freshRel)
+	recData, _ := json.Marshal(freshRecs)
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_related (provider, provider_id, relations_json, recommendations_json, fetched_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (provider, provider_id) DO UPDATE SET relations_json = excluded.relations_json, recommendations_json = excluded.recommendations_json, fetched_at = excluded.fetched_at`,
+		p.Name(), id, relData, recData, database.FormatTime(time.Now()))
+	return freshRel, freshRecs, nil
 }
 
 func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, err error) {
@@ -414,16 +522,16 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 		if !e.Confirmed || e.ProviderID == "" || connected && !pref.Relations && !pref.Recommendations {
 			continue
 		}
-		rel, rec, rerr := s.relatedCached(ctx, p, e.ProviderID, limit)
+		rel, rec, rerr := s.relatedCached(ctx, p, e.ProviderID)
 		if rerr != nil {
 			err = rerr
 			continue
 		}
 		if !connected || pref.Relations {
-			rels = append(rels, rel)
+			rels = append(rels, s.fillFromStore(ctx, p.Name(), rel))
 		}
 		if !connected || pref.Recommendations {
-			recs = append(recs, rec)
+			recs = append(recs, s.fillFromStore(ctx, p.Name(), rec))
 		}
 	}
 	relations, recommendations = mergeManga(rels, self, 0), mergeManga(recs, self, limit)

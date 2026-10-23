@@ -277,6 +277,38 @@ func TestTitleMatchSearchesEnglishWhenRomajiMisses(t *testing.T) {
 	}
 }
 
+type countingProvider struct {
+	*fakeProvider
+	n, img atomic.Int64
+}
+
+func (c *countingProvider) Requests() *atomic.Int64 { return &c.n }
+func (c *countingProvider) Images() *atomic.Int64   { return &c.img }
+
+func TestTrackerRequestsAddUpAcrossFlushes(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	mal, mu := &countingProvider{fakeProvider: newFake(catalog.MALProvider)}, &countingProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
+	svc.catalog.providers[catalog.MALProvider], svc.catalog.providers[catalog.MangaUpdatesProvider] = mal, mu
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO tracker_requests (provider, day, count) VALUES ('mal', '2020-01-01', 100)`); err != nil {
+		t.Fatal(err)
+	}
+	mal.n.Store(5)
+	svc.flushRequests(ctx)
+	mal.n.Add(3)
+	mu.n.Store(2)
+	svc.CountImage("https://cdn.mangaupdates.com/image/i1.png")
+	svc.CountImage("https://example.test/cover.jpg")
+	got := svc.TrackerRequestStats(ctx)
+	want := []TrackerRequests{
+		{Label: "MyAnimeList", API: RequestCounts{8, 8, 108}},
+		{Label: "MangaUpdates", API: RequestCounts{2, 2, 2}, Images: RequestCounts{1, 1, 1}},
+		{Label: "All trackers", API: RequestCounts{10, 10, 110}, Images: RequestCounts{1, 1, 1}, All: true},
+	}
+	if !slices.Equal(got, want) || mal.n.Load() != 0 || mu.img.Load() != 0 {
+		t.Fatalf("stats = %+v, want %+v", got, want)
+	}
+}
+
 func TestDefaultProviderFollowsFirstConnectionAndBlocks(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
@@ -363,19 +395,19 @@ func TestTrackerSuggestionsFollowPickedProvider(t *testing.T) {
 func TestProviderSuggestionsSeedFromRemoteList(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
-	kitsu := newFake(catalog.KitsuProvider)
-	svc.catalog.providers[catalog.KitsuProvider] = kitsu
-	kitsu.entries["1"] = catalog.Entry{Status: "CURRENT"}
-	kitsu.entries["2"] = catalog.Entry{Status: "PLANNING"}
-	kitsu.search = []catalog.Manga{
-		{Provider: catalog.KitsuProvider, ProviderID: "2"},
-		{Provider: catalog.KitsuProvider, ProviderID: "3"},
+	al := newFake(catalog.AniListProvider)
+	svc.catalog.providers[catalog.AniListProvider] = al
+	al.entries["1"] = catalog.Entry{Status: "CURRENT"}
+	al.entries["2"] = catalog.Entry{Status: "PLANNING"}
+	al.search = []catalog.Manga{
+		{Provider: catalog.AniListProvider, ProviderID: "2"},
+		{Provider: catalog.AniListProvider, ProviderID: "3"},
 	}
-	if _, ok := svc.ProviderSuggestions(ctx, catalog.KitsuProvider); ok {
+	if _, ok := svc.ProviderSuggestions(ctx, catalog.AniListProvider); ok {
 		t.Fatal("suggestions without a connected account")
 	}
-	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
-	got, ok := svc.ProviderSuggestions(ctx, catalog.KitsuProvider)
+	connect(t, svc, ctx, catalog.AniListProvider, time.Now())
+	got, ok := svc.ProviderSuggestions(ctx, catalog.AniListProvider)
 	if !ok || len(got) != 1 || got[0].ProviderID != "3" {
 		t.Fatalf("suggestions = %+v, want only the unlisted recommendation", got)
 	}
@@ -517,15 +549,12 @@ func (r *recommendingProvider) ListEntries(ctx context.Context) ([]catalog.Entry
 	r.lists.Add(1)
 	return r.fakeProvider.ListEntries(ctx)
 }
-func (r *recommendingProvider) Related(ctx context.Context, id string, limit int) ([]catalog.Manga, []catalog.Manga, error) {
+func (r *recommendingProvider) Related(context.Context, string, int) ([]catalog.Manga, []catalog.Manga, error) {
 	r.related++
-	return r.fakeProvider.Related(ctx, id, limit)
-}
-func (r *recommendingProvider) Recommendations(context.Context, string, int) ([]catalog.Manga, error) {
-	return []catalog.Manga{{Provider: catalog.MangaUpdatesProvider, ProviderID: "8", TitleRomaji: "Stub", IsAdult: true}}, nil
+	return nil, []catalog.Manga{{Provider: catalog.MangaUpdatesProvider, ProviderID: "8", TitleRomaji: "Stub", IsAdult: true}}, nil
 }
 
-func TestSuggestionsShareOneListDownloadAndUseCheapRecommendations(t *testing.T) {
+func TestSuggestionsReuseStoredListsAndRecommendations(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
 	mu := &recommendingProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
@@ -546,12 +575,16 @@ func TestSuggestionsShareOneListDownloadAndUseCheapRecommendations(t *testing.T)
 	if !ok || len(got) != 1 || got[0].TitleRomaji != "Known" || got[0].IsAdult {
 		t.Fatalf("suggestions = %+v, want the stub filled from the stored record", got)
 	}
-	if mu.lists.Load() != 1 || mu.related != 0 {
-		t.Fatalf("list downloads = %d, Related calls = %d; want 1 and 0", mu.lists.Load(), mu.related)
+	if mu.lists.Load() != 1 || mu.related != 1 {
+		t.Fatalf("list downloads = %d, Related calls = %d; want 1 and 1", mu.lists.Load(), mu.related)
 	}
 	svc.invalidateRecs(1)
-	svc.TrackerSuggestions(ctx, catalog.MangaUpdatesProvider)
-	waitFor(t, func() bool { return mu.lists.Load() == 2 }, "a sync must refresh the cached list in the background")
+	svc.listMu.Lock()
+	svc.listCache = nil
+	svc.listMu.Unlock()
+	if got, _ := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider); len(got) != 1 || mu.lists.Load() != 1 || mu.related != 1 {
+		t.Fatalf("after a restart: %d suggestions, %d list downloads, %d Related calls; want the stored copies", len(got), mu.lists.Load(), mu.related)
+	}
 	if err := svc.DisconnectTracker(ctx, 1, catalog.MangaUpdatesProvider); err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +611,7 @@ func TestListCacheRefreshesInTheBackground(t *testing.T) {
 	}
 	svc.listMu.Lock()
 	for k, c := range svc.listCache {
-		c.fetched = time.Now().Add(-time.Minute)
+		c.fetched = time.Now().Add(-listFresh)
 		svc.listCache[k] = c
 	}
 	svc.listMu.Unlock()
@@ -737,5 +770,37 @@ func TestTrackerListsDownloadSideBySideAndSkipOutages(t *testing.T) {
 	}
 	if down.calls.Load() != 0 {
 		t.Fatal("a tracker in outage must not be asked for its list")
+	}
+}
+
+type pingedProvider struct {
+	*fakeProvider
+	outage string
+	pings  int
+}
+
+func (p *pingedProvider) Outage() string { return p.outage }
+func (p *pingedProvider) Trending(context.Context, int) ([]catalog.Manga, error) {
+	p.pings++
+	return nil, nil
+}
+
+func TestOnlyTrackersInAnOutageArePingedWithBackoff(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	down := &pingedProvider{fakeProvider: newFake(catalog.KitsuProvider), outage: "down"}
+	up := &pingedProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
+	svc.catalog.providers[catalog.KitsuProvider], svc.catalog.providers[catalog.MangaUpdatesProvider] = down, up
+	retries := map[string]outageRetry{}
+	start := time.Now()
+	var at []int
+	for m := range 62 {
+		before := down.pings
+		svc.probeOutages(ctx, retries, start.Add(time.Duration(m)*time.Minute))
+		if down.pings > before {
+			at = append(at, m)
+		}
+	}
+	if fmt.Sprint(at) != "[1 3 7 15 31 61]" || up.pings != 0 {
+		t.Fatalf("pinged the down tracker at minutes %v and the working one %d times", at, up.pings)
 	}
 }

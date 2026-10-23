@@ -28,6 +28,9 @@ func TestOutagesDisableUntilASuccess(t *testing.T) {
 	if _, err := mal.Trending(ctx, 1); err != nil || mal.Outage() != "" {
 		t.Fatalf("recovery: err=%v outage=%q", err, mal.Outage())
 	}
+	if n := mal.Requests().Load(); n != 2 {
+		t.Fatalf("counted %d MAL requests, want 2", n)
+	}
 
 	ani := NewAniListClient(nil)
 	ani.endpoint = srv.URL
@@ -59,5 +62,21 @@ func TestSlowRequestIsNotAnOutage(t *testing.T) {
 	mu.base = gone.URL
 	if _, _, err := mu.Search(context.Background(), "x", 1, SearchFilter{}); !IsUnavailable(err) || mu.Outage() == "" {
 		t.Fatalf("a refused connection is an outage: err=%v outage=%q", err, mu.Outage())
+	}
+}
+
+func TestImageProviderMatchesTrackerHostsOnly(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx30002.jpg": AniListProvider,
+		"https://cdn.myanimelist.net/images/manga/1/157897.jpg":                     MALProvider,
+		"https://media.kitsu.app/manga/poster_images/17063/large.jpg":               KitsuProvider,
+		"https://cdn.mangaupdates.com/image/i173103.png":                            MangaUpdatesProvider,
+		"https://notanilist.co/x.jpg":                                               "",
+		"https://example.test/cover.jpg":                                            "",
+		"":                                                                          "",
+	} {
+		if got := ImageProvider(raw); got != want {
+			t.Errorf("ImageProvider(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }

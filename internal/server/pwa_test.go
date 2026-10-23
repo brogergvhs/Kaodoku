@@ -125,10 +125,11 @@ func TestChapterDownloadToDevice(t *testing.T) {
 
 func TestFetchCover(t *testing.T) {
 	t.Parallel()
-	if _, _, ok := fetchCover(context.Background(), "http://127.0.0.1/cover/large/x.jpg"); ok {
+	_, svc, _, _ := opdsTestAPI(t)
+	if _, _, ok := fetchCover(context.Background(), svc, "http://127.0.0.1/cover/large/x.jpg"); ok {
 		t.Error("private cover URL should not fetch")
 	}
-	if _, _, ok := fetchCover(context.Background(), ""); ok {
+	if _, _, ok := fetchCover(context.Background(), svc, ""); ok {
 		t.Error("empty cover URL should not fetch")
 	}
 }

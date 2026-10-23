@@ -65,8 +65,6 @@ type muSeries struct {
 	} `json:"recommendations"`
 }
 
-const muRelatedDetails = 12
-
 func (s muSeries) manga() Manga {
 	year, _ := strconv.Atoi(string(s.Year))
 	m := Manga{
@@ -183,26 +181,10 @@ func (c *MangaUpdatesClient) Related(ctx context.Context, id string, limit int) 
 	if err != nil {
 		return nil, nil, err
 	}
-	for i, r := range s.RelatedSeries {
-		id := strconv.FormatInt(r.RelatedSeriesID, 10)
-		m := Manga{Provider: MangaUpdatesProvider, ProviderID: id, TitleRomaji: r.RelatedSeriesName, IsAdult: true}
-		if i < muRelatedDetails {
-			if full, err := c.series(ctx, id); err == nil {
-				m = full.manga()
-			}
-		}
-		m.RelationType = normRelation(r.RelationType)
-		relations = append(relations, m)
+	for _, r := range s.RelatedSeries {
+		relations = append(relations, Manga{Provider: MangaUpdatesProvider, ProviderID: strconv.FormatInt(r.RelatedSeriesID, 10), TitleRomaji: r.RelatedSeriesName, IsAdult: true, RelationType: normRelation(r.RelationType)})
 	}
 	return relations, s.recommendations(limit), nil
-}
-
-func (c *MangaUpdatesClient) Recommendations(ctx context.Context, id string, limit int) ([]Manga, error) {
-	s, err := c.series(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return s.recommendations(limit), nil
 }
 
 // recommendations come without genres, so they stay adult until their details load.

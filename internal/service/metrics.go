@@ -565,6 +565,7 @@ type OverviewMetrics struct {
 	Downloads               DownloadStats
 	Sources                 []NamedCount
 	Jobs                    []NamedCount
+	TrackerRequests         []TrackerRequests
 	System                  SystemStats
 }
 
@@ -644,6 +645,7 @@ func (s *JobService) OverviewMetrics(ctx context.Context, allowAdult bool) (Over
 	m.Downloads = s.downloadStats(ctx)
 	m.Sources = s.leaderboard(ctx, `SELECT status, COUNT(*) FROM sources GROUP BY status ORDER BY 2 DESC`)
 	m.Jobs = s.leaderboard(ctx, `SELECT status, COUNT(*) FROM jobs GROUP BY status ORDER BY 2 DESC`)
+	m.TrackerRequests = s.TrackerRequestStats(ctx)
 	m.System = s.systemStats()
 	return m, nil
 }

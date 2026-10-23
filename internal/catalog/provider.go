@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -29,8 +30,31 @@ func IsNotFound(err error) bool     { return errors.Is(err, ErrNotFound) }
 func IsUnauthorized(err error) bool { return errors.Is(err, ErrUnauthorized) }
 func IsUnavailable(err error) bool  { return errors.Is(err, ErrUnavailable) }
 
-// health remembers the last outage seen by a client until any request succeeds again.
-type health struct{ outage atomic.Pointer[string] }
+// health remembers the last outage seen by a client until any request succeeds again, and counts the API requests it sends and the images the server fetches from its hosts.
+type health struct {
+	outage           atomic.Pointer[string]
+	requests, images atomic.Int64
+}
+
+func (h *health) Requests() *atomic.Int64 { return &h.requests }
+func (h *health) Images() *atomic.Int64   { return &h.images }
+
+var imageHosts = map[string]string{"anilist.co": AniListProvider, "anili.st": AniListProvider, "myanimelist.net": MALProvider, "kitsu.app": KitsuProvider, "kitsu.io": KitsuProvider, "mangaupdates.com": MangaUpdatesProvider}
+
+// ImageProvider names the tracker whose servers host an image URL, or "" for any other host.
+func ImageProvider(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	for domain, p := range imageHosts {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return p
+		}
+	}
+	return ""
+}
 
 func (h *health) Outage() string {
 	if r := h.outage.Load(); r != nil {
@@ -85,11 +109,6 @@ type Favouriter interface {
 	Favourites(ctx context.Context) ([]string, error)
 	IsFavourite(ctx context.Context, id string) (bool, error)
 	ToggleFavourite(ctx context.Context, id string) error
-}
-
-// Recommender returns community recommendations alone, cheaper than Related when relations need extra requests.
-type Recommender interface {
-	Recommendations(ctx context.Context, id string, limit int) ([]Manga, error)
 }
 
 // Vocabulary lists a provider's own genre and tag names, the ones its search filters and manga use.

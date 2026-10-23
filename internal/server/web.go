@@ -2406,7 +2406,7 @@ func (u *webUI) chaptersDownload(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 	zw := zip.NewWriter(tmp)
-	if name, cover, ok := fetchCover(r.Context(), title.CoverImage); ok {
+	if name, cover, ok := fetchCover(r.Context(), u.svc, title.CoverImage); ok {
 		if dst, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store}); err == nil {
 			_, _ = dst.Write(cover)
 		}
@@ -2443,7 +2443,7 @@ func (u *webUI) chaptersDownload(w http.ResponseWriter, r *http.Request) {
 
 // fetchCover downloads the manga cover image so it can ride along in the ZIP.
 // Failure is non-fatal — the archive is still worth serving without it.
-func fetchCover(ctx context.Context, coverURL string) (name string, data []byte, ok bool) {
+func fetchCover(ctx context.Context, svc *service.JobService, coverURL string) (name string, data []byte, ok bool) {
 	if strings.TrimSpace(coverURL) == "" {
 		return "", nil, false
 	}
@@ -2457,6 +2457,7 @@ func fetchCover(ctx context.Context, coverURL string) (name string, data []byte,
 	if err != nil {
 		return "", nil, false
 	}
+	svc.CountImage(coverURL)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, false

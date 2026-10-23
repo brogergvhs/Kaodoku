@@ -308,6 +308,22 @@ CREATE TABLE IF NOT EXISTS tracker_title_sync (
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
+CREATE TABLE IF NOT EXISTS tracker_requests (
+	provider TEXT NOT NULL,
+	day TEXT NOT NULL,
+	count INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (provider, day)
+);
+
+CREATE TABLE IF NOT EXISTS tracker_related (
+	provider TEXT NOT NULL,
+	provider_id TEXT NOT NULL,
+	relations_json TEXT NOT NULL,
+	recommendations_json TEXT NOT NULL,
+	fetched_at TEXT NOT NULL,
+	PRIMARY KEY (provider, provider_id)
+);
+
 CREATE TABLE IF NOT EXISTS tracker_favourites (
 	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
@@ -454,7 +470,10 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"tracker_accounts", "auto_progressive", "INTEGER NOT NULL DEFAULT 0"},
 		{"tracker_accounts", "use_relations", "INTEGER NOT NULL DEFAULT 1"},
 		{"tracker_accounts", "use_recommendations", "INTEGER NOT NULL DEFAULT 1"},
+		{"tracker_accounts", "list_json", "TEXT NOT NULL DEFAULT ''"},
+		{"tracker_accounts", "list_fetched_at", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_title_sync", "enabled", "INTEGER NOT NULL DEFAULT 1"},
+		{"tracker_requests", "images", "INTEGER NOT NULL DEFAULT 0"},
 		{"content_tags", "is_adult", "INTEGER NOT NULL DEFAULT 0"},
 		{"content_tags", "category", "TEXT NOT NULL DEFAULT ''"},
 		{"content_tags", "description", "TEXT NOT NULL DEFAULT ''"},

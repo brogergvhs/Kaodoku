@@ -53,8 +53,6 @@ type JobService struct {
 	listMu     sync.Mutex
 	listCache  map[string]cachedList
 	listLocks  sync.Map // "user:provider" -> *sync.Mutex held while downloading that list
-	relMu      sync.Mutex
-	relCache   map[string]cachedRelated
 	adultMu    sync.Mutex
 	adultTags  []string // vocabulary names flagged adult, briefly cached
 	adultExp   time.Time
@@ -70,7 +68,7 @@ type cachedRecs struct {
 	expires time.Time
 }
 
-const recommendationTTL = 10 * time.Minute
+const recommendationTTL = 6 * time.Hour
 
 // errJobCancelled aborts an in-flight job on explicit user cancellation.
 var errJobCancelled = errors.New("cancelled by user")
@@ -855,7 +853,7 @@ func (s *JobService) refreshTagVocabulary(ctx context.Context) error {
 // SyncPendingVocabularies fetches the tag lists of configured providers that have none yet; they stay unavailable until then.
 func (s *JobService) SyncPendingVocabularies(ctx context.Context) {
 	for _, name := range providerOrder {
-		if s.providerConfigured(ctx, name) && s.vocabPending(name) {
+		if s.providerConfigured(ctx, name) && s.vocabPending(name) && s.healthOutage(name) == "" {
 			if err := s.syncVocabulary(ctx, name); err != nil && ctx.Err() == nil {
 				log.Printf("%s tag sync failed: %v", name, err)
 			}
@@ -1017,26 +1015,17 @@ func (s *JobService) cacheRecs(uid int64, items []catalog.Manga) {
 	s.recCache[uid] = cachedRecs{items: append([]catalog.Manga(nil), items...), expires: time.Now().Add(recommendationTTL)}
 }
 
-// invalidateRecs drops a user's cached recommendations on tracker changes and marks their lists for a background refresh.
+// invalidateRecs drops a user's cached recommendations and suggestions on tracker changes.
 func (s *JobService) invalidateRecs(userID int64) {
 	prefix := fmt.Sprintf("%d:", userID)
 	s.recMu.Lock()
+	defer s.recMu.Unlock()
 	delete(s.recCache, userID)
 	for key := range s.sugCache {
 		if strings.HasPrefix(key, prefix) {
 			delete(s.sugCache, key)
 		}
 	}
-	s.recMu.Unlock()
-	stale := time.Now().Add(-listFresh)
-	s.listMu.Lock()
-	for key, c := range s.listCache {
-		if strings.HasPrefix(key, prefix) && c.fetched.After(stale) {
-			c.fetched = stale
-			s.listCache[key] = c
-		}
-	}
-	s.listMu.Unlock()
 }
 
 // MangaByIDs returns catalog manga keyed by ID in one query.

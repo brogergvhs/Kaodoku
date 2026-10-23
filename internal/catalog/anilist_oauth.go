@@ -32,6 +32,7 @@ func (c *AniListClient) Exchange(ctx context.Context, app App, code, _ string) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	c.requests.Add(1)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return Token{}, err

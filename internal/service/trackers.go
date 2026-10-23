@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -240,10 +241,11 @@ func (s *JobService) saveAccount(ctx context.Context, userID int64, p catalog.Pr
 		ON CONFLICT(user_id, provider) DO UPDATE SET
 			access_token = excluded.access_token, refresh_token = excluded.refresh_token,
 			remote_user_id = excluded.remote_user_id, remote_name = excluded.remote_name,
-			expires_at = excluded.expires_at, last_error = ''
+			expires_at = excluded.expires_at, last_error = '', list_json = '', list_fetched_at = ''
 	`, userID, p.Name(), access, refresh, remoteID, name, expires); err != nil {
 		return err
 	}
+	s.forgetList(userID, p.Name())
 	s.invalidateRecs(userID)
 	_, err = s.enqueueExact(ctx, jobs.TypeSyncTrackers, JobPayload{UserID: userID, Provider: p.Name()}, time.Now())
 	return err
@@ -256,9 +258,7 @@ func (s *JobService) DisconnectTracker(ctx context.Context, userID int64, provid
 	if err := s.forgetFavouriteSync(ctx, userID, provider); err != nil {
 		return err
 	}
-	s.listMu.Lock()
-	delete(s.listCache, fmt.Sprintf("%d:%s", userID, provider))
-	s.listMu.Unlock()
+	s.forgetList(userID, provider)
 	s.invalidateRecs(userID)
 	return nil
 }
@@ -402,6 +402,7 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	if err != nil {
 		return err
 	}
+	s.storeList(ctx, user.ID, p.Name(), entries)
 	remote := make(map[string]catalog.Entry, len(entries))
 	for _, e := range entries {
 		remote[e.Manga.ProviderID] = e
@@ -861,7 +862,7 @@ func (s *JobService) fillFromStore(ctx context.Context, provider string, items [
 	stored, _ := s.catalog.repo.MangaByProviderIDs(ctx, provider, ids)
 	for i, m := range items {
 		if known, ok := stored[m.ProviderID]; ok && (m.CoverImage == "" || len(m.Genres)+len(m.Tags) == 0) {
-			known.ExternalIDs = m.ExternalIDs
+			known.ExternalIDs, known.RelationType = m.ExternalIDs, m.RelationType
 			items[i] = known
 		}
 	}
@@ -873,44 +874,71 @@ type cachedList struct {
 	fetched time.Time
 }
 
-const (
-	listFresh = 30 * time.Second
-	listStale = recommendationTTL
-)
+const listFresh = time.Hour
 
-// cachedEntries serves a user's list from memory: as is while fresh, then re-downloaded in the background
-// while the old copy is still served, and only fetched in place when missing or older than listStale.
+func listKey(uid int64, provider string) string { return fmt.Sprintf("%d:%s", uid, provider) }
+
+// cachedEntries serves a user's list from memory or the database and downloads it only when there is none;
+// a copy older than listFresh is still served while a new one downloads in the background.
 func (s *JobService) cachedEntries(ctx context.Context, uid int64, provider string) ([]catalog.Entry, error) {
-	key := fmt.Sprintf("%d:%s", uid, provider)
-	v, _ := s.listLocks.LoadOrStore(key, &sync.Mutex{})
+	v, _ := s.listLocks.LoadOrStore(listKey(uid, provider), &sync.Mutex{})
 	lock := v.(*sync.Mutex)
-	if c, ok := s.cachedList(key); ok && time.Since(c.fetched) < listStale {
+	if c, ok := s.cachedList(ctx, uid, provider); ok {
 		if time.Since(c.fetched) >= listFresh && lock.TryLock() {
 			go func() {
 				defer lock.Unlock()
 				bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
 				defer cancel()
-				_, _ = s.fetchList(bctx, uid, provider, key)
+				_, _ = s.fetchList(bctx, uid, provider)
 			}()
 		}
 		return c.entries, nil
 	}
 	lock.Lock()
 	defer lock.Unlock()
-	if c, ok := s.cachedList(key); ok && time.Since(c.fetched) < listFresh {
+	if c, ok := s.cachedList(ctx, uid, provider); ok {
 		return c.entries, nil
 	}
-	return s.fetchList(ctx, uid, provider, key)
+	return s.fetchList(ctx, uid, provider)
 }
 
-func (s *JobService) cachedList(key string) (cachedList, bool) {
+func (s *JobService) cachedList(ctx context.Context, uid int64, provider string) (cachedList, bool) {
+	key := listKey(uid, provider)
+	s.listMu.Lock()
+	c, ok := s.listCache[key]
+	s.listMu.Unlock()
+	if ok {
+		return c, true
+	}
+	var data, fetched string
+	if s.db.QueryRowContext(ctx, `SELECT list_json, list_fetched_at FROM tracker_accounts WHERE user_id = ? AND provider = ? AND list_json != ''`, uid, provider).Scan(&data, &fetched) != nil {
+		return c, false
+	}
+	t, err := database.ParseTime(fetched)
+	if err != nil || json.Unmarshal([]byte(data), &c.entries) != nil {
+		return cachedList{}, false
+	}
+	c.fetched = t
+	s.keepList(key, c)
+	return c, true
+}
+
+func (s *JobService) keepList(key string, c cachedList) {
 	s.listMu.Lock()
 	defer s.listMu.Unlock()
-	c, ok := s.listCache[key]
-	return c, ok
+	if s.listCache == nil {
+		s.listCache = map[string]cachedList{}
+	}
+	s.listCache[key] = c
 }
 
-func (s *JobService) fetchList(ctx context.Context, uid int64, provider, key string) ([]catalog.Entry, error) {
+func (s *JobService) forgetList(uid int64, provider string) {
+	s.listMu.Lock()
+	delete(s.listCache, listKey(uid, provider))
+	s.listMu.Unlock()
+}
+
+func (s *JobService) fetchList(ctx context.Context, uid int64, provider string) ([]catalog.Entry, error) {
 	p, actx, ok := s.trackerSession(ctx, uid, provider)
 	if !ok {
 		return nil, fmt.Errorf("%s is not connected", provider)
@@ -919,20 +947,24 @@ func (s *JobService) fetchList(ctx context.Context, uid int64, provider, key str
 	if err != nil {
 		return nil, err
 	}
-	s.listMu.Lock()
-	if s.listCache == nil {
-		s.listCache = map[string]cachedList{}
-	}
-	s.listCache[key] = cachedList{entries, time.Now()}
-	s.listMu.Unlock()
+	s.storeList(ctx, uid, provider, entries)
 	return entries, nil
+}
+
+// storeList keeps a downloaded list in memory and in the database, so a restart does not download it again.
+func (s *JobService) storeList(ctx context.Context, uid int64, provider string, entries []catalog.Entry) {
+	now := time.Now()
+	s.keepList(listKey(uid, provider), cachedList{entries, now})
+	if data, err := json.Marshal(entries); err == nil {
+		_, _ = s.db.ExecContext(ctx, `UPDATE tracker_accounts SET list_json = ?, list_fetched_at = ? WHERE user_id = ? AND provider = ?`, data, database.FormatTime(now), uid, provider)
+	}
 }
 
 // ProviderSuggestions approximates a backend's own suggestions from community
 // recommendations for the user's reading on it; ok is false when not connected.
 func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) ([]catalog.Manga, bool) {
 	uid := auth.UserID(ctx)
-	key := fmt.Sprintf("%d:%s", uid, provider)
+	key := listKey(uid, provider)
 	s.recMu.Lock()
 	c, cached := s.sugCache[key]
 	s.recMu.Unlock()
@@ -956,7 +988,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 		for _, k := range catalog.Keys(e.Manga) {
 			exclude[k] = true
 		}
-		if e.Status == "CURRENT" || e.Status == "COMPLETED" || e.Status == "REPEATING" {
+		if recommends(provider) && (e.Status == "CURRENT" || e.Status == "COMPLETED" || e.Status == "REPEATING") {
 			seeds = append(seeds, e.Manga.ProviderID)
 		}
 	}
@@ -970,13 +1002,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 	}
 	var lists [][]catalog.Manga
 	for _, id := range seeds {
-		var recs []catalog.Manga
-		if r, ok := p.(catalog.Recommender); ok {
-			recs, err = r.Recommendations(ctx, id, 24)
-		} else {
-			_, recs, err = s.relatedCached(ctx, p, id, 24)
-		}
-		if err == nil {
+		if _, recs, err := s.relatedCached(ctx, p, id); err == nil {
 			lists = append(lists, recs)
 		}
 	}

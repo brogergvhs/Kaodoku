@@ -28,7 +28,7 @@ type Manga struct {
 	Wanted       bool              `json:"wanted"`
 	RawJSON      string            `json:"-"`
 	UpdatedAt    time.Time         `json:"updated_at"`
-	RelationType string            `json:"-"`
+	RelationType string            `json:"relation_type,omitempty"`
 	ExternalIDs  map[string]string `json:"external_ids,omitempty"`
 }
 

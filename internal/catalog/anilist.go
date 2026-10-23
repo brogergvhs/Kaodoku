@@ -333,6 +333,7 @@ func (c *AniListClient) send(ctx context.Context, body []byte) (*http.Response, 
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", util.PickUserAgent(""))
 		bearer(ctx, req.Header)
+		c.requests.Add(1)
 		resp, err := c.client.Do(req)
 		if err != nil {
 			return nil, transportError("anilist", err)

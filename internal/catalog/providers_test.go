@@ -186,22 +186,18 @@ func TestMatchScoreThresholds(t *testing.T) {
 	}
 }
 
-func TestMangaUpdatesRelatedFetchesCovers(t *testing.T) {
-	srv, _ := fakeAPI(t, map[string]string{
+func TestMangaUpdatesRelatedIsOneRequest(t *testing.T) {
+	srv, calls := fakeAPI(t, map[string]string{
 		"GET /series/1": `{"series_id":1,"title":"Main","genres":[{"genre":"Drama"}],"related_series":[{"relation_type":"Side Story","related_series_id":2,"related_series_name":"Side"},{"relation_type":"Sequel","related_series_id":3,"related_series_name":"Gone"}]}`,
-		"GET /series/2": `{"series_id":2,"title":"Side","image":{"url":{"original":"side.jpg"}},"genres":[{"genre":"Drama"}]}`,
 	})
 	c := NewMangaUpdatesClient(srv.Client())
 	c.base = srv.URL
 	rels, _, err := c.Related(context.Background(), "1", 5)
-	if err != nil || len(rels) != 2 {
-		t.Fatalf("related = %+v, %v", rels, err)
+	if err != nil || len(rels) != 2 || len(*calls) != 1 {
+		t.Fatalf("related = %+v, %v after %d requests", rels, err, len(*calls))
 	}
-	if rels[0].CoverImage != "side.jpg" || rels[0].IsAdult || rels[0].RelationType != "SIDE_STORY" {
-		t.Fatalf("detailed relation = %+v", rels[0])
-	}
-	if rels[1].TitleRomaji != "Gone" || !rels[1].IsAdult || rels[1].RelationType != "SEQUEL" {
-		t.Fatalf("fallback relation = %+v", rels[1])
+	if rels[0].TitleRomaji != "Side" || !rels[0].IsAdult || rels[0].RelationType != "SIDE_STORY" || rels[1].RelationType != "SEQUEL" {
+		t.Fatalf("relations = %+v", rels)
 	}
 }
 
