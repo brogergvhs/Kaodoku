@@ -35,7 +35,7 @@ type cachedSearch struct {
 
 const searchTTL = 10 * time.Minute
 
-var providerOrder = []string{catalog.AniListProvider, catalog.MALProvider, catalog.KitsuProvider, catalog.MangaUpdatesProvider}
+var providerOrder = []string{catalog.AniListProvider, catalog.MALProvider, catalog.KitsuProvider, catalog.MangaUpdatesProvider, catalog.MangaBakaProvider}
 
 var ErrContentBlocked = errors.New("content blocked")
 

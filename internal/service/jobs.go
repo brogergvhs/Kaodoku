@@ -421,7 +421,7 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 
 	svc := newJobService(db)
 	svc.dbPath = dbPath
-	svc.mb = mangabaka.Open(filepath.Join(filepath.Dir(dbPath), "mangabaka.db"))
+	svc.setMangaBaka(mangabaka.Open(filepath.Join(filepath.Dir(dbPath), "mangabaka.db")))
 	svc.catalog.searchLimit = func(ctx context.Context) int { return svc.cacheLimit(ctx, SettingCacheSearches) }
 	if svc.secrets, err = newTokenCipher(dbPath); err != nil {
 		_ = db.Close()
@@ -474,8 +474,8 @@ func newJobService(db database.Handle) *JobService {
 		lib:     newLibraryService(db),
 		src:     newSourceService(db),
 		catalog: newCatalogService(db),
-		mb:      &mangabaka.Store{},
 	}
+	svc.setMangaBaka(&mangabaka.Store{})
 	svc.lib.SetMangaLookup(svc.catalog.GetManga)
 	return svc
 }
@@ -806,9 +806,8 @@ func (s *JobService) TitlesByProvider(ctx context.Context, provider string) (map
 	return s.lib.TitlesByProvider(ctx, provider)
 }
 
-// contentAllowedFor mirrors the server's per-user content guard so tracker
-// sync never surfaces a title the user cannot view in the app.
-func contentAllowedFor(u *auth.User, isAdult bool, tags []string) bool {
+// ContentAllowed is the per-user content guard: adult access and blocked or required tags.
+func ContentAllowed(u *auth.User, isAdult bool, tags []string) bool {
 	if u == nil {
 		return false
 	}

@@ -54,6 +54,11 @@ func (s *JobService) MangaBakaEvery(ctx context.Context) time.Duration {
 
 func (s *JobService) MangaBakaReady() bool { return s.mb.Ready() }
 
+func (s *JobService) setMangaBaka(store *mangabaka.Store) {
+	s.mb = store
+	s.catalog.providers[catalog.MangaBakaProvider] = catalog.NewMangaBakaClient(store)
+}
+
 func (s *JobService) mangaBakaVariant(ctx context.Context) string {
 	return s.Setting(ctx, SettingMangaBakaVariant, SettingDefault(SettingMangaBakaVariant))
 }
@@ -82,6 +87,9 @@ func (s *JobService) runMangaBakaRefresh(ctx context.Context, force bool, progre
 		return err
 	}
 	_ = s.catalog.saveCalls(ctx, catalog.MangaBakaProvider, catalog.Call{Kind: "Database", Reason: "Database refresh"}, 1)
+	if err := s.syncMangaBakaTags(ctx); err != nil {
+		return err
+	}
 	return s.linkLibrary(ctx)
 }
 
@@ -147,16 +155,21 @@ func (s *JobService) mbLink(ctx context.Context, works []catalog.Manga) {
 		if !ok {
 			continue
 		}
-		for _, prov := range mangabaka.Trackers {
-			id, e := sr.IDs[prov], all[i][prov]
+		ids := maps.Clone(sr.IDs)
+		ids[catalog.MangaBakaProvider] = strconv.FormatInt(sr.ID, 10)
+		for prov, id := range ids {
+			e, method := all[i][prov], catalog.MangaBakaProvider
+			if prov == catalog.MangaBakaProvider {
+				method = "cross_link"
+			}
 			switch {
 			case prov == m.Provider:
-			case id == "" || e.ProviderID == id:
+			case e.ProviderID == id:
 				s.setSuggestion(ctx, m.ID, prov, "")
-			case e.Method == "user" || e.Confirmed && e.Method != catalog.MangaBakaProvider:
+			case e.Method == "user" || e.Confirmed && e.Method != method:
 				s.setSuggestion(ctx, m.ID, prov, id)
 			case !s.takenByOther(ctx, m.ID, prov, id):
-				_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: prov, ProviderID: id, Method: catalog.MangaBakaProvider, Confirmed: true})
+				_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: prov, ProviderID: id, Method: method, Confirmed: true})
 			}
 		}
 	}
@@ -199,6 +212,11 @@ func (s *JobService) linkLibrary(ctx context.Context) error {
 	for _, m := range works {
 		if s.mbRefresh(ctx, &m) {
 			_, _ = s.catalog.repo.UpsertManga(ctx, m)
+		}
+		if n, _ := strconv.ParseInt(m.ProviderID, 10, 64); m.Provider == catalog.MangaBakaProvider {
+			if sr, ok := s.mb.ByIDs(ctx, []int64{n})[n]; ok && sr.ID != n {
+				_, _ = s.db.ExecContext(ctx, `UPDATE catalog_manga SET provider_id = ? WHERE id = ?`, strconv.FormatInt(sr.ID, 10), m.ID)
+			}
 		}
 	}
 	return ctx.Err()
@@ -308,10 +326,14 @@ func (s *JobService) mbUnify(ctx context.Context, items []catalog.Manga) []catal
 	return items
 }
 
-// mbManga shows a series under the first tracker the user can use that knows it.
+// mbManga shows a series under the first tracker the user can use that knows it, else under MangaBaka itself.
 func (s *JobService) mbManga(ctx context.Context, sr mangabaka.Series) (catalog.Manga, bool) {
 	for _, p := range s.Providers(ctx) {
-		if id := sr.IDs[p.Name()]; id != "" {
+		id := sr.IDs[p.Name()]
+		if p.Name() == catalog.MangaBakaProvider {
+			id = strconv.FormatInt(sr.ID, 10)
+		}
+		if id != "" {
 			return catalog.FromMangaBaka(sr, p.Name(), id), true
 		}
 	}
@@ -373,4 +395,39 @@ func (s *JobService) mbFinalChapters(ctx context.Context, malID string) int {
 		return sr.Chapters
 	}
 	return 0
+}
+
+// syncMangaBakaTags maps MangaBaka's genres and tags onto names the other providers already use, so content guards
+// keep one vocabulary; names nobody else uses are left out.
+func (s *JobService) syncMangaBakaTags(ctx context.Context) error {
+	known := map[string]catalog.ContentTag{}
+	for _, name := range providerOrder {
+		if name == catalog.MangaBakaProvider {
+			continue
+		}
+		tags, _ := s.catalog.repo.ProviderTags(ctx, name)
+		for _, t := range tags {
+			if k := library.TagKey(t.Name); known[k].Name == "" {
+				t.Slug = ""
+				known[k] = t
+			}
+		}
+	}
+	var out []catalog.ContentTag
+	genres, tags := s.mb.TagNames(ctx)
+	for _, name := range append(genres, tags...) {
+		if t, ok := known[library.TagKey(name)]; ok {
+			t.Slug = name
+			out = append(out, t)
+			delete(known, library.TagKey(name))
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	if err := s.catalog.repo.ReplaceContentTags(ctx, catalog.MangaBakaProvider, out); err != nil {
+		return err
+	}
+	s.vocabReady.Store(catalog.MangaBakaProvider, true)
+	return nil
 }

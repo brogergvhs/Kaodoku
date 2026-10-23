@@ -93,7 +93,7 @@ func (s *JobService) ExportMALXML(ctx context.Context, w io.Writer) (exported, u
 	doc.Info.UserName, doc.Info.ExportType = user.Username, 2
 	for _, t := range titles {
 		u, err := s.localUpdate(ctx, s.catalog.providers[catalog.MALProvider], uid, t.ID)
-		if err != nil || !contentAllowedFor(user, t.IsAdult, t.ContentTags) || u.Status == "PLANNING" && !ownsTitle(uid, owners[t.ID]) {
+		if err != nil || !ContentAllowed(user, t.IsAdult, t.ContentTags) || u.Status == "PLANNING" && !ownsTitle(uid, owners[t.ID]) {
 			continue
 		}
 		if malOf[t.ID] == "" {
@@ -184,7 +184,7 @@ func (s *JobService) ImportMALXML(ctx context.Context, r io.Reader, opts ListImp
 		case !ok:
 			res.NotInLibrary++
 			missing = append(missing, e)
-		case contentAllowedFor(user, byID[tid].IsAdult, byID[tid].ContentTags):
+		case ContentAllowed(user, byID[tid].IsAdult, byID[tid].ContentTags):
 			res.InLibrary++
 			if apply {
 				raised, rated := s.applyListEntry(ctx, uid, tid, e, opts)

@@ -758,17 +758,7 @@ func filterNSFWSources(ctx context.Context, list []sources.Source) []sources.Sou
 // given adult flag and tag/genre set. Guards apply to every user; the env
 // admin's are simply unrestricted by default.
 func contentAllowed(ctx context.Context, isAdult bool, tags []string) bool {
-	u := auth.FromContext(ctx)
-	if u == nil {
-		return false
-	}
-	if isAdult && !u.AllowAdult {
-		return false
-	}
-	if len(u.AllowedTags) > 0 && !library.HasAnyTag(tags, u.AllowedTags) {
-		return false
-	}
-	return !library.HasAnyTag(tags, u.BlockedTags)
+	return service.ContentAllowed(auth.FromContext(ctx), isAdult, tags)
 }
 
 // mangaContentTags collects the tag/genre vocabulary a catalog entry carries.

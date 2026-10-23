@@ -249,7 +249,7 @@ func (s *JobService) TrackerCallDetails(ctx context.Context) []TrackerCalls {
 
 func (s *JobService) providerConfigured(ctx context.Context, name string) bool {
 	p, ok := s.catalog.providers[name]
-	if !ok || slices.Contains(splitNames(s.Setting(ctx, SettingProvidersDisabled, "")), name) {
+	if !ok || slices.Contains(splitNames(s.Setting(ctx, SettingProvidersDisabled, "")), name) || name == catalog.MangaBakaProvider && !s.mbOn(ctx) {
 		return false
 	}
 	if m, ok := p.(interface{ SetClientID(string) }); ok {
@@ -608,7 +608,7 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 	for _, p := range s.Providers(ctx) {
 		e := maps[p.Name()]
 		pref, connected := prefs[p.Name()]
-		if !e.Confirmed || e.ProviderID == "" || connected && !pref.Relations && !pref.Recommendations {
+		if !e.Confirmed || e.ProviderID == "" || connected && !pref.Relations && !pref.Recommendations || p.Name() == catalog.MangaBakaProvider {
 			continue
 		}
 		var rel, rec []catalog.Manga

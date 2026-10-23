@@ -257,6 +257,8 @@ func MangaURL(provider, id string) string {
 		if n, err := strconv.ParseInt(id, 10, 64); err == nil {
 			return "https://www.mangaupdates.com/series/" + strconv.FormatInt(n, 36)
 		}
+	case MangaBakaProvider:
+		return "https://mangabaka.org/" + id
 	}
 	return ""
 }

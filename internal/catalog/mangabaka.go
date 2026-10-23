@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"cmp"
+	"context"
+	"errors"
 	"maps"
 	"strconv"
 	"strings"
@@ -41,3 +43,72 @@ func FromMangaBaka(sr mangabaka.Series, provider, id string) Manga {
 	maps.Copy(m.ExternalIDs, sr.IDs)
 	return m
 }
+
+// MangaBakaClient serves metadata from the local MangaBaka copy, with no network calls.
+type MangaBakaClient struct{ store *mangabaka.Store }
+
+func NewMangaBakaClient(store *mangabaka.Store) *MangaBakaClient { return &MangaBakaClient{store} }
+
+func (c *MangaBakaClient) Name() string  { return MangaBakaProvider }
+func (c *MangaBakaClient) Label() string { return "MangaBaka" }
+
+func (c *MangaBakaClient) manga(list []mangabaka.Series) []Manga {
+	out := make([]Manga, len(list))
+	for i, sr := range list {
+		out[i] = FromMangaBaka(sr, MangaBakaProvider, strconv.FormatInt(sr.ID, 10))
+	}
+	return out
+}
+
+func (c *MangaBakaClient) Get(ctx context.Context, id string) (Manga, []Relation, error) {
+	n, _ := strconv.ParseInt(id, 10, 64)
+	sr, ok := c.store.ByIDs(ctx, []int64{n})[n]
+	if !ok {
+		return Manga{}, nil, ErrNotFound
+	}
+	rels, _ := c.store.Related(ctx, sr.ID, 50)
+	out := make([]Relation, len(rels))
+	for i, m := range c.manga(rels) {
+		out[i] = Relation{ProviderID: m.ProviderID, Type: m.RelationType}
+	}
+	return c.manga([]mangabaka.Series{sr})[0], out, nil
+}
+
+func (c *MangaBakaClient) Search(ctx context.Context, query string, limit int, f SearchFilter) ([]Manga, bool, error) {
+	sort := ""
+	switch {
+	case strings.Contains(f.Sort, "SCORE"):
+		sort = "rating"
+	case strings.Contains(f.Sort, "START_DATE"):
+		sort = "newest"
+	case strings.Contains(f.Sort, "POPULARITY"):
+		sort = "popularity"
+	}
+	items, more := c.store.Search(ctx, query, mangabaka.Filter{GenreIn: f.GenreIn, GenreNotIn: f.GenreNotIn, TagIn: f.TagIn, TagNotIn: f.TagNotIn,
+		Sort: sort, Limit: limit, Offset: (max(f.Page, 1) - 1) * limit})
+	return c.manga(items), more, nil
+}
+
+func (c *MangaBakaClient) Trending(ctx context.Context, limit int) ([]Manga, error) {
+	return c.manga(c.store.Trending(ctx, limit)), nil
+}
+
+func (c *MangaBakaClient) Related(ctx context.Context, id string, limit int) ([]Manga, []Manga, error) {
+	n, _ := strconv.ParseInt(id, 10, 64)
+	rels, recs := c.store.Related(ctx, n, limit)
+	return c.manga(rels), c.manga(recs), nil
+}
+
+func (c *MangaBakaClient) Viewer(context.Context) (string, string, error) {
+	return "", "", errors.ErrUnsupported
+}
+func (c *MangaBakaClient) ListEntries(context.Context) ([]Entry, error) {
+	return nil, errors.ErrUnsupported
+}
+func (c *MangaBakaClient) GetEntry(context.Context, string) (Entry, bool, error) {
+	return Entry{}, false, errors.ErrUnsupported
+}
+func (c *MangaBakaClient) SaveEntry(context.Context, string, EntryUpdate) error {
+	return errors.ErrUnsupported
+}
+func (c *MangaBakaClient) DeleteEntry(context.Context, string) error { return errors.ErrUnsupported }

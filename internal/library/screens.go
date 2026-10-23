@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
 )
@@ -55,15 +56,25 @@ func (c ScreenConfig) Matches(t Title) bool {
 }
 
 // HasAnyTag reports whether any wanted tag is present (case-insensitive).
+// HasAnyTag matches names ignoring case, spaces and punctuation, so "Sci Fi" is "Sci-Fi".
 func HasAnyTag(have, want []string) bool {
 	for _, w := range want {
 		for _, h := range have {
-			if strings.EqualFold(strings.TrimSpace(w), strings.TrimSpace(h)) {
+			if TagKey(w) == TagKey(h) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func TagKey(name string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return unicode.ToLower(r)
+		}
+		return -1
+	}, name)
 }
 
 // Screens lists the acting user's saved views.

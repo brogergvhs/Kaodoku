@@ -500,7 +500,7 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 		handle.Update(n, len(tracked), 0)
 		on, t := enabled(titleID), byID[titleID]
 		push, pull, rating := on && a.Source == SourceKaodoku, on && a.Source == SourceTracker, a.ratingFor(on)
-		if !on && rating == "" || !contentAllowedFor(user, t.IsAdult, t.ContentTags) {
+		if !on && rating == "" || !ContentAllowed(user, t.IsAdult, t.ContentTags) {
 			continue
 		}
 		switch {

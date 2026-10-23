@@ -41,7 +41,7 @@ func useMangaBaka(t *testing.T, svc *JobService, ctx context.Context, jsonl stri
 		_, _ = w.Write(buf.Bytes())
 	}))
 	defer srv.Close()
-	svc.mb = mangabaka.Open(filepath.Join(t.TempDir(), "mangabaka.db"))
+	svc.setMangaBaka(mangabaka.Open(filepath.Join(t.TempDir(), "mangabaka.db")))
 	t.Cleanup(func() { _ = svc.mb.Close() })
 	if _, err := svc.mb.Refresh(ctx, srv.Client(), srv.URL+"/series.jsonl.tar.gz", "full", false, nil); err != nil {
 		t.Fatal(err)
@@ -247,5 +247,36 @@ func TestCatalogRefreshUsesMangaBaka(t *testing.T) {
 	}
 	if err := svc.refreshWork(ctx, got); err != nil || al.calls.Load() != 1 {
 		t.Fatalf("stale MangaBaka data with aggressive off made %d calls, %v; want the tracker asked", al.calls.Load(), err)
+	}
+}
+
+func TestMangaBakaIsALocalMetadataSource(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	useMangaBaka(t, svc, ctx, strings.Replace(anthology, `"total_chapters":"40"`, `"total_chapters":"40","genres":["Sci Fi"],"tags":["Anthology","Webtoons"]`, 1)+abyss)
+	al := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	svc.catalog.providers[catalog.AniListProvider] = al
+	if err := svc.catalog.repo.ReplaceContentTags(ctx, catalog.AniListProvider, []catalog.ContentTag{{Name: "Sci-Fi", Kind: "genre"}, {Name: "Anthology", Kind: "tag"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.syncMangaBakaTags(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tags, _ := svc.ProviderTags(ctx, catalog.MangaBakaProvider)
+	if len(tags) != 2 || tags[0].Name != "Sci-Fi" || tags[0].Slug != "Sci Fi" {
+		t.Fatalf("MangaBaka tags = %+v, want only the known names, mapped", tags)
+	}
+
+	found, _, err := svc.SearchManga(ctx, catalog.MangaBakaProvider, "abyss", 10, catalog.SearchFilter{GenreIn: []string{"Sci-Fi"}})
+	if err != nil || len(found) != 1 || found[0].ProviderID != "34798" || found[0].Provider != catalog.MangaBakaProvider {
+		t.Fatalf("search = %+v, %v", found, err)
+	}
+	title, err := svc.AddCatalogTitle(ctx, catalog.MangaBakaProvider, "34798")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ := svc.titleWork(ctx, title.ID)
+	if svc.confirmedID(ctx, m, catalog.AniListProvider) != "113956" || al.calls.Load() != 0 {
+		t.Fatalf("added work links anilist %q with %d calls", svc.confirmedID(ctx, m, catalog.AniListProvider), al.calls.Load())
 	}
 }

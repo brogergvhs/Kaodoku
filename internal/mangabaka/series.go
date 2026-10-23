@@ -205,3 +205,28 @@ func (s *Store) Trending(ctx context.Context, limit int) []Series {
 	return s.list(ctx, `SELECT `+columns+` FROM (SELECT * FROM series WHERE merged_into IS NULL AND popularity IS NOT NULL ORDER BY popularity LIMIT 1000) s
 		ORDER BY (COALESCE(s.popularity_week, 2000) - s.popularity) * 1.0 / s.popularity DESC LIMIT ?`, limit)
 }
+
+// TagNames lists the genres and tags active series use.
+func (s *Store) TagNames(ctx context.Context) (genres, tags []string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.db == nil {
+		return nil, nil
+	}
+	names := func(col string) []string {
+		var out []string
+		rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT j.value FROM series s, json_each(s.`+col+`) j WHERE s.merged_into IS NULL`)
+		if err != nil {
+			return nil
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var n string
+			if rows.Scan(&n) == nil {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	return names("genres"), names("tags")
+}
