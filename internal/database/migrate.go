@@ -328,6 +328,22 @@ CREATE TABLE IF NOT EXISTS tracker_related (
 	PRIMARY KEY (provider, provider_id)
 );
 
+CREATE TABLE IF NOT EXISTS user_ratings (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+	rating INTEGER NOT NULL,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (user_id, title_id)
+);
+
+CREATE TABLE IF NOT EXISTS tracker_ratings (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
+	rating INTEGER NOT NULL,
+	PRIMARY KEY (user_id, title_id, provider)
+);
+
 CREATE TABLE IF NOT EXISTS tracker_favourites (
 	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
@@ -474,6 +490,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"tracker_accounts", "auto_progressive", "INTEGER NOT NULL DEFAULT 0"},
 		{"tracker_accounts", "use_relations", "INTEGER NOT NULL DEFAULT 1"},
 		{"tracker_accounts", "use_recommendations", "INTEGER NOT NULL DEFAULT 1"},
+		{"tracker_accounts", "rating_sync", "TEXT NOT NULL DEFAULT ''"},
+		{"tracker_accounts", "rating_source", "TEXT NOT NULL DEFAULT 'kaodoku'"},
+		{"tracker_accounts", "position", "INTEGER NOT NULL DEFAULT 0"},
 		{"tracker_accounts", "list_json", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_fetched_at", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_title_sync", "enabled", "INTEGER NOT NULL DEFAULT 1"},

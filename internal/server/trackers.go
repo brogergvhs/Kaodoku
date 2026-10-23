@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -149,13 +150,30 @@ func (u *webUI) trackerUnlinked(w http.ResponseWriter, r *http.Request) {
 func (u *webUI) trackerPrefsSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	on := func(k string) bool { v := r.Form[k]; return len(v) > 0 && v[len(v)-1] == "true" }
+	source := service.RatingFromTracker
+	if on("rating_from_kaodoku") {
+		source = service.RatingFromKaodoku
+	}
 	if err := u.svc.SetTrackerPrefs(r.Context(), pathProvider(r), service.TrackerPrefs{
 		AutoLink: on("auto_link"), AutoProgressive: on("auto_progressive"), Relations: on("relations"), Recommendations: on("recommendations"),
+		RatingSync: r.FormValue("rating_sync"), RatingSource: source,
 	}); err != nil {
 		u.fail(w, err)
 		return
 	}
 	u.frag(w, "toast", toastView{OK: true, Msg: "Saved ✓"})
+	view := u.trackerCards(r)
+	view.OOB = true
+	u.frag(w, "trackerRows", view)
+}
+
+func (u *webUI) trackerReorder(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	if err := u.svc.ReorderTrackers(r.Context(), r.Form["order"]); err != nil {
+		u.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (u *webUI) trackerSuggestions(w http.ResponseWriter, r *http.Request) {
@@ -214,14 +232,19 @@ type trackersView struct {
 	Cards      []trackerCardView
 	CanConnect bool
 	CanManage  bool
+	Reorder    bool
+	OOB        bool
 }
 
 func (u *webUI) trackerCards(r *http.Request) trackersView {
-	accounts := map[string]service.TrackerAccount{}
+	accounts, leaders := map[string]service.TrackerAccount{}, 0
 	for _, a := range u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context())) {
 		accounts[a.Provider] = a
+		if a.RatingSource == service.RatingFromTracker && a.RatingSync != "off" {
+			leaders++
+		}
 	}
-	out := trackersView{CanManage: userFrom(r.Context()).Can(auth.PermLibraryManage)}
+	out := trackersView{CanManage: userFrom(r.Context()).Can(auth.PermLibraryManage), Reorder: leaders >= 2}
 	for _, p := range u.svc.Trackers(r.Context()) {
 		card := trackerCardView{Provider: p.Name(), Label: p.Label(), Login: u.svc.TrackerLogin(r.Context(), p.Name()), Outage: u.svc.ProviderOutage(p.Name())}
 		if a, ok := accounts[p.Name()]; ok {
@@ -234,6 +257,15 @@ func (u *webUI) trackerCards(r *http.Request) trackersView {
 		out.Cards = append(out.Cards, card)
 		out.CanConnect = out.CanConnect || card.Account == nil && card.Login != ""
 	}
+	slices.SortStableFunc(out.Cards, func(a, b trackerCardView) int {
+		position := func(c trackerCardView) int {
+			if c.Account == nil {
+				return math.MaxInt
+			}
+			return c.Account.Position
+		}
+		return cmp.Compare(position(a), position(b))
+	})
 	return out
 }
 

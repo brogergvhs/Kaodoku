@@ -865,8 +865,10 @@ func (s *JobService) LinkExternalID(ctx context.Context, titleID int64, provider
 			return err
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM tracker_favourites WHERE title_id = ? AND provider = ?`, titleID, provider); err != nil {
-		return err
+	for _, table := range []string{"tracker_favourites", "tracker_ratings"} {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM `+table+` WHERE title_id = ? AND provider = ?`, titleID, provider); err != nil {
+			return err
+		}
 	}
 	return s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: provider, ProviderID: id, Method: "user", Confirmed: id != ""})
 }

@@ -573,6 +573,7 @@
     <!--   {{else if imported .Title.SourceURL}}Imported from disk · no source linked -->
     <!--   {{else}}No source linked{{end}} -->
     <!-- </div> -->
+    {{template "titleRating" .Rating}}
     {{template "titleProgress" .}}
     {{template "mangaDetail" .Manga}}
   </div>

@@ -55,6 +55,7 @@ type JobService struct {
 	listLocks  sync.Map // "user:provider" -> *sync.Mutex held while downloading that list
 	pushMu     sync.Mutex
 	pushes     map[[2]int64]*pendingPush
+	pushLocks  sync.Map // [user, title] -> *sync.Mutex held while pushing that title
 	adultMu    sync.Mutex
 	adultTags  []string // vocabulary names flagged adult, briefly cached
 	adultExp   time.Time

@@ -347,11 +347,15 @@ func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]Entry, error
 				Status      string    `json:"status"`
 				Progress    int       `json:"progress"`
 				Reconsuming bool      `json:"reconsuming"`
+				Rating      *int      `json:"ratingTwenty"`
 				StartedAt   time.Time `json:"startedAt"`
 				FinishedAt  time.Time `json:"finishedAt"`
 			}
 			_ = json.Unmarshal(r.Attributes, &a)
 			e := Entry{Progress: a.Progress, Status: kitsuToStatus[a.Status], Started: a.StartedAt, Finished: a.FinishedAt, ref: r.ID}
+			if a.Rating != nil {
+				e.Score = roundScore(float64(*a.Rating) / 2)
+			}
 			if a.Reconsuming {
 				e.Status = "REPEATING"
 			}
@@ -399,6 +403,12 @@ func (c *KitsuClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) e
 	}
 	if !u.Finished.IsZero() {
 		attrs["finishedAt"] = u.Finished.UTC().Format(time.RFC3339)
+	}
+	if u.Score != 0 {
+		attrs["ratingTwenty"] = nil
+		if u.Score > 0 {
+			attrs["ratingTwenty"] = u.Score * 2
+		}
 	}
 	if status == "REPEATING" {
 		attrs["status"], attrs["reconsuming"] = "current", true

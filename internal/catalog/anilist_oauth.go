@@ -89,7 +89,7 @@ func (c *AniListClient) ListEntries(ctx context.Context) ([]Entry, error) {
 			} `json:"MediaListCollection"`
 		} `json:"data"`
 	}
-	q := fmt.Sprintf(`query ($userId: Int) { MediaListCollection(userId: $userId, type: MANGA) { lists { entries { progress status `+entryDates+` media { %s } } } } }`, mediaCore)
+	q := fmt.Sprintf(`query ($userId: Int) { MediaListCollection(userId: $userId, type: MANGA) { lists { entries { `+entryFields+` media { %s } } } } }`, mediaCore)
 	if err := c.do(ctx, q, map[string]any{"userId": c.viewerID(ctx)}, &resp); err != nil {
 		return nil, err
 	}
@@ -194,7 +194,7 @@ func (c *AniListClient) GetEntry(ctx context.Context, id string) (Entry, bool, e
 			} `json:"Media"`
 		} `json:"data"`
 	}
-	if err := c.do(ctx, `query ($id: Int) { Media(id: $id, type: MANGA) { mediaListEntry { progress status `+entryDates+` } } }`, map[string]any{"id": mediaID}, &resp); err != nil {
+	if err := c.do(ctx, `query ($id: Int) { Media(id: $id, type: MANGA) { mediaListEntry { `+entryFields+` } } }`, map[string]any{"id": mediaID}, &resp); err != nil {
 		return Entry{}, false, err
 	}
 	e := resp.Data.Media.MediaListEntry
@@ -225,16 +225,19 @@ func (c *AniListClient) SaveEntry(ctx context.Context, id string, u EntryUpdate)
 	if !u.Finished.IsZero() {
 		vars["completedAt"] = toFuzzy(u.Finished)
 	}
+	if u.Score != 0 {
+		vars["scoreRaw"] = max(u.Score, 0) * 10
+	}
 	var resp struct{}
 	return c.do(ctx, `
-		mutation ($id: Int, $progress: Int, $status: MediaListStatus, $startedAt: FuzzyDateInput, $completedAt: FuzzyDateInput) {
-			SaveMediaListEntry(mediaId: $id, progress: $progress, status: $status, startedAt: $startedAt, completedAt: $completedAt) { id }
+		mutation ($id: Int, $progress: Int, $status: MediaListStatus, $scoreRaw: Int, $startedAt: FuzzyDateInput, $completedAt: FuzzyDateInput) {
+			SaveMediaListEntry(mediaId: $id, progress: $progress, status: $status, scoreRaw: $scoreRaw, startedAt: $startedAt, completedAt: $completedAt) { id }
 		}`, vars, &resp)
 }
 
 func (c *AniListClient) TracksDates() bool { return true }
 
-const entryDates = `startedAt { year month day } completedAt { year month day }`
+const entryFields = `progress status score(format: POINT_100) startedAt { year month day } completedAt { year month day }`
 
 type fuzzyDate struct {
 	Year  *int `json:"year"`
@@ -257,12 +260,13 @@ func toFuzzy(t time.Time) map[string]int {
 type anilistEntry struct {
 	Progress    int       `json:"progress"`
 	Status      string    `json:"status"`
+	Score       float64   `json:"score"`
 	StartedAt   fuzzyDate `json:"startedAt"`
 	CompletedAt fuzzyDate `json:"completedAt"`
 }
 
 func (e anilistEntry) entry() Entry {
-	return Entry{Progress: e.Progress, Status: e.Status, Started: e.StartedAt.time(), Finished: e.CompletedAt.time()}
+	return Entry{Progress: e.Progress, Status: e.Status, Score: roundScore(e.Score / 10), Started: e.StartedAt.time(), Finished: e.CompletedAt.time()}
 }
 
 // DeleteEntry removes the list entry entirely. The entry id is resolved via

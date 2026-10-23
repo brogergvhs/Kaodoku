@@ -77,8 +77,14 @@ func (f *fakeProvider) SaveEntry(_ context.Context, id string, u catalog.EntryUp
 	if f.dates {
 		save += fmt.Sprintf(":%s:%s", day(u.Started), day(u.Finished))
 	}
+	if u.Score != 0 {
+		save += fmt.Sprintf(":score=%d", u.Score)
+	}
 	f.saves = append(f.saves, save)
 	e := f.entries[id]
+	if u.Score != 0 {
+		e.Score = max(u.Score, 0)
+	}
 	if u.Progress >= 0 {
 		e.Progress = u.Progress
 	}
@@ -910,5 +916,75 @@ func TestMatchingRefetchesOnlyAStaleRecord(t *testing.T) {
 	svc.resolveID(ctx, old, kitsu)
 	if fmt.Sprint(al.gets) != "[1]" {
 		t.Fatalf("fetched the stored record %v, want only once it was stale", al.gets)
+	}
+}
+
+func TestRatingsFollowEachTrackersLeadAndOrder(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	al, kitsu, mu := newFake(catalog.AniListProvider), newFake(catalog.KitsuProvider), newFake(catalog.MangaUpdatesProvider)
+	for i, f := range []*fakeProvider{al, kitsu, mu} {
+		svc.catalog.providers[f.name] = f
+		connect(t, svc, ctx, f.name, time.Now().Add(time.Duration(i)*time.Minute))
+		f.entries["1"] = catalog.Entry{Progress: 1, Status: "CURRENT", Score: []int{8, 6, 3}[i]}
+	}
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "1", TitleRomaji: "Rated", ExternalIDs: map[string]string{catalog.KitsuProvider: "1", catalog.MangaUpdatesProvider: "1"}}, 3, 1)
+	uctx := asUser(svc, ctx, t)
+	for _, name := range []string{catalog.AniListProvider, catalog.KitsuProvider} {
+		if err := svc.SetTrackerPrefs(uctx, name, TrackerPrefs{RatingSource: RatingFromTracker}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync := func(names ...string) {
+		for _, name := range names {
+			if err := svc.runTrackerSync(ctx, 1, name, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	sync(catalog.KitsuProvider, catalog.AniListProvider, catalog.MangaUpdatesProvider)
+	if got := svc.TitleRating(uctx, titleID); got != (TitleRating{8, "AniList"}) || len(al.savesCopy())+len(kitsu.savesCopy()) != 0 {
+		t.Fatalf("rating = %+v, tracker-led saves %v %v; want AniList's 8 and nothing sent to the leaders", got, al.savesCopy(), kitsu.savesCopy())
+	}
+	waitFor(t, func() bool { saves := mu.savesCopy(); return len(saves) > 0 && saves[len(saves)-1] == "1:-1::score=8" }, "MangaUpdates should end at AniList's 8")
+	for _, save := range mu.savesCopy() {
+		if !strings.HasPrefix(save, "1:-1::score=") {
+			t.Fatalf("kaodoku-led save %q carried more than the rating", save)
+		}
+	}
+	if err := svc.ReorderTrackers(uctx, []string{catalog.KitsuProvider, catalog.AniListProvider, catalog.MangaUpdatesProvider}); err != nil {
+		t.Fatal(err)
+	}
+	sync(catalog.AniListProvider)
+	if got := svc.TitleRating(uctx, titleID); got != (TitleRating{6, "Kitsu"}) {
+		t.Fatalf("after moving Kitsu up: rating %+v, want Kitsu's 6", got)
+	}
+	waitFor(t, func() bool { saves := mu.savesCopy(); return saves[len(saves)-1] == "1:-1::score=6" }, "the new rating should reach MangaUpdates right away")
+}
+
+func TestKaodokuLedRatingsPushOnlyWhatWasSet(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	kitsu := newFake(catalog.KitsuProvider)
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	kitsu.entries["9"] = catalog.Entry{Progress: 1, Status: "CURRENT", Score: 7}
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Rated"}, 3, 1)
+	uctx := asUser(svc, ctx, t)
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil || len(kitsu.savesCopy()) != 0 {
+		t.Fatalf("an unrated title cleared the tracker's rating: %v %v", kitsu.savesCopy(), err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `DELETE FROM tracker_title_sync`); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetTrackerPrefs(uctx, catalog.KitsuProvider, TrackerPrefs{RatingSync: "on"}); err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range []int{9, 0} {
+		if err := svc.SetTitleRating(uctx, titleID, r); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool { return len(kitsu.savesCopy()) == i+1 }, "a rating should be sent right away")
+	}
+	if got := fmt.Sprint(kitsu.savesCopy()); got != "[9:-1::score=9 9:-1::score=-1]" {
+		t.Fatalf("saves = %s, want the rating set then cleared without progress", got)
 	}
 }

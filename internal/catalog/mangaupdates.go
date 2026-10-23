@@ -258,7 +258,8 @@ func (c *MangaUpdatesClient) ListEntries(ctx context.Context) ([]Entry, error) {
 				Results   []struct {
 					Record   muListEntry `json:"record"`
 					Metadata struct {
-						Series muSeries `json:"series"`
+						Series     muSeries `json:"series"`
+						UserRating float64  `json:"user_rating"`
 					} `json:"metadata"`
 				} `json:"results"`
 			}
@@ -270,7 +271,7 @@ func (c *MangaUpdatesClient) ListEntries(ctx context.Context) ([]Entry, error) {
 				if m.ProviderID == "0" {
 					m = Manga{Provider: MangaUpdatesProvider, ProviderID: strconv.FormatInt(r.Record.Series.ID, 10), TitleRomaji: r.Record.Series.Title, IsAdult: true}
 				}
-				out = append(out, Entry{Manga: m, Progress: r.Record.Status.Chapter, Status: muStatus(list), ref: strconv.Itoa(list)})
+				out = append(out, Entry{Manga: m, Progress: r.Record.Status.Chapter, Status: muStatus(list), Score: roundScore(r.Metadata.UserRating), ref: strconv.Itoa(list)})
 			}
 			if page*100 >= resp.TotalHits {
 				break
@@ -287,24 +288,41 @@ func (c *MangaUpdatesClient) GetEntry(ctx context.Context, id string) (Entry, bo
 		if IsNotFound(err) {
 			err = nil
 		}
-		return Entry{}, false, err
+		return Entry{Score: -1}, false, err
 	}
-	return Entry{Progress: e.Status.Chapter, Status: muStatus(e.ListID), ref: strconv.Itoa(e.ListID)}, true, nil
+	return Entry{Progress: e.Status.Chapter, Status: muStatus(e.ListID), Score: -1, ref: strconv.Itoa(e.ListID)}, true, nil
 }
 
 func (c *MangaUpdatesClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
 	ctx = asCall(ctx, "Entry write")
-	progress, status := u.Progress, u.Status
 	sid, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
 		return ErrNotFound
 	}
-	e, found, err := u.remote(ctx, id, c.GetEntry)
+	if u.Score == 0 || u.Progress >= 0 || u.Status != "" {
+		if err := c.saveListEntry(ctx, sid, u); err != nil {
+			return err
+		}
+	}
+	rating := "/series/" + strconv.FormatInt(sid, 10) + "/rating"
+	switch {
+	case u.Score > 0:
+		return c.do(ctx, http.MethodPut, rating, map[string]any{"rating": u.Score}, nil)
+	case u.Score == ScoreClear:
+		if err := c.do(ctx, http.MethodDelete, rating, nil, nil); err != nil && !IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *MangaUpdatesClient) saveListEntry(ctx context.Context, sid int64, u EntryUpdate) error {
+	e, found, err := u.remote(ctx, strconv.FormatInt(sid, 10), c.GetEntry)
 	if err != nil {
 		return err
 	}
-	list, chapter := muListFor(status, progress), progress
-	if found && status == "" {
+	list, chapter := muListFor(u.Status, u.Progress), u.Progress
+	if found && u.Status == "" {
 		list, _ = strconv.Atoi(e.ref)
 	}
 	if chapter < 0 {

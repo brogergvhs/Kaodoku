@@ -44,10 +44,10 @@
               <li><a href="/library" class="{{if and (eq .Nav "library") (not .ActiveID)}}menu-active{{end}}">All</a></li>
               <li><a href="/collections" class="{{if eq .Nav "collections"}}menu-active{{end}}">Collections</a></li>
             </ul>
-            <ul class="mt-0.5 flex flex-col gap-0.5 pl-6" data-screen-list>
+            <ul class="mt-0.5 flex flex-col gap-0.5 pl-6" data-reorder="/ui/screens/reorder">
               {{$active := .ActiveID}}{{range .Screens}}
-              <li draggable="true" data-screen-id="{{.ID}}" class="flex items-center gap-1 rounded-lg [&.dragging]:opacity-50">
-                <span class="cursor-grab select-none px-1 text-base-content/30" data-screen-handle>⠿</span>
+              <li draggable="true" data-reorder-id="{{.ID}}" class="flex items-center gap-1 rounded-lg [&.dragging]:opacity-50">
+                <span class="cursor-grab select-none px-1 text-base-content/30">⠿</span>
                 <a href="/library?screen={{.ID}}" class="min-w-0 flex-1 {{if eq .ID $active}}menu-active{{end}}"><span class="truncate">{{.Name}}</span></a>
               </li>
               {{end}}

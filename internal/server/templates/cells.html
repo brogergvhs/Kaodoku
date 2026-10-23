@@ -952,19 +952,28 @@
 </div>
 {{end}}
 
-{{define "trackerCards"}}
-<div class="card bg-base-100 card-body p-4 gap-2 mb-4">
-  <div class="flex items-center justify-between gap-2">
-    <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Tracking accounts</h2>
-    {{if .CanConnect}}<button type="button" class="btn btn-sm btn-primary" onclick="tracker_connect_modal.showModal()">{{template "iconPlus"}}Connect</button>{{end}}
-  </div>
+{{define "trackerRows"}}
+<div id="tracker-rows" class="contents"{{if .OOB}} hx-swap-oob="true"{{end}}>
   {{$connected := false}}{{range .Cards}}{{if .Account}}{{$connected = true}}{{end}}{{end}}
   {{if $connected}}
-  <div class="divide-y divide-line/25">
+  {{if .Reorder}}<p class="text-xs text-base-content/60">Drag the trackers that ratings come from to pick which one wins first.</p>{{end}}
+  <div class="divide-y divide-line/25"{{if .Reorder}} data-reorder="/ui/trackers/reorder"{{end}}>
     {{range .Cards}}{{if .Account}}{{$c := .}}{{with .Account}}
-    <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+    <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0 [&.dragging]:opacity-50"{{if $.Reorder}} draggable="true" data-reorder-id="{{.Provider}}"{{end}}>
+      {{if $.Reorder}}<span class="cursor-grab select-none text-base-content/30">⠿</span>{{end}}
       <div class="min-w-0 flex-1">
-        <div class="text-sm font-medium{{if $c.Outage}} text-base-content/50{{end}}">{{.Label}} <span class="font-normal text-base-content/50">({{.Name}})</span></div>
+        <div class="flex flex-wrap items-center gap-2 text-sm font-medium{{if $c.Outage}} text-base-content/50{{end}}">
+          <span>{{.Label}} <span class="font-normal text-base-content/50">({{.Name}})</span></span>
+          <div class="flex gap-1">
+            {{if .AutoLink}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Links new titles automatically" aria-label="Links new titles automatically">{{template "iconLink"}}</span>{{end}}
+            {{if .AutoProgressive}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Progressive sync for linked titles" aria-label="Progressive sync for linked titles">{{template "iconRefresh"}}</span>{{end}}
+            {{if ne .RatingSync "off"}}{{$when := "same as progressive sync"}}{{if eq .RatingSync "on"}}{{$when = "always"}}{{end}}
+            {{if eq .RatingSource "tracker"}}<span class="badge badge-sm badge-info badge-soft tip" tabindex="0" data-tip="Ratings come from {{.Label}}, {{$when}}" aria-label="Ratings come from {{.Label}}, {{$when}}">{{template "iconStar"}}</span>
+            {{else}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Ratings sent to {{.Label}}, {{$when}}" aria-label="Ratings sent to {{.Label}}, {{$when}}">{{template "iconStar"}}</span>{{end}}{{end}}
+            {{if .Relations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its related manga" aria-label="Uses its related manga">{{template "iconLayers"}}</span>{{end}}
+            {{if .Recommendations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its recommendations" aria-label="Uses its recommendations">{{template "iconUsers"}}</span>{{end}}
+          </div>
+        </div>
         {{if .ExpiresAt}}<div class="text-xs {{if .ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.ExpiresAt}}</div>{{end}}
         {{if $c.Outage}}<div class="text-xs text-warning">Temporarily unavailable: {{$c.Outage}}</div>
         {{else if .LastError}}<div class="text-xs text-error">{{.LastError}}</div>{{end}}
@@ -983,6 +992,16 @@
     {{end}}{{end}}{{end}}
   </div>
   {{else}}<p class="text-sm text-base-content/60">No trackers here yet.</p>{{end}}
+</div>
+{{end}}
+
+{{define "trackerCards"}}
+<div class="card bg-base-100 card-body p-4 gap-2 mb-4">
+  <div class="flex items-center justify-between gap-2">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Tracking accounts</h2>
+    {{if .CanConnect}}<button type="button" class="btn btn-sm btn-primary" onclick="tracker_connect_modal.showModal()">{{template "iconPlus"}}Connect</button>{{end}}
+  </div>
+  {{template "trackerRows" .}}
 </div>
 {{if .CanConnect}}
 <dialog id="tracker_connect_modal" class="modal">
@@ -1083,6 +1102,18 @@
   {{template "trackerPrefToggle" (pref "auto_progressive" "Progressive sync for linked titles" "Turn on progressive sync whenever a title is linked to this tracker. You can still turn it off per title." .AutoProgressive)}}
   {{template "trackerPrefToggle" (pref "relations" "Use its related manga" "Include related titles from this tracker on title pages." .Relations)}}
   {{template "trackerPrefToggle" (pref "recommendations" "Use its recommendations" "Include recommendations from this tracker on title pages and the home page." .Recommendations)}}
+  <div class="flex items-start justify-between gap-4 border-b border-base-200 py-3">
+    <div class="min-w-0">
+      <label class="font-medium" for="tp-rating_sync">Sync ratings</label>
+      <div class="text-sm text-base-content/60">Keep your ratings of linked titles in step with {{.Label}}.</div>
+    </div>
+    <select class="select select-sm w-auto shrink-0" id="tp-rating_sync" name="rating_sync">
+      <option value=""{{if eq .RatingSync ""}} selected{{end}}>Same as progressive sync</option>
+      <option value="on"{{if eq .RatingSync "on"}} selected{{end}}>Always</option>
+      <option value="off"{{if eq .RatingSync "off"}} selected{{end}}>Never</option>
+    </select>
+  </div>
+  {{template "trackerPrefToggle" (pref "rating_from_kaodoku" "Ratings come from Kaodoku" (printf "On: Kaodoku sends your ratings to %s. Off: %s's ratings replace yours in Kaodoku." .Label .Label) (eq .RatingSource "kaodoku"))}}
   <button class="btn btn-sm btn-primary mt-3">Save</button>
 </form>
 {{end}}

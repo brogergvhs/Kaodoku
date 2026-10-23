@@ -87,6 +87,12 @@ func TestMALEntriesRoundTrip(t *testing.T) {
 	if err := c.SaveEntry(ctx, "5", EntryUpdate{Progress: -1}); err != nil || len(*calls) != 2 {
 		t.Fatalf("empty save should not call the API: %v %d", err, len(*calls))
 	}
+	if err := c.SaveEntry(ctx, "5", EntryUpdate{Progress: -1, Score: ScoreClear}); err != nil {
+		t.Fatal(err)
+	}
+	if form, _ := url.ParseQuery((*calls)[2].body); len(form) != 1 || form.Get("score") != "0" {
+		t.Fatalf("clearing the score sent %v", form)
+	}
 }
 
 func TestKitsuGetMapsIncludedResources(t *testing.T) {
@@ -138,7 +144,7 @@ func TestKitsuSaveCreatesThenPatches(t *testing.T) {
 	if q.Get("filter[userId]") != "42" || q.Get("filter[mangaId]") != "9" {
 		t.Fatalf("lookup query = %v", q)
 	}
-	if err := c.SaveEntry(ctx, "9", EntryUpdate{Progress: 5, Remote: &Entry{ref: "77"}}); err != nil || len(*calls) != 3 || (*calls)[2].path != "/library-entries/77" {
+	if err := c.SaveEntry(ctx, "9", EntryUpdate{Progress: 5, Score: 7, Remote: &Entry{ref: "77"}}); err != nil || len(*calls) != 3 || (*calls)[2].path != "/library-entries/77" || !strings.Contains((*calls)[2].body, `"ratingTwenty":14`) {
 		t.Fatalf("patch with a known entry = %+v, %v", (*calls)[2:], err)
 	}
 }
@@ -149,6 +155,7 @@ func TestMangaUpdatesListsAndSave(t *testing.T) {
 		"GET /lists/series/55":      `{"series":{"id":55},"list_id":4,"status":{"chapter":7}}`,
 		"POST /lists/series/update": `{}`,
 		"POST /lists/series":        `{}`,
+		"PUT /series/55/rating":     `{}`,
 	})
 	c := NewMangaUpdatesClient(srv.Client())
 	c.base = srv.URL
@@ -169,6 +176,9 @@ func TestMangaUpdatesListsAndSave(t *testing.T) {
 	_ = json.Unmarshal([]byte((*calls)[len(*calls)-1].body), &update)
 	if (*calls)[len(*calls)-1].path != "/lists/series/update" || update[0]["list_id"] != float64(4) || update[0]["status"].(map[string]any)["chapter"] != float64(9) {
 		t.Fatalf("update = %+v", update)
+	}
+	if err := c.SaveEntry(ctx, "55", EntryUpdate{Progress: -1, Score: 8, Remote: &e}); err != nil || len(*calls) != n+2 || (*calls)[n+1].path != "/series/55/rating" || (*calls)[n+1].body != `{"rating":8}` {
+		t.Fatalf("a rating alone should be one rating request: %+v, %v", (*calls)[n+1:], err)
 	}
 	if err := c.SaveEntry(ctx, "77", EntryUpdate{Status: "PLANNING"}); err != nil {
 		t.Fatal(err)
@@ -266,19 +276,19 @@ func TestAniListEntryDates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		body = string(b)
-		_, _ = w.Write([]byte(`{"data":{"Media":{"mediaListEntry":{"progress":3,"status":"CURRENT","startedAt":{"year":2024,"month":3,"day":1},"completedAt":{"year":null,"month":null,"day":null}}}}}`))
+		_, _ = w.Write([]byte(`{"data":{"Media":{"mediaListEntry":{"progress":3,"status":"CURRENT","score":75,"startedAt":{"year":2024,"month":3,"day":1},"completedAt":{"year":null,"month":null,"day":null}}}}}`))
 	}))
 	defer srv.Close()
 	c := NewAniListClient(srv.Client())
 	c.endpoint = srv.URL
 	e, ok, err := c.GetEntry(context.Background(), "1")
-	if err != nil || !ok || e.Started.Format(time.DateOnly) != "2024-03-01" || !e.Finished.IsZero() {
+	if err != nil || !ok || e.Started.Format(time.DateOnly) != "2024-03-01" || !e.Finished.IsZero() || e.Score != 8 {
 		t.Fatalf("entry = %+v %v %v", e, ok, err)
 	}
-	if err := c.SaveEntry(context.Background(), "1", EntryUpdate{Progress: -1, Finished: time.Date(2024, 3, 9, 12, 0, 0, 0, time.Local)}); err != nil {
+	if err := c.SaveEntry(context.Background(), "1", EntryUpdate{Progress: -1, Score: 7, Finished: time.Date(2024, 3, 9, 12, 0, 0, 0, time.Local)}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body, `"completedAt":{"day":9,"month":3,"year":2024}`) || strings.Contains(body, `"progress"`) {
+	if !strings.Contains(body, `"completedAt":{"day":9,"month":3,"year":2024}`) || !strings.Contains(body, `"scoreRaw":70`) || strings.Contains(body, `"progress"`) {
 		t.Fatalf("save vars = %s", body)
 	}
 }

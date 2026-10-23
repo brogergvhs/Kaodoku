@@ -137,6 +137,12 @@ type activityView struct {
 	Trackers      []service.TrackerAccount
 	Content       titleContentView
 	Screen        int64
+	Rating        ratingView
+}
+
+type ratingView struct {
+	TitleID int64
+	service.TitleRating
 }
 type sourceRowView struct {
 	Source     sources.Source
@@ -351,6 +357,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/library/{id}/activity", u.libActivity)
 	mux.HandleFunc("POST /ui/library/{id}/monitored", u.libMonitored)
 	mux.HandleFunc("POST /ui/library/{id}/favourite", u.libFavourite)
+	mux.HandleFunc("POST /ui/library/{id}/rating", u.libRating)
 	mux.HandleFunc("POST /ui/library/{id}/language-mode", u.libLanguageMode)
 	mux.HandleFunc("POST /ui/library/{id}/refresh-interval", u.libRefreshInterval)
 	mux.HandleFunc("POST /ui/library/{id}/remove", u.libRemove)
@@ -447,6 +454,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/trackers/{provider}/settings", u.trackerPrefs)
 	mux.HandleFunc("GET /ui/trackers/{provider}/unlinked", u.trackerUnlinked)
 	mux.HandleFunc("POST /ui/trackers/{provider}/settings", u.trackerPrefsSave)
+	mux.HandleFunc("POST /ui/trackers/reorder", u.trackerReorder)
 	mux.HandleFunc("GET /ui/trackers/suggestions", u.trackerSuggestions)
 	mux.HandleFunc("POST /ui/library/{id}/tracker-sync", u.trackerSyncTitle)
 	mux.HandleFunc("POST /ui/library/{id}/providers/progressive", u.titleProgressiveSync)
@@ -2154,6 +2162,7 @@ func (u *webUI) titlePage(w http.ResponseWriter, r *http.Request) {
 	view := u.titleActivity(r.Context(), id)
 	view.Title = title
 	view.User = userFrom(r.Context())
+	view.Rating = ratingView{id, u.svc.TitleRating(r.Context(), id)}
 	if title.CatalogMangaID != nil {
 		view.Trackers = u.svc.TrackerAccounts(r.Context(), auth.UserID(r.Context()))
 	}
@@ -2307,6 +2316,24 @@ func (u *webUI) libFavourite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.frag(w, "favToggle", favView{ID: id, Favourite: fav})
+}
+
+func (u *webUI) libRating(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	if !titleAllowed(r.Context(), u.svc, id) {
+		http.NotFound(w, r)
+		return
+	}
+	rating, _ := strconv.Atoi(r.FormValue("rating"))
+	if err := u.svc.SetTitleRating(r.Context(), id, rating); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.frag(w, "titleRating", ratingView{id, u.svc.TitleRating(r.Context(), id)})
 }
 
 func (u *webUI) titleProgress(w http.ResponseWriter, r *http.Request) {

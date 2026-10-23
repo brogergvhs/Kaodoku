@@ -491,35 +491,34 @@ document.body.addEventListener("htmx:afterRequest", function (e) {
   history.replaceState(null, "", qs ? "/search?" + qs : "/search");
 });
 
-// Sidebar screen reordering: drag rows, persist the new order on drop.
+// Drag-to-reorder lists: drag [data-reorder-id] rows, post the new order to the list's data-reorder URL on drop.
 (function () {
-  var list = document.querySelector("[data-screen-list]");
-  if (!list) return;
   var dragging = null;
-  list.addEventListener("dragstart", function (e) {
-    dragging = e.target.closest("[data-screen-id]");
+  document.addEventListener("dragstart", function (e) {
+    dragging = e.target.closest("[data-reorder] > [data-reorder-id]");
     if (dragging) dragging.classList.add("dragging");
   });
-  list.addEventListener("dragend", function () {
+  document.addEventListener("dragend", function () {
     if (dragging) dragging.classList.remove("dragging");
     dragging = null;
   });
-  list.addEventListener("dragover", function (e) {
+  document.addEventListener("dragover", function (e) {
+    var over = dragging && e.target.closest("[data-reorder-id]");
+    if (!over || over.parentElement !== dragging.parentElement) return;
+    e.preventDefault();
+    if (over === dragging) return;
+    var rect = over.getBoundingClientRect();
+    over.parentElement.insertBefore(dragging, e.clientY > rect.top + rect.height / 2 ? over.nextSibling : over);
+  });
+  document.addEventListener("drop", function (e) {
     if (!dragging) return;
     e.preventDefault();
-    var over = e.target.closest("[data-screen-id]");
-    if (!over || over === dragging) return;
-    var rect = over.getBoundingClientRect();
-    var after = e.clientY > rect.top + rect.height / 2;
-    list.insertBefore(dragging, after ? over.nextSibling : over);
-  });
-  list.addEventListener("drop", function (e) {
-    e.preventDefault();
+    var list = dragging.parentElement;
     var params = new URLSearchParams();
-    list.querySelectorAll("[data-screen-id]").forEach(function (row) {
-      params.append("order", row.dataset.screenId);
+    list.querySelectorAll(":scope > [data-reorder-id]").forEach(function (row) {
+      params.append("order", row.dataset.reorderId);
     });
-    fetch("/ui/screens/reorder", {
+    fetch(list.dataset.reorder, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: params.toString(),

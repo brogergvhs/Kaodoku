@@ -58,8 +58,26 @@ func TestTrackerTemplatesRender(t *testing.T) {
 	if strings.Contains(downPanel, "Relink") || strings.Contains(downPanel, "Connect MyAnimeList") {
 		t.Fatalf("unavailable tracker still offers actions:\n%s", downPanel)
 	}
-	prefs := render("trackerPrefs", service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", TrackerPrefs: service.TrackerPrefs{AutoLink: true, Recommendations: true}})
-	expect(prefs, `id="tp-auto_link" name="auto_link" value="true" checked`, `id="tp-auto_progressive" name="auto_progressive" value="true" >`)
+	prefs := render("trackerPrefs", service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", TrackerPrefs: service.TrackerPrefs{AutoLink: true, Recommendations: true, RatingSource: service.RatingFromKaodoku}})
+	expect(prefs, `id="tp-auto_link" name="auto_link" value="true" checked`, `id="tp-auto_progressive" name="auto_progressive" value="true" >`,
+		`name="rating_from_kaodoku" value="true" checked`, "Off: MyAnimeList&#39;s ratings replace yours")
+
+	two := []trackerCardView{
+		{Provider: "anilist", Label: "AniList", Login: "oauth", Account: &service.TrackerAccount{Provider: "anilist", Label: "AniList"}},
+		{Provider: "kitsu", Label: "Kitsu", Login: "password", Account: &service.TrackerAccount{Provider: "kitsu", Label: "Kitsu"}},
+	}
+	two[0].Account.TrackerPrefs = service.TrackerPrefs{AutoLink: true, RatingSync: "on", RatingSource: service.RatingFromTracker}
+	two[1].Account.TrackerPrefs = service.TrackerPrefs{AutoProgressive: true, Recommendations: true, RatingSource: service.RatingFromKaodoku}
+	badges := render("trackerCards", trackersView{Cards: two})
+	expect(badges, `data-tip="Links new titles automatically"`, `data-tip="Ratings come from AniList, always"`,
+		`data-tip="Progressive sync for linked titles"`, `data-tip="Ratings sent to Kitsu, same as progressive sync"`, `data-tip="Uses its recommendations"`)
+	if strings.Contains(badges, "Uses its related manga") {
+		t.Fatal("badge shown for a setting that is off")
+	}
+	expect(render("trackerCards", trackersView{Cards: two, Reorder: true}), `data-reorder="/ui/trackers/reorder"`, `draggable="true" data-reorder-id="anilist"`, `data-reorder-id="kitsu"`)
+	if fixed := render("trackerCards", trackersView{Cards: two}); strings.Contains(fixed, "data-reorder") {
+		t.Fatal("trackers are draggable with fewer than two rating sources")
+	}
 
 	manage := render("trackerCards", trackersView{CanManage: true, Cards: []trackerCardView{
 		{Provider: "mal", Label: "MyAnimeList", Login: "oauth", Unlinked: 4, Account: &service.TrackerAccount{Provider: "mal", Label: "MyAnimeList", Name: "me"}},

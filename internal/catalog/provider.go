@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -190,21 +191,29 @@ type Token struct {
 }
 
 // Entry status is neutral: PLANNING, CURRENT, COMPLETED, DROPPED, PAUSED or REPEATING.
+// Entry Score is the user's rating 1–10, 0 for none and -1 when the tracker keeps ratings outside its entries.
 type Entry struct {
 	Manga             Manga
 	Progress          int
 	Status            string
+	Score             int
 	Started, Finished time.Time
 	ref               string
 }
 
-// EntryUpdate keeps the remote value for Progress < 0, an empty Status and zero dates; Remote is the entry already read, if any.
+// EntryUpdate keeps the remote value for Progress < 0, an empty Status, zero dates and a zero Score; Remote is the entry already read, if any.
 type EntryUpdate struct {
 	Progress          int
 	Status            string
+	Score             int
 	Started, Finished time.Time
 	Remote            *Entry
 }
+
+// ScoreClear as EntryUpdate.Score removes the rating.
+const ScoreClear = -1
+
+func roundScore(v float64) int { return min(max(int(math.Round(v)), 0), 10) }
 
 func (u EntryUpdate) remote(ctx context.Context, id string, get func(context.Context, string) (Entry, bool, error)) (Entry, bool, error) {
 	if u.Remote != nil {
@@ -214,7 +223,7 @@ func (u EntryUpdate) remote(ctx context.Context, id string, get func(context.Con
 }
 
 func (u EntryUpdate) Empty() bool {
-	return u.Progress < 0 && u.Status == "" && u.Started.IsZero() && u.Finished.IsZero()
+	return u.Progress < 0 && u.Status == "" && u.Score == 0 && u.Started.IsZero() && u.Finished.IsZero()
 }
 
 // DateTracker marks providers whose lists store start and finish dates.

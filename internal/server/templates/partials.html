@@ -67,6 +67,27 @@
 </button>
 {{end}}
 
+{{define "titleRating"}}
+<form id="title-rating" class="flex flex-wrap items-center gap-2" hx-post="/ui/library/{{.TitleID}}/rating" hx-trigger="change" hx-swap="outerHTML">
+  <div class="rating" title="Your rating">
+    <input type="radio" name="rating" value="0" aria-label="No rating"{{if not .Rating}} checked{{end}}>
+    <input type="radio" name="rating" value="1" aria-label="1 out of 10"{{if eq .Rating 1}} checked{{end}}>
+    <input type="radio" name="rating" value="2" aria-label="2 out of 10"{{if eq .Rating 2}} checked{{end}}>
+    <input type="radio" name="rating" value="3" aria-label="3 out of 10"{{if eq .Rating 3}} checked{{end}}>
+    <input type="radio" name="rating" value="4" aria-label="4 out of 10"{{if eq .Rating 4}} checked{{end}}>
+    <input type="radio" name="rating" value="5" aria-label="5 out of 10"{{if eq .Rating 5}} checked{{end}}>
+    <input type="radio" name="rating" value="6" aria-label="6 out of 10"{{if eq .Rating 6}} checked{{end}}>
+    <input type="radio" name="rating" value="7" aria-label="7 out of 10"{{if eq .Rating 7}} checked{{end}}>
+    <input type="radio" name="rating" value="8" aria-label="8 out of 10"{{if eq .Rating 8}} checked{{end}}>
+    <input type="radio" name="rating" value="9" aria-label="9 out of 10"{{if eq .Rating 9}} checked{{end}}>
+    <input type="radio" name="rating" value="10" aria-label="10 out of 10"{{if eq .Rating 10}} checked{{end}}>
+  </div>
+  {{if .Rating}}<span class="text-sm tabular-nums text-base-content/70">{{.Rating}}/10</span>
+  <button type="button" class="btn btn-ghost btn-xs" hx-post="/ui/library/{{.TitleID}}/rating" hx-vals='{"rating":"0"}' hx-target="#title-rating" hx-swap="outerHTML">Clear</button>{{end}}
+  {{with .From}}<span class="text-xs text-base-content/50">from {{.}}</span>{{end}}
+</form>
+{{end}}
+
 {{define "monitorBadge"}}
 <span class="inline-flex h-6 w-6 items-center justify-center" title="{{if .Monitored}}Monitored{{else}}Not monitored{{end}}">
   {{if .Monitored}}<span class="text-warning leading-none">{{template "iconBellRing"}}</span>{{else}}<span class="text-base-content/40 leading-none">{{template "iconBellOff"}}</span>{{end}}

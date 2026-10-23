@@ -78,12 +78,13 @@ type malListStatus struct {
 	Status          string `json:"status"`
 	NumChaptersRead int    `json:"num_chapters_read"`
 	IsRereading     bool   `json:"is_rereading"`
+	Score           int    `json:"score"`
 	StartDate       string `json:"start_date"`
 	FinishDate      string `json:"finish_date"`
 }
 
 func (s malListStatus) entry() Entry {
-	return Entry{Progress: s.NumChaptersRead, Status: malEntryStatus(s), Started: malDate(s.StartDate), Finished: malDate(s.FinishDate)}
+	return Entry{Progress: s.NumChaptersRead, Status: malEntryStatus(s), Score: s.Score, Started: malDate(s.StartDate), Finished: malDate(s.FinishDate)}
 }
 
 func malDate(v string) time.Time {
@@ -301,6 +302,9 @@ func (c *MALClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) err
 	}
 	if !u.Finished.IsZero() {
 		form.Set("finish_date", u.Finished.In(time.Local).Format(time.DateOnly))
+	}
+	if u.Score != 0 {
+		form.Set("score", strconv.Itoa(max(u.Score, 0)))
 	}
 	switch status := u.Status; status {
 	case "":
