@@ -467,6 +467,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/import/candidates", u.importCandidates)
 	mux.HandleFunc("GET /ui/import/titles", u.importTitleOptions)
 	mux.HandleFunc("GET /ui/library/{id}/related", u.relatedManga)
+	mux.HandleFunc("POST /ui/library/{id}/related/fetch", u.relatedFetch)
 	mux.HandleFunc("GET /ui/covers/{provider}/{id}", u.catalogCover)
 	mux.HandleFunc("GET /img/{sig}/{key}", u.image)
 	mux.HandleFunc("POST /ui/settings/caches/{key}/clear", u.clearCache)
@@ -624,18 +625,44 @@ func (u *webUI) relatedManga(w http.ResponseWriter, r *http.Request) {
 		u.frag(w, "relatedSections", relatedView{})
 		return
 	}
-	relations, recs, _ := u.svc.RelatedManga(r.Context(), *title.CatalogMangaID, 24)
+	relations, recs, fetchable, _ := u.svc.RelatedManga(r.Context(), *title.CatalogMangaID, 24)
 	view := relatedView{
+		TitleID:         id,
+		Open:            r.Method == http.MethodPost,
 		Relations:       u.mangaResultsView(r.Context(), "", "cards", relations),
 		Recommendations: u.mangaResultsView(r.Context(), "", "cards", recs),
+	}
+	for _, p := range fetchable {
+		view.Fetch = append(view.Fetch, providerOption{p, u.svc.ProviderLabel(p)})
 	}
 	view.Relations.ShowRelations = true
 	u.frag(w, "relatedSections", view)
 }
 
 type relatedView struct {
+	TitleID         int64
 	Relations       mangaResults
 	Recommendations mangaResults
+	Fetch           []providerOption // trackers to ask on request, in aggressive MangaBaka mode
+	Open            bool
+}
+
+func (u *webUI) relatedFetch(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	title, err := u.svc.GetTitle(r.Context(), id)
+	if err != nil || title.CatalogMangaID == nil || !contentAllowed(r.Context(), title.IsAdult, title.ContentTags) {
+		http.NotFound(w, r)
+		return
+	}
+	if err := u.svc.FetchRelated(r.Context(), *title.CatalogMangaID, r.FormValue("provider")); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.relatedManga(w, r)
 }
 
 func (u *webUI) trendingManga(w http.ResponseWriter, r *http.Request) {
@@ -3193,6 +3220,7 @@ type searchResultsView struct {
 	RetryPage int  // set with Error: the page to retry
 	Append    bool // page 2+: suppress the empty-state text
 	Error     bool
+	FetchFrom string // tracker whose suggestions load on request, in aggressive MangaBaka mode
 }
 
 const searchPerPage = 18
@@ -3216,13 +3244,16 @@ func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 	filter := searchFilter(r.Context(), options, c.Q, c.Sort, c.Dir, c.IncludeTags, c.ExcludeTags)
 	view := searchResultsView{Controls: c, View: c.View, Append: page > 1}
 	if c.Q == "" && !filtered && c.Sort == "" {
-		pool, _ := u.svc.ProviderSuggestions(r.Context(), c.Provider)
+		pool, fetchable, _ := u.svc.ProviderSuggestions(r.Context(), c.Provider, r.FormValue("fetch") != "")
 		if pool = allowedManga(r.Context(), pool); len(pool) > 0 {
 			start := min((page-1)*searchPerPage, len(pool))
 			end := min(start+searchPerPage, len(pool))
 			view.Results = u.mangaResultsView(r.Context(), "", view.View, pool[start:end])
 			if page == 1 {
 				view.Results.Heading = "Suggested from your " + u.svc.ProviderLabel(c.Provider) + " list"
+				if fetchable {
+					view.FetchFrom = u.svc.ProviderLabel(c.Provider)
+				}
 			}
 			if end < len(pool) {
 				view.NextPage = page + 1

@@ -566,6 +566,9 @@
   <button type="submit" class="btn btn-xs btn-outline">Retry</button>
 </form>
 {{else}}
+{{with .FetchFrom}}<div class="mt-4 -mb-2 flex flex-wrap items-center gap-2 text-sm text-base-content/60">From MangaBaka and what {{.}} sent before.
+  <button type="button" class="btn btn-xs btn-outline" hx-post="/ui/search" hx-include="#search-form" hx-vals='{"fetch": "1"}' hx-target="#search-results" hx-indicator="#search-spin">Fetch from {{.}}</button>
+</div>{{end}}
 {{if .Results.Items}}{{template "mangaResults" .Results}}
 {{else if and (not .Append) (not .NextPage)}}{{template "mangaResults" .Results}}
 {{else if not .Append}}<p class="py-2 text-sm text-base-content/60">No matches on the first pages — “Show more” keeps scanning.</p>
@@ -591,21 +594,31 @@
 {{end}}
 
 {{define "relatedSections"}}
-{{with .Relations.Items}}
+<div id="related-sections">
+{{if or .Relations.Items .Fetch}}
 <div class="collapse collapse-arrow bg-base-100 mt-4">
-  <input type="checkbox">
-  <div class="collapse-title font-semibold">Related manga <span class="badge badge-sm badge-ghost ml-1">{{len .}}</span></div>
-  <div class="collapse-content">{{template "mangaResults" $.Relations}}</div>
+  <input type="checkbox"{{if .Open}} checked{{end}}>
+  <div class="collapse-title font-semibold">Related manga <span class="badge badge-sm badge-ghost ml-1">{{len .Relations.Items}}</span></div>
+  <div class="collapse-content">{{template "relatedFetch" .}}{{template "mangaResults" .Relations}}</div>
 </div>
 {{end}}
-{{with .Recommendations.Items}}
+{{if or .Recommendations.Items .Fetch}}
 <div class="collapse collapse-arrow bg-base-100 mt-4">
-  <input type="checkbox">
-  <div class="collapse-title font-semibold">Recommended manga <span class="badge badge-sm badge-ghost ml-1">{{len .}}</span></div>
-  <div class="collapse-content">{{template "mangaResults" $.Recommendations}}</div>
+  <input type="checkbox"{{if .Open}} checked{{end}}>
+  <div class="collapse-title font-semibold">Recommended manga <span class="badge badge-sm badge-ghost ml-1">{{len .Recommendations.Items}}</span></div>
+  <div class="collapse-content">{{template "relatedFetch" .}}{{template "mangaResults" .Recommendations}}</div>
 </div>
 {{end}}
+</div>
 {{end}}
+
+{{define "relatedFetch"}}{{with .Fetch}}
+<form class="mb-3 flex flex-wrap items-center gap-2 text-sm" hx-post="/ui/library/{{$.TitleID}}/related/fetch" hx-target="#related-sections" hx-swap="outerHTML" hx-disabled-elt="find button">
+  <span class="text-base-content/60">Fetch from</span>
+  {{if eq (len .) 1}}{{with index . 0}}<input type="hidden" name="provider" value="{{.Name}}"><button class="btn btn-xs btn-outline">{{.Label}}</button>{{end}}
+  {{else}}<select class="select select-xs w-auto" name="provider" aria-label="Tracker">{{range .}}<option value="{{.Name}}">{{.Label}}</option>{{end}}</select><button class="btn btn-xs btn-outline">Fetch</button>{{end}}
+</form>
+{{end}}{{end}}
 
 {{define "mangaResults"}}
 {{if .Heading}}<h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-base-content/60">{{.Heading}}</h2>{{end}}

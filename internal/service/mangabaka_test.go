@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/mangabaka"
@@ -62,7 +63,7 @@ func TestMangaBakaLinksOneToOneAndSuggestsClashes(t *testing.T) {
 		t.Fatal(err)
 	}
 	maps := svc.mappings(ctx, work)
-	if e := maps[catalog.MangaUpdatesProvider]; e.ProviderID != "70807749862" || e.Method != mangaBakaName || !e.Confirmed {
+	if e := maps[catalog.MangaUpdatesProvider]; e.ProviderID != "70807749862" || e.Method != catalog.MangaBakaProvider || !e.Confirmed {
 		t.Fatalf("mangaupdates = %+v, want a confirmed MangaBaka link", e)
 	}
 	if maps[catalog.KitsuProvider].ProviderID != "999" || maps[catalog.MALProvider].Method != "user" {
@@ -168,5 +169,60 @@ func TestMangaBakaMergesListingsOfOneWork(t *testing.T) {
 	}
 	if got := mergeManga(listings(), nil, 0); len(got) != 3 {
 		t.Fatalf("with MangaBaka off, got %d cards, want the 3 listings as before", len(got))
+	}
+}
+
+const abyss = `{"id":2553,"state":"active","title":"Made in Abyss","type":"manga","status":"releasing","content_rating":"suggestive","relationships_v2":[{"to_series_id":34798,"relation_type":"side_story"}],"source":{"anilist":{"id":86551},"kitsu":{"id":38449}}}
+`
+
+func TestAggressiveRelatedAsksTrackersOnlyOnRequest(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	useMangaBaka(t, svc, ctx, anthology+abyss)
+	anilist, kitsu := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}, &spyProvider{fakeProvider: newFake(catalog.KitsuProvider)}
+	kitsu.search = []catalog.Manga{{Provider: catalog.KitsuProvider, ProviderID: "77", TitleRomaji: "Kitsu pick"}}
+	svc.catalog.providers[catalog.AniListProvider], svc.catalog.providers[catalog.KitsuProvider] = anilist, kitsu
+	svc.catalog.providers[catalog.MangaUpdatesProvider] = &spyProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
+	_, work := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "86551", TitleRomaji: "Made in Abyss"}, 1, 0)
+	svc.mbLink(ctx, []catalog.Manga{work})
+
+	rels, recs, fetchable, err := svc.RelatedManga(ctx, work.ID, 24)
+	if err != nil || len(rels) != 1 || rels[0].ProviderID != "113956" || rels[0].RelationType != "SIDE_STORY" || len(recs) != 0 {
+		t.Fatalf("related = %+v / %+v, %v", rels, recs, err)
+	}
+	if anilist.calls.Load()+kitsu.calls.Load() != 0 || len(fetchable) != 2 {
+		t.Fatalf("%d tracker calls, fetchable %v; want none and both trackers offered", anilist.calls.Load()+kitsu.calls.Load(), fetchable)
+	}
+	if err := svc.FetchRelated(ctx, work.ID, catalog.KitsuProvider); err != nil || kitsu.calls.Load() != 1 {
+		t.Fatalf("fetch = %v with %d calls", err, kitsu.calls.Load())
+	}
+	_, recs, fetchable, _ = svc.RelatedManga(ctx, work.ID, 24)
+	if len(recs) != 1 || recs[0].ProviderID != "77" || len(fetchable) != 1 || kitsu.calls.Load() != 1 {
+		t.Fatalf("after fetch recs = %+v, fetchable %v, %d calls", recs, fetchable, kitsu.calls.Load())
+	}
+
+	if err := svc.SetSetting(ctx, SettingMangaBakaAggressive, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if rels, _, fetchable, _ = svc.RelatedManga(ctx, work.ID, 24); len(rels) != 1 || fetchable != nil || anilist.calls.Load() != 1 {
+		t.Fatalf("not aggressive: rels %+v, fetchable %v, %d anilist calls", rels, fetchable, anilist.calls.Load())
+	}
+}
+
+func TestAggressiveSuggestionsComeFromMangaBakaUntilFetched(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	useMangaBaka(t, svc, ctx, anthology+abyss)
+	al := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	al.entries["86551"] = catalog.Entry{Status: "CURRENT"}
+	svc.catalog.providers[catalog.AniListProvider] = al
+	connect(t, svc, ctx, catalog.AniListProvider, time.Now())
+
+	got, fetchable, ok := svc.ProviderSuggestions(ctx, catalog.AniListProvider, false)
+	if !ok || len(got) != 1 || got[0].ProviderID != "113956" || !fetchable || al.calls.Load() != 0 {
+		t.Fatalf("suggestions %+v, fetchable %v, %d calls; want MangaBaka's anthology and no calls", got, fetchable, al.calls.Load())
+	}
+	if _, fetchable, _ = svc.ProviderSuggestions(ctx, catalog.AniListProvider, true); al.calls.Load() != 1 || fetchable {
+		t.Fatalf("fetch made %d calls, fetchable %v", al.calls.Load(), fetchable)
 	}
 }

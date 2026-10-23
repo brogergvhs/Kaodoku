@@ -391,6 +391,9 @@ func (s *JobService) LibraryIndex(ctx context.Context) map[string]int64 {
 }
 
 func (s *JobService) TrendingManga(ctx context.Context, limit int) ([]catalog.Manga, error) {
+	if items := s.mbTrending(ctx, limit); len(items) > 0 {
+		return items, nil
+	}
 	ctx = catalog.WithReason(ctx, "Trending")
 	p, err := s.Provider(ctx, "")
 	if err != nil {
@@ -537,13 +540,19 @@ func (s *JobService) resolveLibrary(ctx context.Context, p catalog.Provider, lim
 	}
 }
 
+// relatedStored is what a tracker last sent for a work, without asking it again.
+func (s *JobService) relatedStored(ctx context.Context, provider, id string) (rel, recs []catalog.Manga, fetched time.Time, ok bool) {
+	var relJSON, recJSON, at string
+	err := s.db.QueryRowContext(ctx, `SELECT relations_json, recommendations_json, fetched_at FROM tracker_related WHERE provider = ? AND provider_id = ?`, provider, id).Scan(&relJSON, &recJSON, &at)
+	ok = err == nil && json.Unmarshal([]byte(relJSON), &rel) == nil && json.Unmarshal([]byte(recJSON), &recs) == nil
+	fetched, _ = database.ParseTime(at)
+	return rel, recs, fetched, ok
+}
+
 // relatedCached keeps a work's relations and recommendations in the database for a week; a stale copy stands in while a refresh fails.
 func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id string) ([]catalog.Manga, []catalog.Manga, error) {
-	var relJSON, recJSON, fetched string
-	var rel, recs []catalog.Manga
-	err := s.db.QueryRowContext(ctx, `SELECT relations_json, recommendations_json, fetched_at FROM tracker_related WHERE provider = ? AND provider_id = ?`, p.Name(), id).Scan(&relJSON, &recJSON, &fetched)
-	stored := err == nil && json.Unmarshal([]byte(relJSON), &rel) == nil && json.Unmarshal([]byte(recJSON), &recs) == nil
-	if t, err := database.ParseTime(fetched); stored && err == nil && time.Since(t) < relatedTTL {
+	rel, recs, fetched, stored := s.relatedStored(ctx, p.Name(), id)
+	if stored && time.Since(fetched) < relatedTTL {
 		return rel, recs, nil
 	}
 	freshRel, freshRecs, err := p.Related(ctx, id, 24)
@@ -562,11 +571,13 @@ func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id s
 	return freshRel, freshRecs, nil
 }
 
-func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, err error) {
+// RelatedManga merges a work's relations and recommendations from MangaBaka and its linked trackers. In aggressive
+// MangaBaka mode trackers aren't asked; what they sent before still shows, and fetchable lists the ones to ask on request.
+func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, fetchable []string, err error) {
 	ctx = catalog.WithReason(ctx, "Related titles")
 	m, err := s.catalog.GetManga(ctx, catalogID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	maps := s.mappings(ctx, m)
 	self := map[string]bool{}
@@ -575,23 +586,33 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 			self[prov+":"+e.ProviderID] = true
 		}
 	}
-	for _, k := range catalog.Keys(s.mbUnify(ctx, []catalog.Manga{m})[0]) {
+	work := s.mbUnify(ctx, []catalog.Manga{m})[0]
+	for _, k := range catalog.Keys(work) {
 		self[k] = true
+	}
+	var rels, recs [][]catalog.Manga
+	if id := work.ExternalIDs[catalog.MangaBakaProvider]; id != "" {
+		rel, rec := s.mbRelated(ctx, id, limit)
+		rels, recs = append(rels, rel), append(recs, rec)
 	}
 	prefs := map[string]TrackerPrefs{}
 	for _, a := range s.TrackerAccounts(ctx, auth.UserID(ctx)) {
 		prefs[a.Provider] = a.TrackerPrefs
 	}
-	var rels, recs [][]catalog.Manga
+	aggressive := s.mbAggressive(ctx)
 	for _, p := range s.Providers(ctx) {
 		e := maps[p.Name()]
 		pref, connected := prefs[p.Name()]
 		if !e.Confirmed || e.ProviderID == "" || connected && !pref.Relations && !pref.Recommendations {
 			continue
 		}
-		rel, rec, rerr := s.relatedCached(ctx, p, e.ProviderID)
-		if rerr != nil {
-			err = rerr
+		var rel, rec []catalog.Manga
+		if aggressive {
+			var fetched time.Time
+			if rel, rec, fetched, _ = s.relatedStored(ctx, p.Name(), e.ProviderID); time.Since(fetched) >= relatedTTL {
+				fetchable = append(fetchable, p.Name())
+			}
+		} else if rel, rec, err = s.relatedCached(ctx, p, e.ProviderID); err != nil {
 			continue
 		}
 		if !connected || pref.Relations {
@@ -605,7 +626,25 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 	if len(relations)+len(recommendations) > 0 {
 		err = nil
 	}
-	return relations, recommendations, err
+	return relations, recommendations, fetchable, err
+}
+
+// FetchRelated asks one linked tracker for a work's relations and recommendations, on a user's request.
+func (s *JobService) FetchRelated(ctx context.Context, catalogID int64, provider string) error {
+	m, err := s.catalog.GetManga(ctx, catalogID)
+	if err != nil {
+		return err
+	}
+	p, err := s.Provider(ctx, provider)
+	if err != nil {
+		return err
+	}
+	id := s.confirmedID(ctx, m, provider)
+	if id == "" {
+		return fmt.Errorf("this title isn't linked to %s", p.Label())
+	}
+	_, _, err = s.relatedCached(catalog.WithReason(ctx, "Related titles"), p, id)
+	return err
 }
 
 // mergeManga dedupes works across providers by any shared id, most-agreed first.
@@ -729,7 +768,7 @@ func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog
 	}
 	var lists [][]catalog.Manga
 	for _, id := range seeds {
-		rel, recs, err := s.RelatedManga(ctx, id, limit)
+		rel, recs, _, err := s.RelatedManga(ctx, id, limit)
 		if err != nil {
 			continue
 		}

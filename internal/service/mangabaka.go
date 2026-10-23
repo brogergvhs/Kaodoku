@@ -22,8 +22,6 @@ const (
 	SettingMangaBakaEvery      = "mangabaka.refresh_every"
 	SettingMangaBakaVariant    = "mangabaka.variant"
 	SettingMangaBakaAggressive = "mangabaka.aggressive"
-
-	mangaBakaName = "mangabaka"
 )
 
 var mangaBakaClient, _ = util.NewHTTPClient(util.HTTPClientOptions{UserAgent: "Kaodoku (+https://github.com/brogergvhs/kaodoku)"})
@@ -83,7 +81,7 @@ func (s *JobService) runMangaBakaRefresh(ctx context.Context, force bool, progre
 	if _, err := s.mb.Refresh(ctx, mangaBakaClient, mangabaka.DumpURL(v), v, force, func(n int) { handle.Update(n, 0, 0) }); err != nil {
 		return err
 	}
-	_ = s.catalog.saveCalls(ctx, mangaBakaName, catalog.Call{Kind: "Database", Reason: "Database refresh"}, 1)
+	_ = s.catalog.saveCalls(ctx, catalog.MangaBakaProvider, catalog.Call{Kind: "Database", Reason: "Database refresh"}, 1)
 	return s.linkLibrary(ctx)
 }
 
@@ -155,10 +153,10 @@ func (s *JobService) mbLink(ctx context.Context, works []catalog.Manga) {
 			case prov == m.Provider:
 			case id == "" || e.ProviderID == id:
 				s.setSuggestion(ctx, m.ID, prov, "")
-			case e.Method == "user" || e.Confirmed && e.Method != mangaBakaName:
+			case e.Method == "user" || e.Confirmed && e.Method != catalog.MangaBakaProvider:
 				s.setSuggestion(ctx, m.ID, prov, id)
 			case !s.takenByOther(ctx, m.ID, prov, id):
-				_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: prov, ProviderID: id, Method: mangaBakaName, Confirmed: true})
+				_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: prov, ProviderID: id, Method: catalog.MangaBakaProvider, Confirmed: true})
 			}
 		}
 	}
@@ -250,7 +248,7 @@ func (s *JobService) MangaBakaLinks(ctx context.Context, provider string) (links
 // ConfirmMangaBakaLink makes a MangaBaka link the user's own.
 func (s *JobService) ConfirmMangaBakaLink(ctx context.Context, titleID int64, provider string) error {
 	m, ok := s.titleWork(ctx, titleID)
-	if e := s.mappings(ctx, m)[provider]; ok && e.Method == mangaBakaName {
+	if e := s.mappings(ctx, m)[provider]; ok && e.Method == catalog.MangaBakaProvider {
 		return s.LinkExternalID(ctx, titleID, provider, e.ProviderID)
 	}
 	return nil
@@ -299,8 +297,41 @@ func (s *JobService) mbUnify(ctx context.Context, items []catalog.Manga) []catal
 		for p, id := range sr.IDs {
 			ids[p] = cmp.Or(ids[p], id)
 		}
-		ids[mangaBakaName] = strconv.FormatInt(sr.ID, 10)
+		ids[catalog.MangaBakaProvider] = strconv.FormatInt(sr.ID, 10)
 		items[i].ExternalIDs = ids
 	}
 	return items
+}
+
+// mbManga shows a series under the first tracker the user can use that knows it.
+func (s *JobService) mbManga(ctx context.Context, sr mangabaka.Series) (catalog.Manga, bool) {
+	for _, p := range s.Providers(ctx) {
+		if id := sr.IDs[p.Name()]; id != "" {
+			return catalog.FromMangaBaka(sr, p.Name(), id), true
+		}
+	}
+	return catalog.Manga{}, false
+}
+
+func (s *JobService) mbMangas(ctx context.Context, list []mangabaka.Series) []catalog.Manga {
+	var out []catalog.Manga
+	for _, sr := range list {
+		if m, ok := s.mbManga(ctx, sr); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (s *JobService) mbRelated(ctx context.Context, seriesID string, limit int) (relations, recommendations []catalog.Manga) {
+	id, _ := strconv.ParseInt(seriesID, 10, 64)
+	rels, recs := s.mb.Related(ctx, id, limit)
+	return s.mbMangas(ctx, rels), s.mbMangas(ctx, recs)
+}
+
+func (s *JobService) mbTrending(ctx context.Context, limit int) []catalog.Manga {
+	if !s.mbOn(ctx) {
+		return nil
+	}
+	return s.mbMangas(ctx, s.mb.Trending(ctx, limit))
 }

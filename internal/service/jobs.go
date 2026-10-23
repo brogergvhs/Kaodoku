@@ -70,8 +70,9 @@ type JobService struct {
 
 // cachedRecs is a user's recommendation pool, cached to spare provider calls.
 type cachedRecs struct {
-	items   []catalog.Manga
-	expires time.Time
+	items     []catalog.Manga
+	fetchable bool
+	expires   time.Time
 }
 
 func (c cachedRecs) expiry() time.Time { return c.expires }

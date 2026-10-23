@@ -440,11 +440,11 @@ func TestProviderSuggestionsSeedFromRemoteList(t *testing.T) {
 		{Provider: catalog.AniListProvider, ProviderID: "2"},
 		{Provider: catalog.AniListProvider, ProviderID: "3"},
 	}
-	if _, ok := svc.ProviderSuggestions(ctx, catalog.AniListProvider); ok {
+	if _, _, ok := svc.ProviderSuggestions(ctx, catalog.AniListProvider, false); ok {
 		t.Fatal("suggestions without a connected account")
 	}
 	connect(t, svc, ctx, catalog.AniListProvider, time.Now())
-	got, ok := svc.ProviderSuggestions(ctx, catalog.AniListProvider)
+	got, _, ok := svc.ProviderSuggestions(ctx, catalog.AniListProvider, false)
 	if !ok || len(got) != 1 || got[0].ProviderID != "3" {
 		t.Fatalf("suggestions = %+v, want only the unlisted recommendation", got)
 	}
@@ -548,7 +548,7 @@ func TestTrackerPrefsDriveLinkingSyncAndRelated(t *testing.T) {
 		t.Fatalf("explicit off lost to the auto default: %v", got)
 	}
 	nativeWork, _ := svc.titleWork(ctx, native)
-	if _, recs, _ := svc.RelatedManga(uctx, nativeWork.ID, 10); len(recs) != 0 {
+	if _, recs, _, _ := svc.RelatedManga(uctx, nativeWork.ID, 10); len(recs) != 0 {
 		t.Fatalf("recommendations used though turned off: %v", recs)
 	}
 
@@ -571,7 +571,7 @@ func TestTrackerPrefsDriveLinkingSyncAndRelated(t *testing.T) {
 	if err := svc.SetTrackerPrefs(uctx, catalog.KitsuProvider, TrackerPrefs{AutoLink: true, Recommendations: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, recs, _ := svc.RelatedManga(uctx, nativeWork.ID, 10); len(recs) != 1 {
+	if _, recs, _, _ := svc.RelatedManga(uctx, nativeWork.ID, 10); len(recs) != 1 {
 		t.Fatalf("recommendations missing once turned on: %v", recs)
 	}
 }
@@ -608,7 +608,7 @@ func TestSuggestionsReuseStoredListsAndRecommendations(t *testing.T) {
 	if listed := svc.TrackerSuggestions(ctx, catalog.MangaUpdatesProvider); len(listed) != 1 || listed[0].CoverImage != "https://c/1.jpg" {
 		t.Fatalf("list entry without a cover should use the stored one: %+v", listed)
 	}
-	got, ok := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider)
+	got, _, ok := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider, false)
 	if !ok || len(got) != 1 || got[0].TitleRomaji != "Known" || got[0].IsAdult {
 		t.Fatalf("suggestions = %+v, want the stub filled from the stored record", got)
 	}
@@ -619,13 +619,13 @@ func TestSuggestionsReuseStoredListsAndRecommendations(t *testing.T) {
 	svc.listMu.Lock()
 	svc.listCache = nil
 	svc.listMu.Unlock()
-	if got, _ := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider); len(got) != 1 || mu.lists.Load() != 1 || mu.related != 1 {
+	if got, _, _ := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider, false); len(got) != 1 || mu.lists.Load() != 1 || mu.related != 1 {
 		t.Fatalf("after a restart: %d suggestions, %d list downloads, %d Related calls; want the stored copies", len(got), mu.lists.Load(), mu.related)
 	}
 	if err := svc.DisconnectTracker(ctx, 1, catalog.MangaUpdatesProvider); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider); ok {
+	if _, _, ok := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider, false); ok {
 		t.Fatal("a disconnected tracker must not serve its cached list")
 	}
 }

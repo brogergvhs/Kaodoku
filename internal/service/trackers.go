@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1246,26 +1247,28 @@ func (s *JobService) storeList(ctx context.Context, uid int64, provider string, 
 	s.trimLists(ctx)
 }
 
-// ProviderSuggestions approximates a backend's own suggestions from community
-// recommendations for the user's reading on it; ok is false when not connected.
-func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) ([]catalog.Manga, bool) {
+// ProviderSuggestions approximates a backend's own suggestions from community recommendations for the user's reading
+// on it; ok is false when not connected. Aggressive MangaBaka mode asks the tracker only when fetch is set, and
+// fetchable says whether that would add anything.
+func (s *JobService) ProviderSuggestions(ctx context.Context, provider string, fetch bool) (items []catalog.Manga, fetchable, ok bool) {
 	ctx = catalog.WithReason(ctx, "List suggestions")
 	uid := auth.UserID(ctx)
 	key := listKey(uid, provider)
 	s.recMu.Lock()
 	c, cached := s.sugCache[key]
 	s.recMu.Unlock()
-	if cached && time.Now().Before(c.expires) {
-		return c.items, true
+	if cached && !fetch && time.Now().Before(c.expires) {
+		return c.items, c.fetchable, true
 	}
 	entries, err := s.cachedEntries(ctx, uid, provider)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
+	aggressive := s.mbAggressive(ctx) && !fetch
 	exclude := map[string]bool{}
 	for k := range s.LibraryIndex(ctx) {
 		exclude[k] = true
@@ -1275,7 +1278,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 		for _, k := range catalog.Keys(e.Manga) {
 			exclude[k] = true
 		}
-		if recommends(provider) && (e.Status == "CURRENT" || e.Status == "COMPLETED" || e.Status == "REPEATING") {
+		if (recommends(provider) || aggressive) && (e.Status == "CURRENT" || e.Status == "COMPLETED" || e.Status == "REPEATING") {
 			seeds = append(seeds, e.Manga.ProviderID)
 		}
 	}
@@ -1289,19 +1292,29 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 	}
 	var lists [][]catalog.Manga
 	for _, id := range seeds {
-		if _, recs, err := s.relatedCached(ctx, p, id); err == nil {
-			lists = append(lists, s.mbUnify(ctx, recs))
+		if !aggressive {
+			if _, recs, err := s.relatedCached(ctx, p, id); err == nil {
+				lists = append(lists, s.mbUnify(ctx, recs))
+			}
+			continue
 		}
+		if sr, ok := s.mb.ByProvider(ctx, provider, id); ok {
+			rels, recs := s.mbRelated(ctx, strconv.FormatInt(sr.ID, 10), 24)
+			lists = append(lists, recs, rels)
+		}
+		_, recs, fetched, _ := s.relatedStored(ctx, provider, id)
+		fetchable = fetchable || recommends(provider) && time.Since(fetched) >= relatedTTL
+		lists = append(lists, s.mbUnify(ctx, recs))
 	}
-	items := s.fillFromStore(ctx, provider, mergeManga(lists, exclude, 0))
+	items = s.fillFromStore(ctx, provider, mergeManga(lists, exclude, 0))
 	s.recMu.Lock()
 	if s.sugCache == nil {
 		s.sugCache = map[string]cachedRecs{}
 	}
-	s.sugCache[key] = cachedRecs{items: items, expires: time.Now().Add(recommendationTTL)}
+	s.sugCache[key] = cachedRecs{items: items, fetchable: fetchable, expires: time.Now().Add(recommendationTTL)}
 	trimOldest(s.sugCache, s.cacheLimit(ctx, SettingCacheRecs), cachedRecs.expiry)
 	s.recMu.Unlock()
-	return items, true
+	return items, fetchable, true
 }
 
 func (s *JobService) encryptLegacyTokens(ctx context.Context) error {
