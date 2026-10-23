@@ -1137,18 +1137,20 @@
 {{define "malXML"}}
 <div class="flex items-start justify-between gap-2">
   <div>
-    <h3 class="text-lg font-bold">MyAnimeList XML</h3>
+    <h3 class="text-lg font-bold">{{if eq .Step "export"}}Export to MyAnimeList XML{{else if eq .Step "import"}}Import MyAnimeList XML{{else}}MyAnimeList XML{{end}}</h3>
     <p class="text-sm text-base-content/60">MyAnimeList's export format, which other sites import too.</p>
   </div>
   <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
 </div>
-<div class="grid gap-2">
-  <h4 class="text-sm font-semibold">Export</h4>
-  <p class="text-sm">{{.Exported}} to export.{{if .Skipped}} {{.Skipped}} have no MyAnimeList link and are left out.{{if .CanLink}} <button type="button" class="link" hx-get="/ui/trackers/mal/unlinked" hx-target="#tracker-unlinked-body" onclick="mal_xml_modal.close(); openLoading('tracker_unlinked_modal')">Link them</button>{{end}}{{end}}</p>
-  <a class="btn btn-sm btn-primary justify-self-start" href="/ui/lists/mal.xml">Download XML</a>
+{{if eq .Step "export"}}
+<p class="text-sm">{{.Exported}} to export.</p>
+{{if or .Unlinked .Absent}}<p class="text-sm text-base-content/60">Left out:{{with .Unlinked}} {{.}} not linked to MyAnimeList yet{{if $.CanLink}} (<button type="button" class="link" hx-get="/ui/trackers/mal/unlinked" hx-target="#tracker-unlinked-body" onclick="mal_xml_modal.close(); openLoading('tracker_unlinked_modal')">link them</button>){{end}}{{end}}{{if and .Unlinked .Absent}},{{end}}{{with .Absent}} {{.}} marked as not on MyAnimeList{{end}}.</p>{{end}}
+<div class="flex justify-between gap-2">
+  <button type="button" class="btn btn-ghost btn-sm" hx-get="/ui/lists/mal" hx-target="#mal-xml-body">Back</button>
+  <a class="btn btn-sm btn-primary" href="/ui/lists/mal.xml">Download XML</a>
 </div>
-<form class="grid gap-2" hx-post="/ui/lists/mal" hx-encoding="multipart/form-data" hx-target="#mal-xml-body" hx-disabled-elt="find button">
-  <h4 class="text-sm font-semibold">Import</h4>
+{{else if eq .Step "import"}}
+<form class="grid gap-2" hx-post="/ui/lists/mal" hx-encoding="multipart/form-data" hx-target="#mal-xml-result" hx-disabled-elt="find button">
   <label class="btn btn-sm justify-start">
     <input type="file" class="sr-only" name="file" accept=".xml,text/xml" required onchange="this.nextElementSibling.textContent=this.files[0]?this.files[0].name:'Choose file'">
     <span class="truncate">Choose file</span>
@@ -1160,13 +1162,32 @@
     <option value="">Leave my ratings</option>
   </select>
   <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-sm" name="add" value="1">Add titles that aren't in the library</label>
-  <div class="flex gap-2">
-    <button class="btn btn-sm" name="apply" value="">Preview</button>
-    <button class="btn btn-sm btn-primary" name="apply" value="1">Import</button>
+  <div id="mal-xml-result" class="contents"></div>
+  <div class="flex justify-between gap-2">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/ui/lists/mal" hx-target="#mal-xml-body">Back</button>
+    <div class="flex gap-2">
+      <button class="btn btn-sm" name="apply" value="">Preview</button>
+      <button class="btn btn-sm btn-primary" name="apply" value="1">Import</button>
+    </div>
   </div>
-  {{with .Result}}<p class="text-sm">{{if .Applied}}Raised progress on {{.Raised}} and set {{.Rated}} ratings.{{if .Queued}} Adding {{.Queued}} titles in the background.{{end}}{{else}}{{.InLibrary}} titles are in your library, {{.NotInLibrary}} aren't.{{end}}{{if .Ignored}} {{.Ignored}} are Dropped or On-Hold, which Kaodoku doesn't keep.{{end}}</p>{{end}}
-  {{with .Error}}<p class="text-sm text-error">{{.}}</p>{{end}}
 </form>
+{{else}}
+<div class="grid gap-2">
+  <button type="button" class="btn btn-outline h-auto flex-col items-start gap-0.5 py-2 text-left" hx-get="/ui/lists/mal?step=export" hx-target="#mal-xml-body">
+    <span>Export</span>
+    <span class="text-xs font-normal text-base-content/60">Download your library as a file for MyAnimeList or another site.</span>
+  </button>
+  <button type="button" class="btn btn-outline h-auto flex-col items-start gap-0.5 py-2 text-left" hx-get="/ui/lists/mal?step=import" hx-target="#mal-xml-body">
+    <span>Import</span>
+    <span class="text-xs font-normal text-base-content/60">Bring read progress and ratings in from an exported file.</span>
+  </button>
+</div>
+{{end}}
+{{end}}
+
+{{define "malXMLResult"}}
+{{with .Result}}<p class="text-sm">{{if .Applied}}Raised progress on {{.Raised}} and set {{.Rated}} ratings.{{if .Queued}} Adding {{.Queued}} titles in the background.{{end}}{{else}}{{.InLibrary}} in your library, {{.NotInLibrary}} not in it.{{end}}{{if .Ignored}} {{.Ignored}} are Dropped or On-Hold, which Kaodoku doesn't keep.{{end}}</p>{{end}}
+{{with .Error}}<p class="text-sm text-error">{{.}}</p>{{end}}
 {{end}}
 
 {{define "missingLeft"}}<span hx-swap-oob="innerHTML:[data-missing-count={{.Provider}}]">{{len .Titles}}</span>

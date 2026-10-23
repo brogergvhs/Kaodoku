@@ -173,15 +173,16 @@ func (u *webUI) trackerMissingRatings(w http.ResponseWriter, r *http.Request) {
 }
 
 type malXMLView struct {
-	Exported, Skipped int
-	CanLink           bool
-	Result            *service.ListImportResult
-	Error             string
+	Step                       string
+	Exported, Unlinked, Absent int
+	CanLink                    bool
+	Result                     *service.ListImportResult
+	Error                      string
 }
 
 func (u *webUI) malXML(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var view malXMLView
+	view := malXMLView{Step: r.URL.Query().Get("step")}
 	if r.Method == http.MethodPost {
 		file, _, err := r.FormFile("file")
 		if err == nil {
@@ -194,16 +195,20 @@ func (u *webUI) malXML(w http.ResponseWriter, r *http.Request) {
 			view.Error = err.Error()
 		}
 		u.kick()
+		u.frag(w, "malXMLResult", view)
+		return
 	}
-	view.Exported, view.Skipped, _ = u.svc.ExportMALXML(ctx, io.Discard)
-	view.CanLink = userFrom(ctx).Can(auth.PermLibraryManage) && slices.ContainsFunc(u.svc.Trackers(ctx), func(p catalog.Provider) bool { return p.Name() == catalog.MALProvider })
+	if view.Step == "export" {
+		view.Exported, view.Unlinked, view.Absent, _ = u.svc.ExportMALXML(ctx, io.Discard)
+		view.CanLink = userFrom(ctx).Can(auth.PermLibraryManage) && slices.ContainsFunc(u.svc.Trackers(ctx), func(p catalog.Provider) bool { return p.Name() == catalog.MALProvider })
+	}
 	u.frag(w, "malXML", view)
 }
 
 func (u *webUI) malXMLExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("Content-Disposition", `attachment; filename="kaodoku-mal.xml"`)
-	if _, _, err := u.svc.ExportMALXML(r.Context(), w); err != nil {
+	if _, _, _, err := u.svc.ExportMALXML(r.Context(), w); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

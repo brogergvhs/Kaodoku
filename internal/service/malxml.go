@@ -52,36 +52,41 @@ func malDate(t time.Time) string {
 	return t.Format(time.DateOnly)
 }
 
-// ExportMALXML writes the user's library as a MyAnimeList manga export and counts the titles left out for lacking a MyAnimeList id.
-func (s *JobService) ExportMALXML(ctx context.Context, w io.Writer) (exported, skipped int, err error) {
+// ExportMALXML writes the user's library as a MyAnimeList manga export and counts the titles left out,
+// unlinked or marked as not on MyAnimeList.
+func (s *JobService) ExportMALXML(ctx context.Context, w io.Writer) (exported, unlinked, absent int, err error) {
 	user, uid := auth.FromContext(ctx), auth.UserID(ctx)
 	byMAL, err := s.lib.TitlesByProvider(ctx, catalog.MALProvider)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	malOf := map[int64]string{}
 	for id, tid := range byMAL {
 		malOf[tid] = id
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM titles WHERE catalog_manga_id IS NOT NULL`)
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id, e.method IS NOT NULL FROM titles t
+		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id AND e.provider = ? AND e.method = 'user' AND e.provider_id = ''
+		WHERE t.catalog_manga_id IS NOT NULL`, catalog.MALProvider)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	var ids []int64
+	notOnMAL := map[int64]bool{}
 	for rows.Next() {
 		var id int64
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
+		var none bool
+		if rows.Scan(&id, &none) == nil {
+			ids, notOnMAL[id] = append(ids, id), none
 		}
 	}
 	rows.Close()
 	titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	owners, err := s.lib.TitleOwners(ctx)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	var doc malList
 	doc.Info.UserName, doc.Info.ExportType = user.Username, 2
@@ -91,7 +96,11 @@ func (s *JobService) ExportMALXML(ctx context.Context, w io.Writer) (exported, s
 			continue
 		}
 		if malOf[t.ID] == "" {
-			skipped++
+			if notOnMAL[t.ID] {
+				absent++
+			} else {
+				unlinked++
+			}
 			continue
 		}
 		score, _ := s.userRating(ctx, uid, t.ID)
@@ -108,11 +117,11 @@ func (s *JobService) ExportMALXML(ctx context.Context, w io.Writer) (exported, s
 	}
 	doc.Info.Total = len(doc.Manga)
 	if _, err := io.WriteString(w, xml.Header); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	enc := xml.NewEncoder(w)
 	enc.Indent("", "  ")
-	return len(doc.Manga), skipped, enc.Encode(doc)
+	return len(doc.Manga), unlinked, absent, enc.Encode(doc)
 }
 
 type ListEntry struct {
