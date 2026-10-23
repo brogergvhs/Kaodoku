@@ -126,6 +126,18 @@ Once the server is up:
    CBZ/ZIP, and organize titles into Collections. If AniList is connected, your
    progress syncs.
 
+### MangaBaka (optional)
+
+Turn on **Use MangaBaka** under **Server → MangaBaka** to download the open
+[MangaBaka](https://mangabaka.org) database (checked weekly by default). Kaodoku
+then links titles across AniList, MyAnimeList, Kitsu and MangaUpdates from it,
+merges duplicate related titles, fills in details and covers, and can search it
+offline. In aggressive mode (on by default) related titles, recommendations and
+trending come only from MangaBaka, and trackers are asked only when you click
+**Fetch from…**. Links made from MangaBaka can be reviewed per tracker. MangaBaka
+can also be connected as a tracker with a personal access token. Its data is
+CC BY-NC-SA 4.0: personal, non-commercial use with credit.
+
 ### Content guards & AniList (per user)
 
 Users can be restricted to hide adult titles and block specific tags/genres —

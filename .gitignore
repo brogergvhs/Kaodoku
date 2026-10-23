@@ -38,3 +38,6 @@ node_modules/
 kotatsu-worker/.gradle/
 kotatsu-worker/.kotlin/
 kotatsu-worker/build/
+
+# MangaBaka dumps downloaded by hand
+mangabaka_sqlite_db/
