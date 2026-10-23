@@ -449,7 +449,7 @@ struct TitleDetailView: View {
     Task {
       do {
         _ = try await api.data("DELETE",
-                               "/api/v1/library/\(titleID)?delete_files=\(deleteFiles ? 1 : 0)&delete_anilist=\(deleteRemote ? 1 : 0)")
+                               "/api/v1/library/\(titleID)?delete_files=\(deleteFiles ? 1 : 0)&delete_remote=\(deleteRemote ? 1 : 0)")
         app.tab = 0
         app.libraryNav = .root
       } catch { note = error.localizedDescription }
@@ -806,10 +806,10 @@ struct MangaDetailBlock: View {
       parts.append("By \(a.joined(separator: ", "))")
     }
     if let c = manga.chapters, c > 0 {
-      parts.append("\(c) chapters (AniList)")
+      parts.append("\(c) chapters")
     }
     if let v = manga.volumes, v > 0 {
-      parts.append("\(v) volumes (AniList)")
+      parts.append("\(v) volumes")
     }
     return parts.joined(separator: " · ")
   }

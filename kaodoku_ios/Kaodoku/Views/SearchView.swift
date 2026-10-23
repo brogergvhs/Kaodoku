@@ -43,7 +43,7 @@ struct SearchView: View {
       .navigationTitle(browsing ? "For you" : "Search")
       .navigationBarTitleDisplayMode(.inline)
       .connectionStatusToolbar()
-      .searchable(text: $query, prompt: "Search AniList")
+      .searchable(text: $query, prompt: "Search manga")
       .toolbar {
         Button {
           showFilters = true

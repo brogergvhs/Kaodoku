@@ -146,9 +146,8 @@ func (a *apiV1) deleteTitle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	deleteFiles := r.URL.Query().Get("delete_files") == "1"
-	deleteAniList := r.URL.Query().Get("delete_anilist") == "1"
-	if _, err := a.svc.RemoveTitleFiles(r.Context(), id, deleteFiles, deleteAniList); err != nil {
+	q := r.URL.Query()
+	if _, err := a.svc.RemoveTitleFiles(r.Context(), id, q.Get("delete_files") == "1", q.Get("delete_remote") == "1"); err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
@@ -512,19 +511,6 @@ func (a *apiV1) trackers(r *http.Request) []trackerDTO {
 	return out
 }
 
-func (a *apiV1) aniListStatus(r *http.Request) aniListDTO {
-	for _, t := range a.svc.TrackerAccounts(r.Context(), userFrom(r.Context()).ID) {
-		if t.Provider == catalog.AniListProvider {
-			return aniListDTO{Connected: true, Name: t.Name, ExpiresAt: t.ExpiresAt}
-		}
-	}
-	return aniListDTO{}
-}
-
-func (a *apiV1) anilistStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.aniListStatus(r))
-}
-
 func (a *apiV1) trackersList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": a.trackers(r), "default": a.svc.DefaultProvider(r.Context())})
 }
@@ -602,16 +588,8 @@ func (a *apiV1) syncTrackers(w http.ResponseWriter, r *http.Request, provider st
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (a *apiV1) anilistDisconnect(w http.ResponseWriter, r *http.Request) {
-	a.disconnectTracker(w, r, catalog.AniListProvider)
-}
-
 func (a *apiV1) trackerDisconnect(w http.ResponseWriter, r *http.Request) {
-	a.disconnectTracker(w, r, r.PathValue("provider"))
-}
-
-func (a *apiV1) disconnectTracker(w http.ResponseWriter, r *http.Request, provider string) {
-	if err := a.svc.DisconnectTracker(r.Context(), userFrom(r.Context()).ID, provider); err != nil {
+	if err := a.svc.DisconnectTracker(r.Context(), userFrom(r.Context()).ID, r.PathValue("provider")); err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}

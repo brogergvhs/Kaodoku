@@ -103,12 +103,9 @@ func registerAPIV1(mux *http.ServeMux, svc *service.JobService, runJobs func(con
 
 	mux.HandleFunc("GET /api/v1/me/settings", a.meSettingsGet)
 	mux.HandleFunc("PUT /api/v1/me/settings", a.meSettingsPut)
-	mux.HandleFunc("GET /api/v1/anilist", a.anilistStatus)
-	mux.HandleFunc("POST /api/v1/anilist/sync", a.syncAllTrackers)
 	mux.HandleFunc("POST /api/v1/trackers/sync", a.syncAllTrackers)
 	mux.HandleFunc("PUT /api/v1/trackers/order", a.trackerOrder)
 	mux.HandleFunc("PUT /api/v1/trackers/{provider}/settings", a.trackerSettings)
-	mux.HandleFunc("DELETE /api/v1/anilist", a.anilistDisconnect)
 	mux.HandleFunc("GET /api/v1/trackers", a.trackersList)
 	mux.HandleFunc("POST /api/v1/trackers/{provider}/login", a.trackerLogin)
 	mux.HandleFunc("POST /api/v1/trackers/{provider}/sync", a.trackerSync)
@@ -167,7 +164,6 @@ type metaDTO struct {
 type meDTO struct {
 	User        meUserDTO    `json:"user"`
 	Permissions []string     `json:"permissions"`
-	AniList     aniListDTO   `json:"anilist"`
 	Trackers    []trackerDTO `json:"trackers"`
 }
 
@@ -191,12 +187,6 @@ type meUserDTO struct {
 	AllowAdult bool   `json:"allow_adult"`
 }
 
-type aniListDTO struct {
-	Connected bool   `json:"connected"`
-	Name      string `json:"name"`
-	ExpiresAt string `json:"expires_at,omitempty"`
-}
-
 // meDTOFor builds the current-user payload (identity, permissions, tracker links).
 func (a *apiV1) meDTOFor(r *http.Request, user *auth.User) meDTO {
 	r = r.WithContext(auth.WithUser(r.Context(), user))
@@ -208,7 +198,6 @@ func (a *apiV1) meDTOFor(r *http.Request, user *auth.User) meDTO {
 	return meDTO{
 		User:        meUserDTO{ID: user.ID, Username: user.Username, Role: user.RoleName, AllowAdult: user.AllowAdult},
 		Permissions: perms,
-		AniList:     a.aniListStatus(r),
 		Trackers:    a.trackers(r),
 	}
 }
@@ -218,7 +207,7 @@ func (a *apiV1) meta(w http.ResponseWriter, _ *http.Request) {
 		ServerVersion: serverVersion(),
 		APIVersion:    1,
 		AuthRequired:  authEnabled(),
-		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "anilist", "trackers", "ratings"},
+		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "trackers", "ratings"},
 		ImageFormats:  []string{"jpg", "jpeg", "png", "webp", "gif", "avif"},
 		MaxPageBytes:  maxPageBytes,
 		InstanceID:    a.instanceID,

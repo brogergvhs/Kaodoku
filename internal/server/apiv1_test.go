@@ -501,7 +501,6 @@ func TestAPIV1RequiresAuth(t *testing.T) {
 		"GET /api/v1/screens", "POST /api/v1/screens", "PATCH /api/v1/screens/1",
 		"DELETE /api/v1/screens/1", "POST /api/v1/screens/reorder",
 		"GET /api/v1/me/settings", "PUT /api/v1/me/settings",
-		"GET /api/v1/anilist", "POST /api/v1/anilist/sync", "DELETE /api/v1/anilist",
 		"POST /api/v1/trackers/sync", "PUT /api/v1/trackers/order", "PUT /api/v1/trackers/anilist/settings",
 		"GET /api/v1/wanted/search", "GET /api/v1/wanted/trending", "GET /api/v1/wanted",
 		"POST /api/v1/wanted", "GET /api/v1/wanted/matches", "POST /api/v1/wanted/matches",
