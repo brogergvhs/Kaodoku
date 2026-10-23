@@ -226,3 +226,26 @@ func TestAggressiveSuggestionsComeFromMangaBakaUntilFetched(t *testing.T) {
 		t.Fatalf("fetch made %d calls, fetchable %v", al.calls.Load(), fetchable)
 	}
 }
+
+func TestCatalogRefreshUsesMangaBaka(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	useMangaBaka(t, svc, ctx, anthology)
+	al := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	al.works["113956"] = catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "113956", Status: "RELEASING"}
+	svc.catalog.providers[catalog.AniListProvider] = al
+	_, work := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "113956", Status: "RELEASING", CoverImage: "https://s4.anilist.co/a.jpg"}, 1, 0)
+
+	if err := svc.refreshWork(ctx, work); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := svc.catalog.GetManga(ctx, work.ID)
+	if got.Status != "FINISHED" || got.Chapters == nil || *got.Chapters != 40 || got.CoverImage != "https://s4.anilist.co/a.jpg" || al.calls.Load() != 0 {
+		t.Fatalf("refreshed %+v with %d calls, want MangaBaka's status and count, the old cover, no calls", got, al.calls.Load())
+	}
+	if err := svc.SetSetting(ctx, SettingMangaBakaAggressive, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.refreshWork(ctx, got); err != nil || al.calls.Load() != 1 {
+		t.Fatalf("stale MangaBaka data with aggressive off made %d calls, %v; want the tracker asked", al.calls.Load(), err)
+	}
+}

@@ -335,3 +335,34 @@ func (s *JobService) mbTrending(ctx context.Context, limit int) []catalog.Manga 
 	}
 	return s.mbMangas(ctx, s.mb.Trending(ctx, limit))
 }
+
+// mbRefresh updates a work's release status and final counts from MangaBaka, filling only blank details, when its
+// data is under 8 days old or aggressive mode is on.
+func (s *JobService) mbRefresh(ctx context.Context, m *catalog.Manga) bool {
+	if !s.mbOn(ctx) {
+		return false
+	}
+	sr, ok := s.mb.ByProvider(ctx, m.Provider, m.ProviderID)
+	if !ok || time.Since(sr.UpdatedAt) >= 8*24*time.Hour && !s.mbAggressive(ctx) {
+		return false
+	}
+	fresh := catalog.FromMangaBaka(sr, m.Provider, m.ProviderID)
+	m.Status = cmp.Or(fresh.Status, m.Status)
+	if sr.Status == "completed" || sr.Status == "cancelled" {
+		m.Chapters, m.Volumes = cmp.Or(fresh.Chapters, m.Chapters), cmp.Or(fresh.Volumes, m.Volumes)
+	}
+	fresh.Chapters = nil
+	fillBlanks(m, fresh)
+	return true
+}
+
+// mbFinalChapters is a finished series' chapter count on MangaBaka, or 0.
+func (s *JobService) mbFinalChapters(ctx context.Context, malID string) int {
+	if !s.mbOn(ctx) {
+		return 0
+	}
+	if sr, ok := s.mb.ByProvider(ctx, catalog.MALProvider, malID); ok && (sr.Status == "completed" || sr.Status == "cancelled") {
+		return sr.Chapters
+	}
+	return 0
+}

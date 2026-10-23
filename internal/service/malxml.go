@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -175,6 +176,9 @@ func (s *JobService) ImportMALXML(ctx context.Context, r io.Reader, opts ListImp
 			res.Ignored++
 		}
 		e := ListEntry{MALID: strings.TrimSpace(m.ID), Chapters: m.ReadChapters, Score: m.Score}
+		if e.Chapters == 0 && m.Status == "Completed" {
+			e.Chapters = cmp.Or(m.Chapters, s.mbFinalChapters(ctx, e.MALID))
+		}
 		tid, ok := byMAL[e.MALID]
 		switch {
 		case !ok:

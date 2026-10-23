@@ -44,3 +44,16 @@ func TestMALXMLRoundTrip(t *testing.T) {
 		t.Fatal("an anime export should be rejected")
 	}
 }
+
+func TestMALXMLCompletedWithoutChaptersReadsAll(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	ctx = asUser(svc, ctx, t)
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "1", ExternalIDs: map[string]string{catalog.MALProvider: "10"}}, 3, 0)
+	xml := `<myanimelist><myinfo><user_export_type>2</user_export_type></myinfo><manga><manga_mangadb_id>10</manga_mangadb_id><manga_chapters>3</manga_chapters><my_read_chapters>0</my_read_chapters><my_status>Completed</my_status></manga></myanimelist>`
+	if res, err := svc.ImportMALXML(ctx, strings.NewReader(xml), ListImport{Progress: true}, true); err != nil || res.Raised != 1 {
+		t.Fatalf("import = %+v, %v", res, err)
+	}
+	if progress, _, _ := svc.localTrackerState(ctx, 1, titleID); progress != 3 {
+		t.Fatalf("progress = %d, want all 3 chapters of a completed entry read", progress)
+	}
+}

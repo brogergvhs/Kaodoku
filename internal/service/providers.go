@@ -376,6 +376,11 @@ func (s *JobService) CatalogManga(ctx context.Context, provider, id string) (cat
 	if m, ok, err := s.catalog.repo.MangaByProvider(ctx, p.Name(), id); err != nil || ok {
 		return m, err
 	}
+	if s.mbOn(ctx) {
+		if sr, ok := s.mb.ByProvider(ctx, p.Name(), id); ok {
+			return s.catalog.repo.UpsertManga(ctx, catalog.FromMangaBaka(sr, p.Name(), id))
+		}
+	}
 	return s.catalog.fetch(ctx, p, id)
 }
 
@@ -828,6 +833,10 @@ func (s *JobService) runCatalogRefresh(ctx context.Context, progress ProgressMan
 }
 
 func (s *JobService) refreshWork(ctx context.Context, m catalog.Manga) error {
+	if s.mbRefresh(ctx, &m) {
+		_, err := s.catalog.repo.UpsertManga(ctx, m)
+		return err
+	}
 	p, ok := s.catalog.providers[m.Provider]
 	if !ok || !s.providerEnabled(ctx, m.Provider) {
 		return nil
@@ -883,27 +892,13 @@ func (s *JobService) TitleLinks(ctx context.Context, titleID int64) ([]ProviderL
 		}
 		l := link(p.Name(), p.Label())
 		if l.ID != "" {
-			l.Cover = s.linkCover(ctx, p.Name(), l.ID)
+			if c, err := s.CatalogManga(ctx, p.Name(), l.ID); err == nil {
+				l.Cover = c.CoverImage
+			}
 		}
 		out = append(out, l)
 	}
 	return out, nil
-}
-
-// linkCover prefers a stored record, then MangaBaka, before asking the tracker.
-func (s *JobService) linkCover(ctx context.Context, provider, id string) string {
-	if m, ok, _ := s.catalog.repo.MangaByProvider(ctx, provider, id); ok {
-		return m.CoverImage
-	}
-	if s.mbOn(ctx) {
-		if sr, ok := s.mb.ByProvider(ctx, provider, id); ok {
-			return sr.CoverURL(250)
-		}
-	}
-	if c, err := s.CatalogManga(ctx, provider, id); err == nil {
-		return c.CoverImage
-	}
-	return ""
 }
 
 func (s *JobService) MetadataProvider(ctx context.Context, titleID int64) string {
