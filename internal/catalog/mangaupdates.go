@@ -104,6 +104,7 @@ func (s muSeries) manga() Manga {
 }
 
 func (c *MangaUpdatesClient) Search(ctx context.Context, query string, limit int, f SearchFilter) ([]Manga, bool, error) {
+	ctx = asCall(ctx, "Search")
 	if limit <= 0 {
 		limit = 10
 	}
@@ -137,6 +138,7 @@ func (c *MangaUpdatesClient) Search(ctx context.Context, query string, limit int
 }
 
 func (c *MangaUpdatesClient) TagVocabulary(ctx context.Context) ([]ContentTag, error) {
+	ctx = asCall(ctx, "Tags")
 	var genres []struct {
 		Genre       string `json:"genre"`
 		Description string `json:"description"`
@@ -152,6 +154,7 @@ func (c *MangaUpdatesClient) TagVocabulary(ctx context.Context) ([]ContentTag, e
 }
 
 func (c *MangaUpdatesClient) Trending(ctx context.Context, limit int) ([]Manga, error) {
+	ctx = asCall(ctx, "Trending")
 	items, _, err := c.Search(ctx, "", limit, SearchFilter{})
 	return items, err
 }
@@ -163,6 +166,7 @@ func (c *MangaUpdatesClient) series(ctx context.Context, id string) (muSeries, e
 }
 
 func (c *MangaUpdatesClient) Get(ctx context.Context, id string) (Manga, []Relation, error) {
+	ctx = asCall(ctx, "Details")
 	s, err := c.series(ctx, id)
 	if err != nil {
 		return Manga{}, nil, err
@@ -177,6 +181,7 @@ func (c *MangaUpdatesClient) Get(ctx context.Context, id string) (Manga, []Relat
 }
 
 func (c *MangaUpdatesClient) Related(ctx context.Context, id string, limit int) (relations, recommendations []Manga, err error) {
+	ctx = asCall(ctx, "Related")
 	s, err := c.series(ctx, id)
 	if err != nil {
 		return nil, nil, err
@@ -200,6 +205,7 @@ func (s muSeries) recommendations(limit int) []Manga {
 }
 
 func (c *MangaUpdatesClient) Viewer(ctx context.Context) (string, string, error) {
+	ctx = asCall(ctx, "Account")
 	var p struct {
 		UserID   int64  `json:"user_id"`
 		Username string `json:"username"`
@@ -243,6 +249,7 @@ func muListFor(status string, progress int) int {
 }
 
 func (c *MangaUpdatesClient) ListEntries(ctx context.Context) ([]Entry, error) {
+	ctx = asCall(ctx, "List")
 	var out []Entry
 	for list := range muListStatus {
 		for page := 1; page <= 50; page++ {
@@ -274,6 +281,7 @@ func (c *MangaUpdatesClient) ListEntries(ctx context.Context) ([]Entry, error) {
 }
 
 func (c *MangaUpdatesClient) GetEntry(ctx context.Context, id string) (Entry, bool, error) {
+	ctx = asCall(ctx, "Entry read")
 	var e muListEntry
 	if err := c.do(ctx, http.MethodGet, "/lists/series/"+url.PathEscape(id), nil, &e); err != nil {
 		if IsNotFound(err) {
@@ -285,6 +293,7 @@ func (c *MangaUpdatesClient) GetEntry(ctx context.Context, id string) (Entry, bo
 }
 
 func (c *MangaUpdatesClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
+	ctx = asCall(ctx, "Entry write")
 	progress, status := u.Progress, u.Status
 	sid, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
@@ -310,6 +319,7 @@ func (c *MangaUpdatesClient) SaveEntry(ctx context.Context, id string, u EntryUp
 }
 
 func (c *MangaUpdatesClient) DeleteEntry(ctx context.Context, id string) error {
+	ctx = asCall(ctx, "Entry delete")
 	sid, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
 		return nil
@@ -321,6 +331,7 @@ func (c *MangaUpdatesClient) DeleteEntry(ctx context.Context, id string) error {
 }
 
 func (c *MangaUpdatesClient) Login(ctx context.Context, username, password string) (Token, error) {
+	ctx = asCall(ctx, "Sign-in")
 	var resp struct {
 		Context struct {
 			SessionToken string `json:"session_token"`

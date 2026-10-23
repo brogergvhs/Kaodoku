@@ -150,6 +150,14 @@ func (u *webUI) metricsPage(w http.ResponseWriter, r *http.Request) {
 	u.page(w, r, "metrics", "Metrics", v)
 }
 
+func (u *webUI) trackerCalls(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).Can(auth.PermStatsView) {
+		writeError(w, http.StatusForbidden, "missing permission for this metrics tab")
+		return
+	}
+	u.frag(w, "trackerCalls", u.svc.TrackerCallDetails(r.Context()))
+}
+
 func (u *webUI) metricsBody(w http.ResponseWriter, r *http.Request) {
 	tab := r.URL.Query().Get("tab")
 	user := userFrom(r.Context())

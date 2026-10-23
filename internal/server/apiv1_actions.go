@@ -592,7 +592,7 @@ func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 	for scan := 0; scan < 3; scan++ {
 		last = page + scan
 		filter.Page = last
-		fetched, m, err := a.svc.SearchManga(r.Context(), q.Get("provider"), term, searchPerPage, filter)
+		fetched, m, err := a.svc.SearchManga(catalog.WithReason(r.Context(), "App search"), q.Get("provider"), term, searchPerPage, filter)
 		if err != nil {
 			v1err(w, http.StatusBadGateway, "unavailable", err.Error())
 			return
@@ -608,7 +608,7 @@ func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 // wantedTrending mirrors the web: personalized recommendations, falling back to
 // a guarded popularity browse so the grid is never empty.
 func (a *apiV1) wantedTrending(w http.ResponseWriter, r *http.Request) {
-	items, err := a.svc.RecommendedManga(r.Context(), 18)
+	items, err := a.svc.RecommendedManga(catalog.WithReason(r.Context(), "App recommendations"), 18)
 	if err != nil {
 		items = nil
 	}

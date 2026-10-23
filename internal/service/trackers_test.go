@@ -279,33 +279,56 @@ func TestTitleMatchSearchesEnglishWhenRomajiMisses(t *testing.T) {
 
 type countingProvider struct {
 	*fakeProvider
-	n, img atomic.Int64
+	mu    sync.Mutex
+	calls map[catalog.Call]int64
 }
 
-func (c *countingProvider) Requests() *atomic.Int64 { return &c.n }
-func (c *countingProvider) Images() *atomic.Int64   { return &c.img }
+func (c *countingProvider) Count(k catalog.Call, n int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.calls == nil {
+		c.calls = map[catalog.Call]int64{}
+	}
+	c.calls[k] += n
+}
 
-func TestTrackerRequestsAddUpAcrossFlushes(t *testing.T) {
+func (c *countingProvider) TakeCalls() map[catalog.Call]int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.calls
+	c.calls = nil
+	return out
+}
+
+func TestTrackerCallsAddUpByReasonAndKind(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	mal, mu := &countingProvider{fakeProvider: newFake(catalog.MALProvider)}, &countingProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
 	svc.catalog.providers[catalog.MALProvider], svc.catalog.providers[catalog.MangaUpdatesProvider] = mal, mu
-	if _, err := svc.db.ExecContext(ctx, `INSERT INTO tracker_requests (provider, day, count) VALUES ('mal', '2020-01-01', 100)`); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO tracker_calls (provider, day, kind, reason, count) VALUES ('mal', '2020-01-01', 'Search', 'Search', 100)`); err != nil {
 		t.Fatal(err)
 	}
-	mal.n.Store(5)
+	search := catalog.Call{Kind: "Search", Reason: "Search"}
+	mal.Count(search, 5)
 	svc.flushRequests(ctx)
-	mal.n.Add(3)
-	mu.n.Store(2)
-	svc.CountImage("https://cdn.mangaupdates.com/image/i1.png")
-	svc.CountImage("https://example.test/cover.jpg")
-	got := svc.TrackerRequestStats(ctx)
+	mal.Count(search, 3)
+	mal.Count(catalog.Call{Kind: "Details", Reason: "Title page"}, 1)
+	mu.Count(catalog.Call{Kind: "List", Reason: "Tracker sync"}, 2)
+	svc.CountImage("https://cdn.mangaupdates.com/image/i1.png", "Cover proxy")
+	svc.CountImage("https://example.test/cover.jpg", "Cover proxy")
+	stats := svc.TrackerRequestStats(ctx)
 	want := []TrackerRequests{
-		{Label: "MyAnimeList", API: RequestCounts{8, 8, 108}},
+		{Label: "MyAnimeList", API: RequestCounts{9, 9, 109}},
 		{Label: "MangaUpdates", API: RequestCounts{2, 2, 2}, Images: RequestCounts{1, 1, 1}},
-		{Label: "All trackers", API: RequestCounts{10, 10, 110}, Images: RequestCounts{1, 1, 1}, All: true},
+		{Label: "All trackers", API: RequestCounts{11, 11, 111}, Images: RequestCounts{1, 1, 1}, All: true},
 	}
-	if !slices.Equal(got, want) || mal.n.Load() != 0 || mu.img.Load() != 0 {
-		t.Fatalf("stats = %+v, want %+v", got, want)
+	if !slices.Equal(stats, want) {
+		t.Fatalf("stats = %+v, want %+v", stats, want)
+	}
+	details := fmt.Sprint(svc.TrackerCallDetails(ctx))
+	if wantDetails := "[{All trackers [{Search Search {8 8 108}} {Tracker sync List {2 2 2}} {Cover proxy Image {1 1 1}} {Title page Details {1 1 1}}] {12 12 112}} " +
+		"{MyAnimeList [{Search Search {8 8 108}} {Title page Details {1 1 1}}] {9 9 109}} " +
+		"{MangaUpdates [{Tracker sync List {2 2 2}} {Cover proxy Image {1 1 1}}] {3 3 3}}]"; details != wantDetails {
+		t.Fatalf("details = %s\nwant      %s", details, wantDetails)
 	}
 }
 

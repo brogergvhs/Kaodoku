@@ -282,13 +282,14 @@ func (u *webUI) titleProviderSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	view := providerPickerView{TitleID: id, Provider: r.FormValue("provider"), Unlinked: r.FormValue("unlinked") != ""}
 	query := cmp.Or(strings.TrimSpace(r.FormValue("q")), title.DisplayTitle)
-	items, _, err := u.svc.SearchManga(r.Context(), view.Provider, query, 8, catalog.SearchFilter{})
+	ctx := catalog.WithReason(r.Context(), "Link search")
+	items, _, err := u.svc.SearchManga(ctx, view.Provider, query, 8, catalog.SearchFilter{})
 	if err != nil {
 		view.Error = err.Error()
 	}
 	view.Current = u.svc.TitleLinkedID(r.Context(), id, view.Provider)
 	if view.Current != "" && !slices.ContainsFunc(items, func(m catalog.Manga) bool { return m.ProviderID == view.Current }) {
-		if m, err := u.svc.CatalogManga(r.Context(), view.Provider, view.Current); err == nil {
+		if m, err := u.svc.CatalogManga(ctx, view.Provider, view.Current); err == nil {
 			items = append([]catalog.Manga{m}, items...)
 		}
 	}

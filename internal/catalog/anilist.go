@@ -118,6 +118,7 @@ func searchHasMore(hasNext bool, page, limit int) bool {
 
 // Search returns one result page and whether further pages exist.
 func (c *AniListClient) Search(ctx context.Context, query string, limit int, filter SearchFilter) ([]Manga, bool, error) {
+	ctx = asCall(ctx, "Search")
 	if limit <= 0 {
 		limit = 10
 	}
@@ -141,6 +142,7 @@ func anilistID(id string) (int, error) {
 // Related returns an entry's direct manga relations (all of them) and up to
 // limit community recommendations not already among the relations.
 func (c *AniListClient) Related(ctx context.Context, id string, limit int) (relations, recommendations []Manga, err error) {
+	ctx = asCall(ctx, "Related")
 	mediaID, err := anilistID(id)
 	if err != nil {
 		return nil, nil, err
@@ -211,6 +213,7 @@ func (c *AniListClient) Related(ctx context.Context, id string, limit int) (rela
 
 // Trending returns currently trending manga.
 func (c *AniListClient) Trending(ctx context.Context, limit int) ([]Manga, error) {
+	ctx = asCall(ctx, "Trending")
 	if limit <= 0 {
 		limit = 12
 	}
@@ -225,6 +228,7 @@ func (c *AniListClient) Trending(ctx context.Context, limit int) ([]Manga, error
 // Get returns a manga plus its same-collection relations to other manga in
 // one request, so a catalog refresh needs no extra round-trip.
 func (c *AniListClient) Get(ctx context.Context, id string) (Manga, []Relation, error) {
+	ctx = asCall(ctx, "Details")
 	mediaID, err := anilistID(id)
 	if err != nil {
 		return Manga{}, nil, err
@@ -266,6 +270,7 @@ func (c *AniListClient) Get(ctx context.Context, id string) (Manga, []Relation, 
 }
 
 func (c *AniListClient) Resolve(ctx context.Context, provider, id string) (string, bool, error) {
+	ctx = asCall(ctx, "ID lookup")
 	malID, err := strconv.Atoi(id)
 	if provider != MALProvider || err != nil {
 		return "", false, nil
@@ -291,6 +296,7 @@ func (c *AniListClient) Resolve(ctx context.Context, provider, id string) (strin
 
 // TagVocabulary returns AniList's global genre and tag name lists.
 func (c *AniListClient) TagVocabulary(ctx context.Context) ([]ContentTag, error) {
+	ctx = asCall(ctx, "Tags")
 	var resp struct {
 		Data struct {
 			GenreCollection    []string `json:"GenreCollection"`
@@ -333,7 +339,7 @@ func (c *AniListClient) send(ctx context.Context, body []byte) (*http.Response, 
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", util.PickUserAgent(""))
 		bearer(ctx, req.Header)
-		c.requests.Add(1)
+		c.count(ctx)
 		resp, err := c.client.Do(req)
 		if err != nil {
 			return nil, transportError("anilist", err)

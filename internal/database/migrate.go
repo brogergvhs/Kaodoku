@@ -308,11 +308,15 @@ CREATE TABLE IF NOT EXISTS tracker_title_sync (
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
-CREATE TABLE IF NOT EXISTS tracker_requests (
+DROP TABLE IF EXISTS tracker_requests;
+
+CREATE TABLE IF NOT EXISTS tracker_calls (
 	provider TEXT NOT NULL,
 	day TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	reason TEXT NOT NULL,
 	count INTEGER NOT NULL DEFAULT 0,
-	PRIMARY KEY (provider, day)
+	PRIMARY KEY (provider, day, kind, reason)
 );
 
 CREATE TABLE IF NOT EXISTS tracker_related (
@@ -473,7 +477,6 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"tracker_accounts", "list_json", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_fetched_at", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_title_sync", "enabled", "INTEGER NOT NULL DEFAULT 1"},
-		{"tracker_requests", "images", "INTEGER NOT NULL DEFAULT 0"},
 		{"content_tags", "is_adult", "INTEGER NOT NULL DEFAULT 0"},
 		{"content_tags", "category", "TEXT NOT NULL DEFAULT ''"},
 		{"content_tags", "description", "TEXT NOT NULL DEFAULT ''"},

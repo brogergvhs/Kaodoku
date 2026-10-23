@@ -327,6 +327,7 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /management", u.management)
 	mux.HandleFunc("GET /metrics", u.metricsPage)
 	mux.HandleFunc("GET /ui/metrics", u.metricsBody)
+	mux.HandleFunc("GET /ui/metrics/tracker-calls", u.trackerCalls)
 	mux.HandleFunc("GET /search", u.searchPage)
 	mux.HandleFunc("GET /library", u.libraryPage)
 	mux.HandleFunc("GET /library/{id}", u.titlePage)
@@ -561,7 +562,7 @@ func (u *webUI) catalogMangaPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, fmt.Sprintf("/library/%d", inLib[pid]), http.StatusSeeOther)
 		return
 	}
-	m, err := u.svc.CatalogManga(ctx, provider, pid)
+	m, err := u.svc.CatalogManga(catalog.WithReason(ctx, "Title page"), provider, pid)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -651,6 +652,7 @@ func excludeBlocked(ctx context.Context, filter *catalog.SearchFilter, options [
 // guardedBrowseManga is a popularity browse pre-filtered by the acting user's
 // tag guards, shared by the web and v1 trending fallbacks.
 func guardedBrowseManga(ctx context.Context, svc *service.JobService, provider, sort, dir string) []catalog.Manga {
+	ctx = catalog.WithReason(ctx, "Browse")
 	filter := catalog.SearchFilter{Sort: anilistSort(sort, dir)}
 	if filter.Sort == "" {
 		filter.Sort = "POPULARITY_DESC"
@@ -2457,7 +2459,7 @@ func fetchCover(ctx context.Context, svc *service.JobService, coverURL string) (
 	if err != nil {
 		return "", nil, false
 	}
-	svc.CountImage(coverURL)
+	svc.CountImage(coverURL, "ZIP export")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, false
@@ -3518,7 +3520,7 @@ func (u *webUI) importSearch(w http.ResponseWriter, r *http.Request) {
 	if provider == "" {
 		provider = u.svc.DefaultProvider(r.Context())
 	}
-	items, _, err := u.svc.SearchManga(r.Context(), provider, query, 10, catalog.SearchFilter{})
+	items, _, err := u.svc.SearchManga(catalog.WithReason(r.Context(), "Import search"), provider, query, 10, catalog.SearchFilter{})
 	if err != nil {
 		u.fail(w, err)
 		return
@@ -4188,7 +4190,7 @@ func coverURL(m catalog.Manga) string {
 }
 
 func (u *webUI) catalogCover(w http.ResponseWriter, r *http.Request) {
-	m, err := u.svc.CatalogManga(r.Context(), r.PathValue("provider"), r.PathValue("id"))
+	m, err := u.svc.CatalogManga(catalog.WithReason(r.Context(), "Cover lookup"), r.PathValue("provider"), r.PathValue("id"))
 	if err != nil || !strings.HasPrefix(m.CoverImage, "https://") || !contentAllowed(r.Context(), m.IsAdult, mangaContentTags(m)) {
 		http.NotFound(w, r)
 		return

@@ -854,6 +854,7 @@ func (s *JobService) refreshTagVocabulary(ctx context.Context) error {
 
 // SyncPendingVocabularies fetches the tag lists of configured providers that have none yet; they stay unavailable until then.
 func (s *JobService) SyncPendingVocabularies(ctx context.Context) {
+	ctx = catalog.WithReason(ctx, "Tag lists")
 	for _, name := range providerOrder {
 		if s.providerConfigured(ctx, name) && s.vocabPending(name) && s.healthOutage(name) == "" {
 			if err := s.syncVocabulary(ctx, name); err != nil && ctx.Err() == nil {
@@ -1177,6 +1178,7 @@ func (s *JobService) ExploreDownloads(ctx context.Context) ([]ImportCandidate, e
 
 // ImportFolder tracks an existing download folder against a catalog entry.
 func (s *JobService) ImportFolder(ctx context.Context, folder, provider, id string) (library.Title, error) {
+	ctx = catalog.WithReason(ctx, "Import")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return library.Title{}, err
@@ -1295,6 +1297,7 @@ func (s *JobService) SetVolumeCover(ctx context.Context, id int64, blob []byte, 
 // ImportVolumesFolder tracks a folder of volume files as a new title.
 // Volumes are disk-only: no source search is enqueued.
 func (s *JobService) ImportVolumesFolder(ctx context.Context, folder, provider, id string) (library.Title, error) {
+	ctx = catalog.WithReason(ctx, "Import")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return library.Title{}, err

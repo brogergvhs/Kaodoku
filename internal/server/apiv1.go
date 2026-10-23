@@ -439,7 +439,7 @@ func serveTitleCover(w http.ResponseWriter, r *http.Request, svc *service.JobSer
 		_, _ = w.Write(blob)
 		return
 	}
-	proxyRemoteImage(w, r, svc, t.CoverImage)
+	proxyRemoteImage(w, r, svc, t.CoverImage, "Cover proxy")
 }
 
 func (a *apiV1) titleBanner(w http.ResponseWriter, r *http.Request) {
@@ -453,10 +453,10 @@ func (a *apiV1) titleBanner(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	proxyRemoteImage(w, r, a.svc, t.BannerImage)
+	proxyRemoteImage(w, r, a.svc, t.BannerImage, "Banner proxy")
 }
 
-func proxyRemoteImage(w http.ResponseWriter, r *http.Request, svc *service.JobService, url string) {
+func proxyRemoteImage(w http.ResponseWriter, r *http.Request, svc *service.JobService, url, reason string) {
 	if !strings.HasPrefix(url, "https://") {
 		http.NotFound(w, r)
 		return
@@ -466,7 +466,7 @@ func proxyRemoteImage(w http.ResponseWriter, r *http.Request, svc *service.JobSe
 		http.NotFound(w, r)
 		return
 	}
-	svc.CountImage(url)
+	svc.CountImage(url, reason)
 	resp, err := coverClient.Do(req)
 	if err != nil {
 		http.Error(w, "image fetch failed", http.StatusBadGateway)

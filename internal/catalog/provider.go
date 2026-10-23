@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -30,14 +32,56 @@ func IsNotFound(err error) bool     { return errors.Is(err, ErrNotFound) }
 func IsUnauthorized(err error) bool { return errors.Is(err, ErrUnauthorized) }
 func IsUnavailable(err error) bool  { return errors.Is(err, ErrUnavailable) }
 
-// health remembers the last outage seen by a client until any request succeeds again, and counts the API requests it sends and the images the server fetches from its hosts.
+// health remembers the last outage seen by a client until any request succeeds again, and counts its calls.
 type health struct {
-	outage           atomic.Pointer[string]
-	requests, images atomic.Int64
+	outage atomic.Pointer[string]
+	mu     sync.Mutex
+	calls  map[Call]int64
 }
 
-func (h *health) Requests() *atomic.Int64 { return &h.requests }
-func (h *health) Images() *atomic.Int64   { return &h.images }
+// Call is what a request asked a tracker for, and why.
+type Call struct{ Kind, Reason string }
+
+type callKindKey struct{}
+type callReasonKey struct{}
+
+// WithReason names why the requests made with ctx are sent; the first reason set wins.
+func WithReason(ctx context.Context, reason string) context.Context {
+	if ctx.Value(callReasonKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, callReasonKey{}, reason)
+}
+
+func asCall(ctx context.Context, kind string) context.Context {
+	if ctx.Value(callKindKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, callKindKey{}, kind)
+}
+
+func (h *health) Count(c Call, n int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.calls == nil {
+		h.calls = map[Call]int64{}
+	}
+	h.calls[c] += n
+}
+
+func (h *health) count(ctx context.Context) {
+	kind, _ := ctx.Value(callKindKey{}).(string)
+	reason, _ := ctx.Value(callReasonKey{}).(string)
+	h.Count(Call{cmp.Or(kind, "Other"), cmp.Or(reason, "Other")}, 1)
+}
+
+func (h *health) TakeCalls() map[Call]int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := h.calls
+	h.calls = nil
+	return out
+}
 
 var imageHosts = map[string]string{"anilist.co": AniListProvider, "anili.st": AniListProvider, "myanimelist.net": MALProvider, "kitsu.app": KitsuProvider, "kitsu.io": KitsuProvider, "mangaupdates.com": MangaUpdatesProvider}
 

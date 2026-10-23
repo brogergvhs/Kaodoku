@@ -127,6 +127,7 @@ func (s *JobService) UnlinkedTitles(ctx context.Context, provider string) ([]Unl
 
 // titleAdded auto-links a new library title for trackers that opted in, then pushes progressive ones.
 func (s *JobService) titleAdded(ctx context.Context, userID, titleID int64) {
+	ctx = catalog.WithReason(ctx, "Title added")
 	ctx = context.WithoutCancel(ctx)
 	m, ok := s.titleWork(ctx, titleID)
 	if !ok {
@@ -179,6 +180,7 @@ func (s *JobService) TrackerLogin(ctx context.Context, provider string) string {
 }
 
 func (s *JobService) ConnectOAuth(ctx context.Context, userID int64, provider, redirectURI, code, verifier string) error {
+	ctx = catalog.WithReason(ctx, "Sign-in")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return err
@@ -195,6 +197,7 @@ func (s *JobService) ConnectOAuth(ctx context.Context, userID int64, provider, r
 }
 
 func (s *JobService) LoginTracker(ctx context.Context, userID int64, provider, username, password string) error {
+	ctx = catalog.WithReason(ctx, "Sign-in")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return err
@@ -322,6 +325,7 @@ func (s *JobService) trackerAuthError(ctx context.Context, userID int64, provide
 }
 
 func (s *JobService) EnqueueTrackerSync(ctx context.Context, userID int64, provider string) error {
+	ctx = catalog.WithReason(ctx, "Tracker sync")
 	if provider != "" {
 		if _, _, ok := s.trackerSession(ctx, userID, provider); !ok {
 			return fmt.Errorf("no %s account connected", s.ProviderLabel(provider))
@@ -360,6 +364,7 @@ func (s *JobService) expandTrackerSync(ctx context.Context, parentID int64) erro
 
 // runTrackerSync: remote > local pulls read marks down, local > remote pushes up, missing entries get added.
 func (s *JobService) runTrackerSync(ctx context.Context, userID int64, provider string, progress ProgressManager) error {
+	ctx = catalog.WithReason(ctx, "Tracker sync")
 	user, err := s.auth.GetUser(ctx, userID)
 	if err != nil || user == nil {
 		user = &auth.User{ID: userID}
@@ -621,6 +626,7 @@ func (s *JobService) FlushPushes(timeout time.Duration) {
 }
 
 func (s *JobService) pushNow(ctx context.Context, userID, titleID int64, exact bool) {
+	ctx = catalog.WithReason(ctx, "Progress push")
 	names := s.progressiveTrackers(ctx, userID, titleID)
 	if len(names) == 0 {
 		return
@@ -660,6 +666,7 @@ func (s *JobService) eachTracker(ctx context.Context, userID int64, names []stri
 }
 
 func (s *JobService) dropFromTrackers(ctx context.Context, userID int64, names []string, m catalog.Manga, remove bool) {
+	ctx = catalog.WithReason(ctx, "Title removed")
 	go s.eachTracker(context.WithoutCancel(ctx), userID, names, func(actx context.Context, p catalog.Provider) error {
 		id := s.confirmedID(actx, m, p.Name())
 		switch {
@@ -674,6 +681,7 @@ func (s *JobService) dropFromTrackers(ctx context.Context, userID int64, names [
 }
 
 func (s *JobService) pushFavourite(ctx context.Context, userID, titleID int64, want bool) {
+	ctx = catalog.WithReason(ctx, "Favourite push")
 	ctx = context.WithoutCancel(ctx)
 	m, ok := s.titleWork(ctx, titleID)
 	if !ok {
@@ -771,6 +779,7 @@ func (s *JobService) localFavouriteIDs(ctx context.Context, userID int64, provid
 
 // SyncTrackersTitle is a one-off sync of a title; an empty provider means every connected tracker.
 func (s *JobService) SyncTrackersTitle(ctx context.Context, titleID int64, provider string) error {
+	ctx = catalog.WithReason(ctx, "Title sync")
 	userID := auth.UserID(ctx)
 	names := s.connectedTrackers(ctx, userID)
 	if provider != "" {
@@ -882,6 +891,7 @@ func (s *JobService) syncTitle(ctx, actx context.Context, p catalog.Provider, id
 
 // TrackerSuggestions merges the user's lists on provider, or on every reachable connected tracker when empty.
 func (s *JobService) TrackerSuggestions(ctx context.Context, provider string) []catalog.Manga {
+	ctx = catalog.WithReason(ctx, "Your lists")
 	uid := auth.UserID(ctx)
 	names := slices.DeleteFunc(s.connectedTrackers(ctx, uid), func(name string) bool { return provider != "" && name != provider })
 	lists := make([][]catalog.Manga, len(names))
@@ -1015,6 +1025,7 @@ func (s *JobService) storeList(ctx context.Context, uid int64, provider string, 
 // ProviderSuggestions approximates a backend's own suggestions from community
 // recommendations for the user's reading on it; ok is false when not connected.
 func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) ([]catalog.Manga, bool) {
+	ctx = catalog.WithReason(ctx, "List suggestions")
 	uid := auth.UserID(ctx)
 	key := listKey(uid, provider)
 	s.recMu.Lock()

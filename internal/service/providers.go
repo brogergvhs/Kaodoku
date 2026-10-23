@@ -8,7 +8,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
@@ -115,7 +114,7 @@ func (s *JobService) probeOutages(ctx context.Context, retries map[string]outage
 		case !seen:
 			retries[name] = outageRetry{time.Minute, now.Add(time.Minute)}
 		case !now.Before(r.at):
-			pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			pctx, cancel := context.WithTimeout(catalog.WithReason(ctx, "Outage check"), 30*time.Second)
 			_, _ = s.catalog.providers[name].Trending(pctx, 1)
 			cancel()
 			r.wait = min(2*r.wait, 30*time.Minute)
@@ -124,34 +123,33 @@ func (s *JobService) probeOutages(ctx context.Context, retries map[string]outage
 	}
 }
 
-type requestCounters interface {
-	Requests() *atomic.Int64
-	Images() *atomic.Int64
+type callCounter interface {
+	Count(catalog.Call, int64)
+	TakeCalls() map[catalog.Call]int64
 }
 
+const imageCall = "Image"
+
 // CountImage counts an image the server fetches itself from a tracker's servers.
-func (s *JobService) CountImage(url string) {
-	if c, ok := s.catalog.providers[catalog.ImageProvider(url)].(requestCounters); ok {
-		c.Images().Add(1)
+func (s *JobService) CountImage(url, reason string) {
+	if c, ok := s.catalog.providers[catalog.ImageProvider(url)].(callCounter); ok {
+		c.Count(catalog.Call{Kind: imageCall, Reason: reason}, 1)
 	}
 }
 
-// flushRequests adds each tracker's API request and image counts since the last flush to today's row.
+// flushRequests adds each tracker's calls since the last flush to today's rows.
 func (s *JobService) flushRequests(ctx context.Context) {
 	day := time.Now().UTC().Format(time.DateOnly)
 	for name, p := range s.catalog.providers {
-		c, ok := p.(requestCounters)
+		c, ok := p.(callCounter)
 		if !ok {
 			continue
 		}
-		n, img := c.Requests().Swap(0), c.Images().Swap(0)
-		if n == 0 && img == 0 {
-			continue
-		}
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO tracker_requests (provider, day, count, images) VALUES (?, ?, ?, ?)
-			ON CONFLICT (provider, day) DO UPDATE SET count = count + excluded.count, images = images + excluded.images`, name, day, n, img); err != nil {
-			c.Requests().Add(n)
-			c.Images().Add(img)
+		for call, n := range c.TakeCalls() {
+			if _, err := s.db.ExecContext(ctx, `INSERT INTO tracker_calls (provider, day, kind, reason, count) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT (provider, day, kind, reason) DO UPDATE SET count = count + excluded.count`, name, day, call.Kind, call.Reason, n); err != nil {
+				c.Count(call, n)
+			}
 		}
 	}
 }
@@ -168,38 +166,98 @@ type TrackerRequests struct {
 	All         bool
 }
 
-// TrackerRequestStats lists API requests and image fetches per tracker, with a final all-trackers row.
-func (s *JobService) TrackerRequestStats(ctx context.Context) []TrackerRequests {
+type TrackerCall struct {
+	Reason, Kind string
+	RequestCounts
+}
+
+type TrackerCalls struct {
+	Label string
+	Calls []TrackerCall
+	Total RequestCounts
+}
+
+type trackerCallRow struct {
+	provider string
+	TrackerCall
+}
+
+func (s *JobService) trackerCallRows(ctx context.Context) []trackerCallRow {
 	s.flushRequests(ctx)
 	now := time.Now().UTC()
-	today, month := now.Format(time.DateOnly), now.AddDate(0, 0, -30).Format(time.DateOnly)
-	rows, err := s.db.QueryContext(ctx, `SELECT provider,
-		COALESCE(SUM(CASE WHEN day = ? THEN count END), 0), COALESCE(SUM(CASE WHEN day > ? THEN count END), 0), SUM(count),
-		COALESCE(SUM(CASE WHEN day = ? THEN images END), 0), COALESCE(SUM(CASE WHEN day > ? THEN images END), 0), SUM(images)
-		FROM tracker_requests GROUP BY provider`, today, month, today, month)
+	rows, err := s.db.QueryContext(ctx, `SELECT provider, reason, kind,
+		COALESCE(SUM(CASE WHEN day = ? THEN count END), 0), COALESCE(SUM(CASE WHEN day > ? THEN count END), 0), SUM(count)
+		FROM tracker_calls GROUP BY provider, reason, kind ORDER BY SUM(count) DESC, reason, kind`, now.Format(time.DateOnly), now.AddDate(0, 0, -30).Format(time.DateOnly))
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	byName := map[string]TrackerRequests{}
+	var out []trackerCallRow
 	for rows.Next() {
-		var name string
-		var r TrackerRequests
-		if rows.Scan(&name, &r.API.Today, &r.API.Month, &r.API.Total, &r.Images.Today, &r.Images.Month, &r.Images.Total) == nil {
-			r.Label = s.ProviderLabel(name)
-			byName[name] = r
+		var r trackerCallRow
+		if rows.Scan(&r.provider, &r.Reason, &r.Kind, &r.Today, &r.Month, &r.Total) == nil {
+			out = append(out, r)
 		}
+	}
+	return out
+}
+
+// TrackerRequestStats totals API calls and image fetches per tracker, with a final all-trackers row.
+func (s *JobService) TrackerRequestStats(ctx context.Context) []TrackerRequests {
+	byName := map[string]TrackerRequests{}
+	for _, r := range s.trackerCallRows(ctx) {
+		t := byName[r.provider]
+		if r.Kind == imageCall {
+			t.Images = t.Images.plus(r.RequestCounts)
+		} else {
+			t.API = t.API.plus(r.RequestCounts)
+		}
+		byName[r.provider] = t
 	}
 	var out []TrackerRequests
 	all := TrackerRequests{Label: "All trackers", All: true}
 	for _, name := range providerOrder {
 		if r, ok := byName[name]; ok {
+			r.Label = s.ProviderLabel(name)
 			out = append(out, r)
 			all.API, all.Images = all.API.plus(r.API), all.Images.plus(r.Images)
 		}
 	}
 	if len(out) > 1 {
 		out = append(out, all)
+	}
+	return out
+}
+
+// TrackerCallDetails breaks each tracker's calls down by reason and kind, busiest first, after the same breakdown across all trackers.
+func (s *JobService) TrackerCallDetails(ctx context.Context) []TrackerCalls {
+	byName := map[string]*TrackerCalls{}
+	all := &TrackerCalls{Label: "All trackers"}
+	merged := map[[2]string]int{}
+	for _, r := range s.trackerCallRows(ctx) {
+		t := byName[r.provider]
+		if t == nil {
+			t = &TrackerCalls{Label: s.ProviderLabel(r.provider)}
+			byName[r.provider] = t
+		}
+		t.Calls, t.Total = append(t.Calls, r.TrackerCall), t.Total.plus(r.RequestCounts)
+		all.Total = all.Total.plus(r.RequestCounts)
+		if i, ok := merged[[2]string{r.Reason, r.Kind}]; ok {
+			all.Calls[i].RequestCounts = all.Calls[i].plus(r.RequestCounts)
+		} else {
+			merged[[2]string{r.Reason, r.Kind}] = len(all.Calls)
+			all.Calls = append(all.Calls, r.TrackerCall)
+		}
+	}
+	slices.SortStableFunc(all.Calls, func(a, b TrackerCall) int { return cmp.Compare(b.Total, a.Total) })
+	var out []TrackerCalls
+	for _, name := range providerOrder {
+		if t := byName[name]; t != nil {
+			out = append(out, *t)
+		}
+	}
+	if len(out) > 1 {
+		out = append([]TrackerCalls{*all}, out...)
 	}
 	return out
 }
@@ -271,6 +329,7 @@ func (s *JobService) DefaultProvider(ctx context.Context) string {
 }
 
 func (s *JobService) SearchManga(ctx context.Context, provider, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {
+	ctx = catalog.WithReason(ctx, "Search")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return nil, false, err
@@ -295,6 +354,7 @@ func (s *JobService) SearchManga(ctx context.Context, provider, query string, li
 }
 
 func (s *JobService) AddWanted(ctx context.Context, provider, id string, allowed func(catalog.Manga) bool) (catalog.Manga, error) {
+	ctx = catalog.WithReason(ctx, "Wanted")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return catalog.Manga{}, err
@@ -303,6 +363,7 @@ func (s *JobService) AddWanted(ctx context.Context, provider, id string, allowed
 }
 
 func (s *JobService) AddCatalogTitle(ctx context.Context, provider, id string) (library.Title, error) {
+	ctx = catalog.WithReason(ctx, "Title added")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return library.Title{}, err
@@ -322,6 +383,7 @@ func (s *JobService) AddCatalogTitle(ctx context.Context, provider, id string) (
 }
 
 func (s *JobService) CatalogManga(ctx context.Context, provider, id string) (catalog.Manga, error) {
+	ctx = catalog.WithReason(ctx, "Title details")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return catalog.Manga{}, err
@@ -344,6 +406,7 @@ func (s *JobService) LibraryIndex(ctx context.Context) map[string]int64 {
 }
 
 func (s *JobService) TrendingManga(ctx context.Context, limit int) ([]catalog.Manga, error) {
+	ctx = catalog.WithReason(ctx, "Trending")
 	p, err := s.Provider(ctx, "")
 	if err != nil {
 		return nil, err
@@ -503,6 +566,7 @@ func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id s
 }
 
 func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, err error) {
+	ctx = catalog.WithReason(ctx, "Related titles")
 	m, err := s.catalog.GetManga(ctx, catalogID)
 	if err != nil {
 		return nil, nil, err
@@ -613,6 +677,7 @@ func (s *JobService) recentWorks(ctx context.Context, userID int64, limit int) [
 }
 
 func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog.Manga, bool, error) {
+	ctx = catalog.WithReason(ctx, "Recommendations")
 	uid := auth.UserID(ctx)
 	seeds := s.recentWorks(ctx, uid, 24)
 	const maxSeeds = 4
@@ -658,6 +723,7 @@ func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog
 
 // runCatalogRefresh skips finished works and refreshes tag lists monthly.
 func (s *JobService) runCatalogRefresh(ctx context.Context, progress ProgressManager) error {
+	ctx = catalog.WithReason(ctx, "Catalog refresh")
 	var errs []error
 	if t, err := database.ParseTime(s.Setting(ctx, settingTagsRefreshed, "")); err != nil || time.Since(t) >= tagsTTL {
 		if err := s.refreshTagVocabulary(ctx); err != nil {
@@ -738,6 +804,7 @@ type ProviderLink struct {
 }
 
 func (s *JobService) TitleLinks(ctx context.Context, titleID int64) ([]ProviderLink, error) {
+	ctx = catalog.WithReason(ctx, "Tracker panel")
 	m, ok := s.titleWork(ctx, titleID)
 	if !ok {
 		return nil, fmt.Errorf("title has no catalog entry")
@@ -805,6 +872,7 @@ func (s *JobService) LinkExternalID(ctx context.Context, titleID int64, provider
 }
 
 func (s *JobService) SwitchTitleMetadata(ctx context.Context, titleID int64, provider, id string) error {
+	ctx = catalog.WithReason(ctx, "Metadata switch")
 	old, ok := s.titleWork(ctx, titleID)
 	if !ok {
 		return fmt.Errorf("title has no catalog entry")

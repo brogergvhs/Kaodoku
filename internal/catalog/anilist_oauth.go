@@ -19,6 +19,7 @@ func (c *AniListClient) AuthorizeURL(app App, state, _ string) string {
 
 // Exchange swaps an authorization code for a long-lived token.
 func (c *AniListClient) Exchange(ctx context.Context, app App, code, _ string) (Token, error) {
+	ctx = asCall(ctx, "Sign-in")
 	body, _ := json.Marshal(map[string]string{
 		"grant_type":    "authorization_code",
 		"client_id":     app.ClientID,
@@ -32,7 +33,7 @@ func (c *AniListClient) Exchange(ctx context.Context, app App, code, _ string) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	c.requests.Add(1)
+	c.count(ctx)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return Token{}, err
@@ -50,6 +51,7 @@ func (c *AniListClient) Exchange(ctx context.Context, app App, code, _ string) (
 }
 
 func (c *AniListClient) Viewer(ctx context.Context) (string, string, error) {
+	ctx = asCall(ctx, "Account")
 	var out struct {
 		Data struct {
 			Viewer struct {
@@ -74,6 +76,7 @@ func (c *AniListClient) viewerID(ctx context.Context) int {
 
 // ListEntries returns the account's AniList manga list.
 func (c *AniListClient) ListEntries(ctx context.Context) ([]Entry, error) {
+	ctx = asCall(ctx, "List")
 	var resp struct {
 		Data struct {
 			MediaListCollection struct {
@@ -113,6 +116,7 @@ func (c *AniListClient) ListEntries(ctx context.Context) ([]Entry, error) {
 
 // Favourites returns the AniList ids of the account's favourite manga.
 func (c *AniListClient) Favourites(ctx context.Context) ([]string, error) {
+	ctx = asCall(ctx, "Favourites")
 	var out []string
 	for page := 1; page <= 20; page++ {
 		var resp struct {
@@ -148,6 +152,7 @@ func (c *AniListClient) Favourites(ctx context.Context) ([]string, error) {
 }
 
 func (c *AniListClient) IsFavourite(ctx context.Context, id string) (bool, error) {
+	ctx = asCall(ctx, "Favourite check")
 	mediaID, err := anilistID(id)
 	if err != nil {
 		return false, err
@@ -167,6 +172,7 @@ func (c *AniListClient) IsFavourite(ctx context.Context, id string) (bool, error
 
 // ToggleFavourite flips the favourite state (AniList only offers a toggle).
 func (c *AniListClient) ToggleFavourite(ctx context.Context, id string) error {
+	ctx = asCall(ctx, "Favourite toggle")
 	mediaID, err := anilistID(id)
 	if err != nil {
 		return err
@@ -176,6 +182,7 @@ func (c *AniListClient) ToggleFavourite(ctx context.Context, id string) error {
 }
 
 func (c *AniListClient) GetEntry(ctx context.Context, id string) (Entry, bool, error) {
+	ctx = asCall(ctx, "Entry read")
 	mediaID, err := anilistID(id)
 	if err != nil {
 		return Entry{}, false, err
@@ -200,6 +207,7 @@ func (c *AniListClient) GetEntry(ctx context.Context, id string) (Entry, bool, e
 // SaveEntry upserts the list entry. An empty status keeps the remote status;
 // progress < 0 keeps the remote progress.
 func (c *AniListClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
+	ctx = asCall(ctx, "Entry write")
 	mediaID, err := anilistID(id)
 	if err != nil {
 		return err
@@ -261,6 +269,7 @@ func (e anilistEntry) entry() Entry {
 // the viewer-scoped MediaList query rather than Media.mediaListEntry, which
 // AniList serves from a CDN cache that can return a stale or foreign entry id.
 func (c *AniListClient) DeleteEntry(ctx context.Context, id string) error {
+	ctx = asCall(ctx, "Entry delete")
 	mediaID, err := anilistID(id)
 	if err != nil {
 		return err

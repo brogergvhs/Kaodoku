@@ -181,6 +181,7 @@ func (c *KitsuClient) list(ctx context.Context, path string, q url.Values) ([]Ma
 }
 
 func (c *KitsuClient) Search(ctx context.Context, query string, limit int, f SearchFilter) ([]Manga, bool, error) {
+	ctx = asCall(ctx, "Search")
 	if limit <= 0 {
 		limit = 10
 	}
@@ -206,6 +207,7 @@ type kitsuCategory struct {
 
 // TagVocabulary pages through Kitsu's categories; search filters take their slugs.
 func (c *KitsuClient) TagVocabulary(ctx context.Context) ([]ContentTag, error) {
+	ctx = asCall(ctx, "Tags")
 	var out []ContentTag
 	for offset := 0; ; offset += 20 {
 		var doc kitsuDoc
@@ -225,6 +227,7 @@ func (c *KitsuClient) TagVocabulary(ctx context.Context) ([]ContentTag, error) {
 }
 
 func (c *KitsuClient) Trending(ctx context.Context, limit int) ([]Manga, error) {
+	ctx = asCall(ctx, "Trending")
 	items, _, err := c.list(ctx, "/trending/manga", url.Values{"limit": {strconv.Itoa(max(limit, 1))}})
 	return items, err
 }
@@ -265,6 +268,7 @@ func (c *KitsuClient) relations(doc kitsuDoc, r kitsuResource) []Manga {
 }
 
 func (c *KitsuClient) Get(ctx context.Context, id string) (Manga, []Relation, error) {
+	ctx = asCall(ctx, "Details")
 	doc, r, err := c.detail(ctx, id)
 	if err != nil {
 		return Manga{}, nil, err
@@ -279,6 +283,7 @@ func (c *KitsuClient) Get(ctx context.Context, id string) (Manga, []Relation, er
 }
 
 func (c *KitsuClient) Related(ctx context.Context, id string, _ int) ([]Manga, []Manga, error) {
+	ctx = asCall(ctx, "Related")
 	doc, r, err := c.detail(ctx, id)
 	if err != nil {
 		return nil, nil, err
@@ -287,6 +292,7 @@ func (c *KitsuClient) Related(ctx context.Context, id string, _ int) ([]Manga, [
 }
 
 func (c *KitsuClient) Resolve(ctx context.Context, provider, id string) (string, bool, error) {
+	ctx = asCall(ctx, "ID lookup")
 	site := map[string]string{MALProvider: "myanimelist/manga", AniListProvider: "anilist/manga"}[provider]
 	if site == "" {
 		return "", false, nil
@@ -307,6 +313,7 @@ func (c *KitsuClient) Resolve(ctx context.Context, provider, id string) (string,
 }
 
 func (c *KitsuClient) Viewer(ctx context.Context) (string, string, error) {
+	ctx = asCall(ctx, "Account")
 	var doc kitsuDoc
 	if err := c.do(ctx, http.MethodGet, "/users?filter[self]=true", nil, &doc); err != nil {
 		return "", "", err
@@ -361,10 +368,12 @@ func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]Entry, error
 }
 
 func (c *KitsuClient) ListEntries(ctx context.Context) ([]Entry, error) {
+	ctx = asCall(ctx, "List")
 	return c.entries(ctx, url.Values{})
 }
 
 func (c *KitsuClient) GetEntry(ctx context.Context, id string) (Entry, bool, error) {
+	ctx = asCall(ctx, "Entry read")
 	list, err := c.entries(ctx, url.Values{"filter[mangaId]": {id}})
 	if err != nil || len(list) == 0 {
 		return Entry{}, false, err
@@ -375,6 +384,7 @@ func (c *KitsuClient) GetEntry(ctx context.Context, id string) (Entry, bool, err
 func (c *KitsuClient) TracksDates() bool { return true }
 
 func (c *KitsuClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
+	ctx = asCall(ctx, "Entry write")
 	progress, status := u.Progress, u.Status
 	e, found, err := u.remote(ctx, id, c.GetEntry)
 	if err != nil {
@@ -438,6 +448,7 @@ func (c *KitsuClient) writeEntry(ctx context.Context, id string, e Entry, found 
 }
 
 func (c *KitsuClient) DeleteEntry(ctx context.Context, id string) error {
+	ctx = asCall(ctx, "Entry delete")
 	e, found, err := c.GetEntry(ctx, id)
 	if err != nil || !found {
 		return err
@@ -446,9 +457,11 @@ func (c *KitsuClient) DeleteEntry(ctx context.Context, id string) error {
 }
 
 func (c *KitsuClient) Login(ctx context.Context, username, password string) (Token, error) {
+	ctx = asCall(ctx, "Sign-in")
 	return c.token(ctx, c.tokenURL, url.Values{"grant_type": {"password"}, "username": {username}, "password": {password}})
 }
 
 func (c *KitsuClient) Refresh(ctx context.Context, _ App, refresh string) (Token, error) {
+	ctx = asCall(ctx, "Token refresh")
 	return c.token(ctx, c.tokenURL, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}})
 }

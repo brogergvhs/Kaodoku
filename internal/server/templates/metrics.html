@@ -151,6 +151,27 @@
 {{end}}
 {{end}}
 
+{{define "trackerCalls"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">Tracker API calls</h3>
+    <p class="text-sm text-base-content/60">Every request to a tracker by why it was sent and what it asked for.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="min-h-0 flex-1 overflow-auto">
+  {{if .}}<table class="table table-sm table-pin-rows">
+    <thead><tr><th>Reason</th><th>Call</th><th class="text-right">Today</th><th class="text-right">30 days</th><th class="text-right">All time</th></tr></thead>
+    {{range .}}<tbody>
+      <tr><th colspan="5" class="pt-4 text-sm text-base-content">{{.Label}}</th></tr>
+      {{range .Calls}}<tr><td class="whitespace-nowrap">{{.Reason}}</td><td class="whitespace-nowrap">{{.Kind}}</td>{{template "requestCounts" .RequestCounts}}</tr>{{end}}
+      <tr class="font-semibold"><td colspan="2">Total</td>{{template "requestCounts" .Total}}</tr>
+    </tbody>{{end}}
+  </table>
+  {{else}}<p class="py-2 text-sm text-base-content/60">No tracker calls recorded yet.</p>{{end}}
+</div>
+{{end}}
+
 {{define "requestCounts"}}<td class="text-right tabular-nums">{{.Today}}</td><td class="text-right tabular-nums">{{.Month}}</td><td class="text-right tabular-nums">{{.Total}}</td>{{end}}
 
 {{define "metricsOverview"}}
@@ -213,7 +234,7 @@
 
 {{with .O.TrackerRequests}}
 <div class="rounded-xl bg-base-100 p-4 mb-4">
-  <h3 class="text-sm font-semibold text-base-content/70 mb-3">Tracker API requests</h3>
+  <h3 class="text-sm font-semibold text-base-content/70 mb-3 flex items-center justify-between"><span>Tracker API requests</span><button type="button" class="btn btn-ghost btn-xs" hx-get="/ui/metrics/tracker-calls" hx-target="#tracker-calls-body" onclick="openLoading('tracker_calls_modal')">Details</button></h3>
   <div class="overflow-x-auto">
     <table class="table table-sm">
       <thead>
@@ -225,6 +246,12 @@
       </tbody>
     </table>
   </div>
+  <dialog id="tracker_calls_modal" class="modal">
+    <div class="modal-box flex max-h-[85vh] w-[min(56rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
+      <div id="tracker-calls-body" class="contents" data-loading></div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
 </div>
 {{end}}
 

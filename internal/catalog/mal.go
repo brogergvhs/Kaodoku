@@ -152,6 +152,7 @@ func (c *MALClient) page(ctx context.Context, path string, q url.Values) ([]Mang
 }
 
 func (c *MALClient) Search(ctx context.Context, query string, limit int, f SearchFilter) ([]Manga, bool, error) {
+	ctx = asCall(ctx, "Search")
 	if limit <= 0 {
 		limit = 10
 	}
@@ -192,6 +193,7 @@ func (c *MALClient) TagVocabulary(context.Context) ([]ContentTag, error) {
 }
 
 func (c *MALClient) Trending(ctx context.Context, limit int) ([]Manga, error) {
+	ctx = asCall(ctx, "Trending")
 	items, _, err := c.Search(ctx, "", limit, SearchFilter{})
 	return items, err
 }
@@ -203,6 +205,7 @@ func (c *MALClient) detail(ctx context.Context, id string) (malManga, error) {
 }
 
 func (c *MALClient) Get(ctx context.Context, id string) (Manga, []Relation, error) {
+	ctx = asCall(ctx, "Details")
 	m, err := c.detail(ctx, id)
 	if err != nil {
 		return Manga{}, nil, err
@@ -217,6 +220,7 @@ func (c *MALClient) Get(ctx context.Context, id string) (Manga, []Relation, erro
 }
 
 func (c *MALClient) Related(ctx context.Context, id string, limit int) (relations, recommendations []Manga, err error) {
+	ctx = asCall(ctx, "Related")
 	m, err := c.detail(ctx, id)
 	if err != nil {
 		return nil, nil, err
@@ -235,6 +239,7 @@ func (c *MALClient) Related(ctx context.Context, id string, limit int) (relation
 }
 
 func (c *MALClient) Viewer(ctx context.Context) (string, string, error) {
+	ctx = asCall(ctx, "Account")
 	var u struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
@@ -255,6 +260,7 @@ func malEntryStatus(s malListStatus) string {
 }
 
 func (c *MALClient) ListEntries(ctx context.Context) ([]Entry, error) {
+	ctx = asCall(ctx, "List")
 	var out []Entry
 	next := "/users/@me/mangalist?" + url.Values{"fields": {"list_status," + malFields}, "limit": {"1000"}, "nsfw": {"true"}}.Encode()
 	for next != "" {
@@ -273,6 +279,7 @@ func (c *MALClient) ListEntries(ctx context.Context) ([]Entry, error) {
 }
 
 func (c *MALClient) GetEntry(ctx context.Context, id string) (Entry, bool, error) {
+	ctx = asCall(ctx, "Entry read")
 	var m malManga
 	if err := c.do(ctx, http.MethodGet, "/manga/"+url.PathEscape(id)+"?fields=my_list_status", nil, &m); err != nil {
 		return Entry{}, false, err
@@ -284,6 +291,7 @@ func (c *MALClient) GetEntry(ctx context.Context, id string) (Entry, bool, error
 }
 
 func (c *MALClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
+	ctx = asCall(ctx, "Entry write")
 	form := url.Values{}
 	if u.Progress >= 0 {
 		form.Set("num_chapters_read", strconv.Itoa(u.Progress))
@@ -313,6 +321,7 @@ func (c *MALClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) err
 }
 
 func (c *MALClient) DeleteEntry(ctx context.Context, id string) error {
+	ctx = asCall(ctx, "Entry delete")
 	if err := c.do(ctx, http.MethodDelete, "/manga/"+url.PathEscape(id)+"/my_list_status", nil, nil); err != nil && !IsNotFound(err) {
 		return err
 	}
@@ -326,6 +335,7 @@ func (c *MALClient) AuthorizeURL(app App, state, verifier string) string {
 }
 
 func (c *MALClient) Exchange(ctx context.Context, app App, code, verifier string) (Token, error) {
+	ctx = asCall(ctx, "Sign-in")
 	form := url.Values{"client_id": {app.ClientID}, "grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}}
 	if app.ClientSecret != "" {
 		form.Set("client_secret", app.ClientSecret)
@@ -334,6 +344,7 @@ func (c *MALClient) Exchange(ctx context.Context, app App, code, verifier string
 }
 
 func (c *MALClient) Refresh(ctx context.Context, app App, refresh string) (Token, error) {
+	ctx = asCall(ctx, "Token refresh")
 	form := url.Values{"client_id": {app.ClientID}, "grant_type": {"refresh_token"}, "refresh_token": {refresh}}
 	if app.ClientSecret != "" {
 		form.Set("client_secret", app.ClientSecret)

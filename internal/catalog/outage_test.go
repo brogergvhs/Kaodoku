@@ -16,7 +16,7 @@ func TestOutagesDisableUntilASuccess(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
-	ctx := context.Background()
+	ctx := WithReason(WithReason(context.Background(), "Outage check"), "ignored")
 
 	mal := NewMALClient(nil)
 	mal.base = srv.URL
@@ -28,8 +28,8 @@ func TestOutagesDisableUntilASuccess(t *testing.T) {
 	if _, err := mal.Trending(ctx, 1); err != nil || mal.Outage() != "" {
 		t.Fatalf("recovery: err=%v outage=%q", err, mal.Outage())
 	}
-	if n := mal.Requests().Load(); n != 2 {
-		t.Fatalf("counted %d MAL requests, want 2", n)
+	if got := mal.TakeCalls(); len(got) != 1 || got[Call{"Trending", "Outage check"}] != 2 {
+		t.Fatalf("counted %v, want 2 trending calls for the outage check", got)
 	}
 
 	ani := NewAniListClient(nil)
