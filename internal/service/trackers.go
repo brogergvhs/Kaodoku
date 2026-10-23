@@ -170,6 +170,7 @@ func (s *JobService) titleAdded(ctx context.Context, userID, titleID int64) {
 	}
 	accounts := s.TrackerAccounts(ctx, userID)
 	go func() {
+		s.mbLink(ctx, []catalog.Manga{m})
 		for _, a := range accounts {
 			if p, err := s.Provider(ctx, a.Provider); err == nil && a.AutoLink {
 				s.resolveID(ctx, m, p)

@@ -358,6 +358,14 @@ CREATE TABLE IF NOT EXISTS catalog_external_ids (
 );
 CREATE INDEX IF NOT EXISTS idx_catalog_external_lookup ON catalog_external_ids(provider, provider_id) WHERE confirmed = 1;
 
+CREATE TABLE IF NOT EXISTS mangabaka_suggestions (
+	catalog_manga_id INTEGER NOT NULL REFERENCES catalog_manga(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
+	provider_id TEXT NOT NULL,
+	dismissed INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (catalog_manga_id, provider)
+);
+
 CREATE TABLE IF NOT EXISTS api_tokens (
 	token_hash TEXT PRIMARY KEY,
 	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

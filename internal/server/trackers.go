@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
@@ -146,6 +147,48 @@ func (u *webUI) trackerUnlinked(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.frag(w, "trackerUnlinked", unlinkedView{Provider: provider, Label: u.svc.ProviderLabel(provider), Titles: titles})
+}
+
+type mangaBakaView struct {
+	Provider, Label    string
+	Links, Suggestions []service.MangaBakaLink
+}
+
+func (v mangaBakaView) Total() int { return len(v.Links) + len(v.Suggestions) }
+
+func (u *webUI) mangaBakaLinks(r *http.Request, provider string) mangaBakaView {
+	links, suggestions, _ := u.svc.MangaBakaLinks(r.Context(), provider)
+	allowed := func(l service.MangaBakaLink) bool { return !contentAllowed(r.Context(), l.IsAdult, l.ContentTags) }
+	return mangaBakaView{provider, u.svc.ProviderLabel(provider), slices.DeleteFunc(links, allowed), slices.DeleteFunc(suggestions, allowed)}
+}
+
+func (u *webUI) trackerMangaBaka(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).Can(auth.PermLibraryManage) {
+		writeError(w, http.StatusForbidden, "linking titles needs the library manage permission")
+		return
+	}
+	provider := pathProvider(r)
+	if r.Method == http.MethodPost {
+		id, _ := strconv.ParseInt(r.FormValue("title"), 10, 64)
+		var err error
+		switch action := r.FormValue("action"); {
+		case action == "confirm" && id == 0:
+			for _, l := range u.mangaBakaLinks(r, provider).Links {
+				if err = u.svc.ConfirmMangaBakaLink(r.Context(), l.Title.ID, provider); err != nil {
+					break
+				}
+			}
+		case action == "confirm":
+			err = u.svc.ConfirmMangaBakaLink(r.Context(), id, provider)
+		default:
+			err = u.svc.AnswerMangaBakaSuggestion(r.Context(), id, provider, action == "use")
+		}
+		if err != nil {
+			u.fail(w, err)
+			return
+		}
+	}
+	u.frag(w, "trackerMangaBaka", u.mangaBakaLinks(r, provider))
 }
 
 type missingView struct {
@@ -286,13 +329,14 @@ func (u *webUI) titleProgressiveSync(w http.ResponseWriter, r *http.Request) {
 }
 
 type trackerCardView struct {
-	Provider string
-	Label    string
-	Login    string
-	Outage   string
-	Account  *service.TrackerAccount
-	Unlinked int
-	Missing  int
+	Provider  string
+	Label     string
+	Login     string
+	Outage    string
+	Account   *service.TrackerAccount
+	Unlinked  int
+	Missing   int
+	MangaBaka int // MangaBaka links and suggestions to check
 }
 
 type trackersView struct {
@@ -319,6 +363,7 @@ func (u *webUI) trackerCards(r *http.Request) trackersView {
 			if out.CanManage {
 				titles, _ := u.unlinked(r, p.Name())
 				card.Unlinked = len(titles)
+				card.MangaBaka = u.mangaBakaLinks(r, p.Name()).Total()
 			}
 			if a.Source == service.SourceTracker {
 				card.Missing = len(u.missingRatings(r, p.Name()).Titles)

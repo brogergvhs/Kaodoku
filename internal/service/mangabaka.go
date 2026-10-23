@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
+	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/mangabaka"
 	"github.com/brogergvhs/kaodoku/internal/util"
 )
@@ -74,12 +78,11 @@ func (s *JobService) runMangaBakaRefresh(ctx context.Context, force bool, progre
 	handle := progress.Register("mangabaka")
 	defer handle.MarkDone()
 	v := s.mangaBakaVariant(ctx)
-	changed, err := s.mb.Refresh(ctx, mangaBakaClient, mangabaka.DumpURL(v), v, force, func(n int) { handle.Update(n, 0, 0) })
-	_ = s.catalog.saveCalls(ctx, mangaBakaName, catalog.Call{Kind: "Database", Reason: "Database refresh"}, 1)
-	if err != nil || !changed {
+	if _, err := s.mb.Refresh(ctx, mangaBakaClient, mangabaka.DumpURL(v), v, force, func(n int) { handle.Update(n, 0, 0) }); err != nil {
 		return err
 	}
-	return nil
+	_ = s.catalog.saveCalls(ctx, mangaBakaName, catalog.Call{Kind: "Database", Reason: "Database refresh"}, 1)
+	return s.linkLibrary(ctx)
 }
 
 type MangaBakaStatus struct {
@@ -101,4 +104,173 @@ func (s *JobService) MangaBakaStatus(ctx context.Context) MangaBakaStatus {
 		st.LastError = ""
 	}
 	return st
+}
+
+// mbSeries finds a work's MangaBaka series by its own id, else by its confirmed links when they all agree.
+func mbSeries(m catalog.Manga, maps map[string]catalog.ExternalID, found map[string]mangabaka.Series) (mangabaka.Series, bool) {
+	if sr, ok := found[m.Provider+":"+m.ProviderID]; ok {
+		return sr, true
+	}
+	var sr mangabaka.Series
+	for prov, e := range maps {
+		hit, ok := found[prov+":"+e.ProviderID]
+		if !e.Confirmed || !ok {
+			continue
+		}
+		if sr.ID != 0 && sr.ID != hit.ID {
+			return mangabaka.Series{}, false
+		}
+		sr = hit
+	}
+	return sr, sr.ID != 0
+}
+
+// mbLink links works to every tracker MangaBaka has them on, one-to-one only; ids that clash with the user's or an
+// existing confirmed link become suggestions instead.
+func (s *JobService) mbLink(ctx context.Context, works []catalog.Manga) {
+	if !s.mbOn(ctx) {
+		return
+	}
+	all := make([]map[string]catalog.ExternalID, len(works))
+	refs := map[string][]string{}
+	for i, m := range works {
+		all[i] = s.mappings(ctx, m)
+		for prov, e := range all[i] {
+			if e.Confirmed && e.ProviderID != "" {
+				refs[prov] = append(refs[prov], e.ProviderID)
+			}
+		}
+	}
+	found := s.mb.ByRefs(ctx, refs)
+	for i, m := range works {
+		sr, ok := mbSeries(m, all[i], found)
+		if !ok {
+			continue
+		}
+		for _, prov := range mangabaka.Trackers {
+			id, e := sr.IDs[prov], all[i][prov]
+			switch {
+			case prov == m.Provider:
+			case id == "" || e.ProviderID == id:
+				s.setSuggestion(ctx, m.ID, prov, "")
+			case e.Method == "user" || e.Confirmed && e.Method != mangaBakaName:
+				s.setSuggestion(ctx, m.ID, prov, id)
+			case !s.takenByOther(ctx, m.ID, prov, id):
+				_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: prov, ProviderID: id, Method: mangaBakaName, Confirmed: true})
+			}
+		}
+	}
+}
+
+// setSuggestion keeps a dismissed suggestion dismissed while its id stays the same; an empty id drops it.
+func (s *JobService) setSuggestion(ctx context.Context, catalogID int64, provider, id string) {
+	if id == "" {
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM mangabaka_suggestions WHERE catalog_manga_id = ? AND provider = ?`, catalogID, provider)
+		return
+	}
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO mangabaka_suggestions (catalog_manga_id, provider, provider_id) VALUES (?, ?, ?)
+		ON CONFLICT (catalog_manga_id, provider) DO UPDATE SET dismissed = dismissed AND provider_id = excluded.provider_id, provider_id = excluded.provider_id`,
+		catalogID, provider, id)
+}
+
+// linkLibrary runs MangaBaka linking over every library work.
+func (s *JobService) linkLibrary(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT catalog_manga_id FROM titles WHERE catalog_manga_id IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	var works []catalog.Manga
+	for _, id := range ids {
+		if m, err := s.catalog.GetManga(ctx, id); err == nil {
+			works = append(works, m)
+		}
+	}
+	for chunk := range slices.Chunk(works, 200) {
+		s.mbLink(ctx, chunk)
+	}
+	return ctx.Err()
+}
+
+type MangaBakaLink struct {
+	library.Title
+	ID, URL string // the link MangaBaka made, or the id it suggests
+	Current string // the existing link a suggestion clashes with; "" when marked as not on the tracker
+}
+
+// MangaBakaLinks lists a tracker's links made from MangaBaka and its open suggestions, over library titles.
+func (s *JobService) MangaBakaLinks(ctx context.Context, provider string) (links, suggestions []MangaBakaLink, err error) {
+	scan := func(q string) ([]MangaBakaLink, error) {
+		rows, err := s.db.QueryContext(ctx, q, provider)
+		if err != nil {
+			return nil, err
+		}
+		byTitle := map[int64]MangaBakaLink{}
+		var ids []int64
+		for rows.Next() {
+			var l MangaBakaLink
+			if rows.Scan(&l.Title.ID, &l.ID, &l.Current) == nil {
+				l.URL = catalog.MangaURL(provider, l.ID)
+				byTitle[l.Title.ID], ids = l, append(ids, l.Title.ID)
+			}
+		}
+		rows.Close()
+		titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
+		out := make([]MangaBakaLink, 0, len(titles))
+		for _, t := range titles {
+			l := byTitle[t.ID]
+			l.Title = t
+			out = append(out, l)
+		}
+		slices.SortFunc(out, func(a, b MangaBakaLink) int {
+			return strings.Compare(strings.ToLower(a.DisplayTitle), strings.ToLower(b.DisplayTitle))
+		})
+		return out, err
+	}
+	if links, err = scan(`SELECT t.id, e.provider_id, '' FROM titles t JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id
+		WHERE e.provider = ? AND e.method = 'mangabaka'`); err != nil {
+		return nil, nil, err
+	}
+	suggestions, err = scan(`SELECT t.id, g.provider_id, COALESCE(e.provider_id, '') FROM titles t
+		JOIN mangabaka_suggestions g ON g.catalog_manga_id = t.catalog_manga_id AND g.dismissed = 0
+		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = g.catalog_manga_id AND e.provider = g.provider
+		WHERE g.provider = ?`)
+	return links, suggestions, err
+}
+
+// ConfirmMangaBakaLink makes a MangaBaka link the user's own.
+func (s *JobService) ConfirmMangaBakaLink(ctx context.Context, titleID int64, provider string) error {
+	m, ok := s.titleWork(ctx, titleID)
+	if e := s.mappings(ctx, m)[provider]; ok && e.Method == mangaBakaName {
+		return s.LinkExternalID(ctx, titleID, provider, e.ProviderID)
+	}
+	return nil
+}
+
+// AnswerMangaBakaSuggestion links the suggested id, or dismisses it until MangaBaka suggests another.
+func (s *JobService) AnswerMangaBakaSuggestion(ctx context.Context, titleID int64, provider string, use bool) error {
+	m, ok := s.titleWork(ctx, titleID)
+	if !ok {
+		return fmt.Errorf("title has no catalog entry")
+	}
+	var id string
+	if err := s.db.QueryRowContext(ctx, `SELECT provider_id FROM mangabaka_suggestions WHERE catalog_manga_id = ? AND provider = ?`, m.ID, provider).Scan(&id); err != nil {
+		return err
+	}
+	if !use {
+		_, err := s.db.ExecContext(ctx, `UPDATE mangabaka_suggestions SET dismissed = 1 WHERE catalog_manga_id = ? AND provider = ?`, m.ID, provider)
+		return err
+	}
+	if err := s.LinkExternalID(ctx, titleID, provider, id); err != nil {
+		return err
+	}
+	s.setSuggestion(ctx, m.ID, provider, "")
+	return nil
 }

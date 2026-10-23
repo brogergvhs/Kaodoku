@@ -380,6 +380,8 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/library/{id}/rating", u.libRating)
 	mux.HandleFunc("POST /ui/library/{id}/rating/missing", u.libRatingMissing)
 	mux.HandleFunc("GET /ui/trackers/{provider}/missing-ratings", u.trackerMissingRatings)
+	mux.HandleFunc("GET /ui/trackers/{provider}/mangabaka", u.trackerMangaBaka)
+	mux.HandleFunc("POST /ui/trackers/{provider}/mangabaka", u.trackerMangaBaka)
 	mux.HandleFunc("POST /ui/trackers/{provider}/missing-ratings", u.trackerMissingRatings)
 	mux.HandleFunc("POST /ui/library/{id}/language-mode", u.libLanguageMode)
 	mux.HandleFunc("POST /ui/library/{id}/refresh-interval", u.libRefreshInterval)
@@ -4642,7 +4644,13 @@ func (u *webUI) funcs() template.FuncMap {
 			}
 			return out
 		},
-		"since":      since,
+		"since": since,
+		"capCount": func(n int) string {
+			if n > 99 {
+				return "99+"
+			}
+			return strconv.Itoa(n)
+		},
 		"confidence": func(c float64) string { return fmt.Sprintf("%.0f%%", c*100) },
 		"orUnknown":  func(s string) string { return orDefault(s, "unknown") },
 		"orDash":     func(s string) string { return orDefault(s, "—") },

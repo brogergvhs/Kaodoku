@@ -198,6 +198,21 @@ func (s *JobService) ImportMALXML(ctx context.Context, r io.Reader, opts ListImp
 	return res, nil
 }
 
+// aniListFor finds the AniList id of a MyAnimeList id, from MangaBaka before asking AniList.
+func (s *JobService) aniListFor(ctx context.Context, malID string) string {
+	if s.mbOn(ctx) {
+		if sr, _ := s.mb.ByProvider(ctx, catalog.MALProvider, malID); sr.IDs[catalog.AniListProvider] != "" {
+			return sr.IDs[catalog.AniListProvider]
+		}
+	}
+	if r, ok := s.catalog.providers[catalog.AniListProvider].(catalog.Resolver); ok {
+		if id, found, err := r.Resolve(ctx, catalog.MALProvider, malID); found && err == nil {
+			return id
+		}
+	}
+	return ""
+}
+
 func (s *JobService) applyListEntry(ctx context.Context, uid, titleID int64, e ListEntry, opts ListImport) (raised, rated int) {
 	if local, _, err := s.localTrackerState(ctx, uid, titleID); opts.Progress && err == nil && e.Chapters > local {
 		if n, err := s.lib.MarkChaptersReadThrough(ctx, titleID, e.Chapters); err == nil && n > 0 {
@@ -227,15 +242,10 @@ func (s *JobService) runListImport(ctx context.Context, userID int64, opts *List
 		handle.Update(i+1, len(opts.Entries), 0)
 		provider, id := catalog.MALProvider, e.MALID
 		if !s.providerEnabled(ctx, provider) {
-			found := false
-			if r, ok := s.catalog.providers[catalog.AniListProvider].(catalog.Resolver); ok {
-				id, found, err = r.Resolve(ctx, catalog.MALProvider, e.MALID)
-			}
-			if !found || err != nil {
+			if provider, id = catalog.AniListProvider, s.aniListFor(ctx, e.MALID); id == "" {
 				errs = append(errs, fmt.Errorf("MyAnimeList %s: not found on AniList", e.MALID))
 				continue
 			}
-			provider = catalog.AniListProvider
 		}
 		title, err := s.AddCatalogTitle(ctx, provider, id)
 		if err != nil {

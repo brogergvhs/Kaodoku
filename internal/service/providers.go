@@ -416,12 +416,23 @@ func (s *JobService) confirmedID(ctx context.Context, m catalog.Manga, provider 
 	return ""
 }
 
-// resolveID returns only confirmed ids: stored mapping, cross-links, then a scored title search.
+// resolveID returns only confirmed ids: stored mapping, MangaBaka, cross-links, then a scored title search.
+// Aggressive MangaBaka mode stops after MangaBaka.
 func (s *JobService) resolveID(ctx context.Context, m catalog.Manga, p catalog.Provider) string {
 	name := p.Name()
 	maps := s.mappings(ctx, m)
 	if e, ok := maps[name]; ok && (e.Confirmed || e.Method == "user") {
 		return e.ProviderID
+	}
+	if s.mbOn(ctx) {
+		s.mbLink(ctx, []catalog.Manga{m})
+		if id := s.confirmedID(ctx, m, name); id != "" || !s.mbAggressive(ctx) {
+			return id
+		}
+		if _, ok := maps[name]; !ok {
+			_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: name, Method: "miss"})
+		}
+		return ""
 	}
 	if e, ok := maps[name]; ok {
 		if t, err := database.ParseTime(e.CheckedAt); err == nil && time.Since(t) < mappingRecheck {
@@ -814,13 +825,27 @@ func (s *JobService) TitleLinks(ctx context.Context, titleID int64) ([]ProviderL
 		}
 		l := link(p.Name(), p.Label())
 		if l.ID != "" {
-			if c, err := s.CatalogManga(ctx, p.Name(), l.ID); err == nil {
-				l.Cover = c.CoverImage
-			}
+			l.Cover = s.linkCover(ctx, p.Name(), l.ID)
 		}
 		out = append(out, l)
 	}
 	return out, nil
+}
+
+// linkCover prefers a stored record, then MangaBaka, before asking the tracker.
+func (s *JobService) linkCover(ctx context.Context, provider, id string) string {
+	if m, ok, _ := s.catalog.repo.MangaByProvider(ctx, provider, id); ok {
+		return m.CoverImage
+	}
+	if s.mbOn(ctx) {
+		if sr, ok := s.mb.ByProvider(ctx, provider, id); ok {
+			return sr.CoverURL(250)
+		}
+	}
+	if c, err := s.CatalogManga(ctx, provider, id); err == nil {
+		return c.CoverImage
+	}
+	return ""
 }
 
 func (s *JobService) MetadataProvider(ctx context.Context, titleID int64) string {

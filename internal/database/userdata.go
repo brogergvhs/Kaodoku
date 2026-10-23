@@ -20,6 +20,7 @@ var userDataTables = []string{
 	"sources",
 	"catalog_manga",
 	"catalog_external_ids",
+	"mangabaka_suggestions",
 	"titles",
 	"title_sources",
 	"chapters",

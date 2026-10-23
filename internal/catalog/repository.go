@@ -97,7 +97,7 @@ func (r *Repository) UpsertManga(ctx context.Context, m Manga) (Manga, error) {
 	return r.GetManga(ctx, id)
 }
 
-// ExternalID Method is cross_link, title_match, user, or miss (searched, nothing found).
+// ExternalID Method is cross_link, title_match, mangabaka, user, or miss (searched, nothing found).
 type ExternalID struct {
 	Provider   string
 	ProviderID string
@@ -106,7 +106,7 @@ type ExternalID struct {
 	CheckedAt  string
 }
 
-// SetExternalID stores a mapping; a user-made mapping is only replaced by another.
+// SetExternalID stores a mapping; a user-made one is only replaced by another, and a MangaBaka one never replaces a confirmed link.
 func (r *Repository) SetExternalID(ctx context.Context, catalogID int64, e ExternalID) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO catalog_external_ids (catalog_manga_id, provider, provider_id, method, confirmed, checked_at)
@@ -114,7 +114,8 @@ func (r *Repository) SetExternalID(ctx context.Context, catalogID int64, e Exter
 		ON CONFLICT(catalog_manga_id, provider) DO UPDATE SET
 			provider_id = excluded.provider_id, method = excluded.method,
 			confirmed = excluded.confirmed, checked_at = CURRENT_TIMESTAMP
-		WHERE catalog_external_ids.method != 'user' OR excluded.method = 'user'`,
+		WHERE (catalog_external_ids.method != 'user' OR excluded.method = 'user')
+			AND NOT (excluded.method = 'mangabaka' AND catalog_external_ids.confirmed = 1 AND catalog_external_ids.method != 'mangabaka')`,
 		catalogID, e.Provider, e.ProviderID, e.Method, database.BoolToInt(e.Confirmed))
 	return err
 }

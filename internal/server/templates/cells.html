@@ -858,6 +858,7 @@
             <div class="flex gap-1">
               {{with .Outage}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Temporarily unavailable: {{.}}" aria-label="Temporarily unavailable">{{template "iconPower"}}</span>{{end}}
               {{if .Primary}}<span class="badge badge-sm badge-primary badge-soft tip" tabindex="0" data-tip="Metadata source" aria-label="Metadata source">{{template "iconDatabase"}}</span>{{end}}
+              {{if eq .Method "mangabaka"}}<span class="badge badge-sm badge-info badge-soft tip" tabindex="0" data-tip="Linked from MangaBaka. Confirm or relink it." aria-label="Linked from MangaBaka">{{template "iconDatabase"}}</span>{{end}}
               {{if $linked}}{{if .Syncing}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Progressive sync" aria-label="Progressive sync">{{template "iconRefresh"}}</span>{{else if not .Primary}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Linked" aria-label="Linked">{{template "iconLink"}}</span>{{end}}
               {{else if .ID}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Suggested match" aria-label="Suggested match">{{template "iconAlert"}}</span>
               {{else if eq .Method "user"}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Not on {{.Label}}" aria-label="Not on {{.Label}}">{{template "iconBan"}}</span>
@@ -878,7 +879,7 @@
             <li><button hx-post="/ui/library/{{$.TitleID}}/providers/progressive" hx-vals='{"provider":"{{.Provider}}","on":"1"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconPower"}}Start progressive sync</button></li>
             {{end}}
             {{if $.CanManage}}
-            {{if and .ID (not .Confirmed)}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconCheckCircle"}}Confirm match</button></li>{{end}}
+            {{if and .ID (or (not .Confirmed) (eq .Method "mangabaka"))}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconCheckCircle"}}{{if .Confirmed}}Confirm link{{else}}Confirm match{{end}}</button></li>{{end}}
             <li><button hx-post="/ui/library/{{$.TitleID}}/providers/search" hx-include="#picker-form-{{$.TitleID}}-{{.Provider}}" hx-target="#picker-results-{{$.TitleID}}-{{.Provider}}" onclick="openPicker('{{$.TitleID}}-{{.Provider}}')">{{if or .Primary $linked}}{{template "iconRefresh"}}Relink{{else}}{{template "iconLink"}}Link{{end}}</button></li>
             {{if and $linked (not .Primary)}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}","mode":"primary"}' hx-confirm="Use {{.Label}} for this title's metadata?">{{template "iconDatabase"}}Use for metadata</button></li>{{end}}
             {{end}}
@@ -972,6 +973,7 @@
             {{if ne .RatingSync "off"}}{{$when := "same as progressive sync"}}{{if eq .RatingSync "on"}}{{$when = "always"}}{{end}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Ratings sync, {{$when}}" aria-label="Ratings sync, {{$when}}">{{template "iconStar"}}</span>{{end}}
             {{if .Relations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its related manga" aria-label="Uses its related manga">{{template "iconLayers"}}</span>{{end}}
             {{if .Recommendations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its recommendations" aria-label="Uses its recommendations">{{template "iconUsers"}}</span>{{end}}
+            {{with $c.MangaBaka}}<span class="badge badge-sm badge-info tip" tabindex="0" data-tip="MangaBaka links to check" aria-label="MangaBaka links to check" data-mangabaka-item="{{$c.Provider}}"><span data-mangabaka-count="{{$c.Provider}}">{{capCount .}}</span></span>{{end}}
           </div>
         </div>
         {{if .ExpiresAt}}<div class="text-xs {{if .ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.ExpiresAt}}</div>{{end}}
@@ -983,6 +985,7 @@
         <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-max whitespace-nowrap p-2 shadow-lg border border-base-300">
           <li><button hx-get="/ui/trackers/{{.Provider}}/settings" hx-target="#tracker-prefs-body" onclick="tracker_prefs_modal.showModal()">{{template "iconEdit"}}Edit</button></li>
           {{if and $.CanManage (not $c.Outage) $c.Unlinked}}<li data-unlinked-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/unlinked" hx-target="#tracker-unlinked-body" onclick="openLoading('tracker_unlinked_modal')">{{template "iconUnlink"}}Unlinked titles<span class="badge badge-sm badge-ghost" data-unlinked-count="{{.Provider}}">{{$c.Unlinked}}</span></button></li>{{end}}
+          {{if and $.CanManage $c.MangaBaka}}<li data-mangabaka-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/mangabaka" hx-target="#tracker-mangabaka-body" onclick="openLoading('tracker_mangabaka_modal')">{{template "iconDatabase"}}MangaBaka links<span class="badge badge-sm badge-ghost" data-mangabaka-count="{{.Provider}}">{{capCount $c.MangaBaka}}</span></button></li>{{end}}
           {{if $c.Missing}}<li data-missing-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/missing-ratings" hx-target="#tracker-missing-body" onclick="openLoading('tracker_missing_modal')">{{template "iconStar"}}Missing ratings<span class="badge badge-sm badge-ghost" data-missing-count="{{.Provider}}">{{$c.Missing}}</span></button></li>{{end}}
           {{if not $c.Outage}}<li><button hx-post="/ui/trackers/{{.Provider}}/sync" hx-target="#toast">{{template "iconRefresh"}}Sync now</button></li>{{end}}
           {{if and .ExpiringSoon (eq $c.Login "oauth")}}<li><a href="/trackers/{{.Provider}}/connect">{{template "iconLink"}}Reconnect</a></li>{{end}}
@@ -1056,6 +1059,12 @@
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 {{if .CanManage}}
+<dialog id="tracker_mangabaka_modal" class="modal">
+  <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
+    <div id="tracker-mangabaka-body" class="contents" data-loading></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
 <dialog id="tracker_unlinked_modal" class="modal">
   <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
     <div id="tracker-unlinked-body" class="contents" data-loading></div>
@@ -1188,6 +1197,43 @@
 {{define "malXMLResult"}}
 {{with .Result}}<p class="text-sm">{{if .Applied}}Raised progress on {{.Raised}} and set {{.Rated}} ratings.{{if .Queued}} Adding {{.Queued}} titles in the background.{{end}}{{else}}{{.InLibrary}} in your library, {{.NotInLibrary}} not in it.{{end}}{{if .Ignored}} {{.Ignored}} are Dropped or On-Hold, which Kaodoku doesn't keep.{{end}}</p>{{end}}
 {{with .Error}}<p class="text-sm text-error">{{.}}</p>{{end}}
+{{end}}
+
+{{define "trackerMangaBaka"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">MangaBaka links on {{.Label}}</h3>
+    <p class="text-sm text-base-content/60">Links Kaodoku made from MangaBaka. Confirm the ones that look right, or open a title to relink it.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="min-h-0 flex-1 divide-y divide-line/25 overflow-y-auto rounded-lg border border-line/40">
+  {{range .Links}}
+  <div class="flex items-center gap-3 p-2">
+    {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+    <div class="min-w-0 flex-1">
+      <a class="block truncate text-sm font-medium hover:underline" href="/library/{{.Title.ID}}">{{.DisplayTitle}}</a>
+      <a class="text-xs text-base-content/60 hover:underline" href="{{.URL}}" target="_blank" rel="noopener">{{$.Label}} {{.ID}}</a>
+    </div>
+    <button class="btn btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"confirm","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Confirm</button>
+  </div>
+  {{end}}
+  {{range .Suggestions}}
+  <div class="flex items-center gap-3 p-2">
+    {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+    <div class="min-w-0 flex-1">
+      <a class="block truncate text-sm font-medium hover:underline" href="/library/{{.Title.ID}}">{{.DisplayTitle}}</a>
+      <div class="text-xs text-base-content/60">{{if .Current}}Linked to {{.Current}}{{else}}Marked as not on {{$.Label}}{{end}}, MangaBaka says <a class="link" href="{{.URL}}" target="_blank" rel="noopener">{{.ID}}</a></div>
+    </div>
+    <button class="btn btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"use","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Use it</button>
+    <button class="btn btn-ghost btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"dismiss","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Dismiss</button>
+  </div>
+  {{end}}
+  <p class="hidden px-3 py-2 text-sm text-base-content/60 first:block">Nothing left to check.</p>
+</div>
+{{if .Links}}<div class="flex justify-end"><button class="btn btn-primary btn-sm" hx-post="/ui/trackers/{{.Provider}}/mangabaka" hx-vals='{"action":"confirm"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Confirm all</button></div>{{end}}
+{{$n := .Total}}<span hx-swap-oob="innerHTML:[data-mangabaka-count={{.Provider}}]">{{capCount $n}}</span>
+{{if not $n}}<div hx-swap-oob="delete:[data-mangabaka-item={{.Provider}}]"></div>{{end}}
 {{end}}
 
 {{define "missingLeft"}}<span hx-swap-oob="innerHTML:[data-missing-count={{.Provider}}]">{{len .Titles}}</span>
