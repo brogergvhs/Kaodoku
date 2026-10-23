@@ -666,7 +666,7 @@
         <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
       </div>{{end}}
     </div>
-    <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{mangaTitle .Manga}}</div>
+    <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight"{{if gt (len .Sources) 1}} title="Listed by {{range $i, $p := .Sources}}{{if $i}}, {{end}}{{providerLabel $p}}{{end}}"{{end}}>{{mangaTitle .Manga}}</div>
     <div class="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-base-content/50">
       <span class="truncate">{{.Format}}{{if .Chapters}} · {{.Chapters}} ch{{end}}</span>
       <span class="shrink-0">{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>

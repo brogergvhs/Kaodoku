@@ -1,8 +1,10 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -273,4 +275,32 @@ func (s *JobService) AnswerMangaBakaSuggestion(ctx context.Context, titleID int6
 	}
 	s.setSuggestion(ctx, m.ID, provider, "")
 	return nil
+}
+
+// mbUnify adds every id MangaBaka knows for each work, so listings of one work from different trackers merge.
+func (s *JobService) mbUnify(ctx context.Context, items []catalog.Manga) []catalog.Manga {
+	if len(items) == 0 || !s.mbOn(ctx) {
+		return items
+	}
+	refs := map[string][]string{}
+	for _, m := range items {
+		refs[m.Provider] = append(refs[m.Provider], m.ProviderID)
+	}
+	found := s.mb.ByRefs(ctx, refs)
+	for i, m := range items {
+		sr, ok := found[m.Provider+":"+m.ProviderID]
+		if !ok {
+			continue
+		}
+		ids := maps.Clone(m.ExternalIDs)
+		if ids == nil {
+			ids = map[string]string{}
+		}
+		for p, id := range sr.IDs {
+			ids[p] = cmp.Or(ids[p], id)
+		}
+		ids[mangaBakaName] = strconv.FormatInt(sr.ID, 10)
+		items[i].ExternalIDs = ids
+	}
+	return items
 }

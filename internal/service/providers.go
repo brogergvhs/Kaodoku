@@ -575,6 +575,9 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 			self[prov+":"+e.ProviderID] = true
 		}
 	}
+	for _, k := range catalog.Keys(s.mbUnify(ctx, []catalog.Manga{m})[0]) {
+		self[k] = true
+	}
 	prefs := map[string]TrackerPrefs{}
 	for _, a := range s.TrackerAccounts(ctx, auth.UserID(ctx)) {
 		prefs[a.Provider] = a.TrackerPrefs
@@ -592,10 +595,10 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 			continue
 		}
 		if !connected || pref.Relations {
-			rels = append(rels, s.fillFromStore(ctx, p.Name(), rel))
+			rels = append(rels, s.mbUnify(ctx, s.fillFromStore(ctx, p.Name(), rel)))
 		}
 		if !connected || pref.Recommendations {
-			recs = append(recs, s.fillFromStore(ctx, p.Name(), rec))
+			recs = append(recs, s.mbUnify(ctx, s.fillFromStore(ctx, p.Name(), rec)))
 		}
 	}
 	relations, recommendations = mergeManga(rels, self, 0), mergeManga(recs, self, limit)
@@ -628,7 +631,13 @@ func mergeManga(lists [][]catalog.Manga, exclude map[string]bool, limit int) []c
 			}
 			if hit == nil {
 				hit = &ranked{m: m, order: len(out)}
+				hit.m.Sources = nil
 				out = append(out, hit)
+			} else {
+				fillBlanks(&hit.m, m)
+			}
+			if !slices.Contains(hit.m.Sources, m.Provider) {
+				hit.m.Sources = append(hit.m.Sources, m.Provider)
 			}
 			hit.votes++
 			for _, k := range keys {
@@ -650,6 +659,24 @@ func mergeManga(lists [][]catalog.Manga, exclude map[string]bool, limit int) []c
 		items = append(items, r.m)
 	}
 	return items
+}
+
+// fillBlanks copies what a record lacks from another listing of the same work.
+func fillBlanks(dst *catalog.Manga, src catalog.Manga) {
+	dst.Description = cmp.Or(dst.Description, src.Description)
+	dst.CoverImage = cmp.Or(dst.CoverImage, src.CoverImage)
+	dst.TitleEnglish = cmp.Or(dst.TitleEnglish, src.TitleEnglish)
+	dst.TitleNative = cmp.Or(dst.TitleNative, src.TitleNative)
+	dst.RelationType = cmp.Or(dst.RelationType, src.RelationType)
+	if len(dst.Genres) == 0 {
+		dst.Genres = src.Genres
+	}
+	if len(dst.Authors) == 0 {
+		dst.Authors = src.Authors
+	}
+	if dst.Chapters == nil {
+		dst.Chapters = src.Chapters
+	}
 }
 
 func (s *JobService) recentWorks(ctx context.Context, userID int64, limit int) []int64 {
@@ -690,8 +717,12 @@ func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog
 		exclude[k] = true
 	}
 	for _, entries := range s.trackerLists(ctx, uid, s.connectedTrackers(ctx, uid)) {
-		for _, e := range entries {
-			for _, k := range catalog.Keys(e.Manga) {
+		listed := make([]catalog.Manga, len(entries))
+		for i, e := range entries {
+			listed[i] = e.Manga
+		}
+		for _, m := range s.mbUnify(ctx, listed) {
+			for _, k := range catalog.Keys(m) {
 				exclude[k] = true
 			}
 		}
@@ -781,18 +812,6 @@ func (s *JobService) refreshWork(ctx context.Context, m catalog.Manga) error {
 		return err
 	}
 	return s.catalog.repo.ReplaceRelations(ctx, catalog.RelKey(m.Provider, m.ProviderID), relKeys(m.Provider, rels))
-}
-
-func fillBlanks(dst *catalog.Manga, src catalog.Manga) {
-	if dst.Description == "" {
-		dst.Description = src.Description
-	}
-	if len(dst.Authors) == 0 {
-		dst.Authors = src.Authors
-	}
-	if dst.CoverImage == "" {
-		dst.CoverImage = src.CoverImage
-	}
 }
 
 type ProviderLink struct {

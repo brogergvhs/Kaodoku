@@ -1290,7 +1290,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string) (
 	var lists [][]catalog.Manga
 	for _, id := range seeds {
 		if _, recs, err := s.relatedCached(ctx, p, id); err == nil {
-			lists = append(lists, recs)
+			lists = append(lists, s.mbUnify(ctx, recs))
 		}
 	}
 	items := s.fillFromStore(ctx, provider, mergeManga(lists, exclude, 0))

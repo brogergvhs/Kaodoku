@@ -30,6 +30,7 @@ type Manga struct {
 	UpdatedAt    time.Time         `json:"updated_at"`
 	RelationType string            `json:"relation_type,omitempty"`
 	ExternalIDs  map[string]string `json:"external_ids,omitempty"`
+	Sources      []string          `json:"-"` // providers that listed it, once merged
 }
 
 // Match is one possible source URL for a canonical manga.

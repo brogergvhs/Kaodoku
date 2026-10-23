@@ -145,3 +145,28 @@ func (p *spyProvider) Trending(ctx context.Context, n int) ([]catalog.Manga, err
 	p.calls.Add(1)
 	return p.fakeProvider.Trending(ctx, n)
 }
+
+func TestMangaBakaMergesListingsOfOneWork(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	useMangaBaka(t, svc, ctx, anthology)
+	listings := func() [][]catalog.Manga {
+		return [][]catalog.Manga{
+			svc.mbUnify(ctx, []catalog.Manga{{Provider: catalog.AniListProvider, ProviderID: "113956", TitleRomaji: "Made in Abyss Anthology"}}),
+			svc.mbUnify(ctx, []catalog.Manga{{Provider: catalog.KitsuProvider, ProviderID: "40211", CoverImage: "kitsu.jpg"}}),
+			svc.mbUnify(ctx, []catalog.Manga{{Provider: catalog.MangaUpdatesProvider, ProviderID: "70807749862"}}),
+		}
+	}
+	got := mergeManga(listings(), nil, 0)
+	if len(got) != 1 || got[0].Provider != catalog.AniListProvider || got[0].CoverImage != "kitsu.jpg" || len(got[0].Sources) != 3 {
+		t.Fatalf("merged = %+v, want one AniList card listed by three trackers", got)
+	}
+	if got := mergeManga(listings(), map[string]bool{"mangabaka:34798": true}, 0); len(got) != 0 {
+		t.Fatalf("the work itself stayed in its own list: %+v", got)
+	}
+	if err := svc.SetSetting(ctx, SettingMangaBakaEnabled, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if got := mergeManga(listings(), nil, 0); len(got) != 3 {
+		t.Fatalf("with MangaBaka off, got %d cards, want the 3 listings as before", len(got))
+	}
+}
