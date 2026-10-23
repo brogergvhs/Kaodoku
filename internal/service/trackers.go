@@ -139,7 +139,7 @@ func (s *JobService) titleAdded(ctx context.Context, userID, titleID int64) {
 				s.resolveID(ctx, m, p)
 			}
 		}
-		s.pushTrackers(ctx, userID, titleID, false)
+		s.pushNow(ctx, userID, titleID, false)
 	}()
 }
 
@@ -529,7 +529,7 @@ func (s *JobService) localUpdate(ctx context.Context, p catalog.Provider, userID
 }
 
 func entryDiff(local catalog.EntryUpdate, remote catalog.Entry, exact bool) catalog.EntryUpdate {
-	out := catalog.EntryUpdate{Progress: -1}
+	out := catalog.EntryUpdate{Progress: -1, Remote: &remote}
 	if (exact && local.Progress != remote.Progress) || local.Progress > remote.Progress {
 		out.Progress = local.Progress
 	}
@@ -546,15 +546,11 @@ func entryDiff(local catalog.EntryUpdate, remote catalog.Entry, exact bool) cata
 }
 
 // reconcileEntry only raises remote progress/status and fills empty dates; exact also lowers progress after an explicit unread.
-func reconcileEntry(ctx context.Context, p catalog.Provider, id string, local catalog.EntryUpdate, exact bool) error {
-	e, found, err := p.GetEntry(ctx, id)
-	if err != nil {
-		return err
-	}
+func reconcileEntry(ctx context.Context, p catalog.Provider, id string, remote catalog.Entry, found bool, local catalog.EntryUpdate, exact bool) error {
 	if !found {
 		return p.SaveEntry(ctx, id, local)
 	}
-	if u := entryDiff(local, e, exact); !u.Empty() {
+	if u := entryDiff(local, remote, exact); !u.Empty() {
 		return p.SaveEntry(ctx, id, u)
 	}
 	return nil
@@ -568,8 +564,63 @@ func (s *JobService) PushTrackersExact(ctx context.Context, userID, titleID int6
 	s.pushTrackers(ctx, userID, titleID, true)
 }
 
+const pushDelay = 10 * time.Minute
+
+type pendingPush struct {
+	ctx             context.Context
+	userID, titleID int64
+	exact           bool
+	timer           *time.Timer
+}
+
+// pushTrackers sends a title's progress once it stops changing for pushDelay.
 func (s *JobService) pushTrackers(ctx context.Context, userID, titleID int64, exact bool) {
-	ctx = context.WithoutCancel(ctx)
+	key := [2]int64{userID, titleID}
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	if p := s.pushes[key]; p != nil && p.timer.Stop() {
+		exact = exact || p.exact
+	}
+	p := &pendingPush{ctx: context.WithoutCancel(ctx), userID: userID, titleID: titleID, exact: exact}
+	p.timer = time.AfterFunc(pushDelay, func() { s.sendPush(p.ctx, p) })
+	if s.pushes == nil {
+		s.pushes = map[[2]int64]*pendingPush{}
+	}
+	s.pushes[key] = p
+}
+
+func (s *JobService) sendPush(ctx context.Context, p *pendingPush) {
+	key := [2]int64{p.userID, p.titleID}
+	s.pushMu.Lock()
+	if s.pushes[key] == p {
+		delete(s.pushes, key)
+	}
+	s.pushMu.Unlock()
+	s.pushNow(ctx, p.userID, p.titleID, p.exact)
+}
+
+// FlushPushes sends every pending push now, giving up after timeout.
+func (s *JobService) FlushPushes(timeout time.Duration) {
+	s.pushMu.Lock()
+	var due []*pendingPush
+	for _, p := range s.pushes {
+		if p.timer.Stop() {
+			due = append(due, p)
+		}
+	}
+	s.pushMu.Unlock()
+	var wg sync.WaitGroup
+	for _, p := range due {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(p.ctx, timeout)
+			defer cancel()
+			s.sendPush(ctx, p)
+		})
+	}
+	wg.Wait()
+}
+
+func (s *JobService) pushNow(ctx context.Context, userID, titleID int64, exact bool) {
 	names := s.progressiveTrackers(ctx, userID, titleID)
 	if len(names) == 0 {
 		return
@@ -587,28 +638,29 @@ func (s *JobService) pushTrackers(ctx context.Context, userID, titleID int64, ex
 		if err != nil {
 			return err
 		}
-		return reconcileEntry(actx, p, id, local, exact)
+		remote, found, err := p.GetEntry(actx, id)
+		if err != nil {
+			return err
+		}
+		return reconcileEntry(actx, p, id, remote, found, local, exact)
 	})
 }
 
 func (s *JobService) eachTracker(ctx context.Context, userID int64, names []string, fn func(context.Context, catalog.Provider) error) {
-	go func() {
-		for _, name := range names {
-			pctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			if p, actx, ok := s.trackerSession(pctx, userID, name); ok {
-				if err := fn(actx, p); err != nil {
-					log.Printf("%s push for user %d: %v", name, userID, s.trackerAuthError(ctx, userID, name, err))
-				}
+	for _, name := range names {
+		pctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		if p, actx, ok := s.trackerSession(pctx, userID, name); ok {
+			if err := fn(actx, p); err != nil {
+				log.Printf("%s push for user %d: %v", name, userID, s.trackerAuthError(ctx, userID, name, err))
 			}
-			cancel()
 		}
-		s.invalidateRecs(userID)
-	}()
+		cancel()
+	}
+	s.invalidateRecs(userID)
 }
 
 func (s *JobService) dropFromTrackers(ctx context.Context, userID int64, names []string, m catalog.Manga, remove bool) {
-	ctx = context.WithoutCancel(ctx)
-	s.eachTracker(ctx, userID, names, func(actx context.Context, p catalog.Provider) error {
+	go s.eachTracker(context.WithoutCancel(ctx), userID, names, func(actx context.Context, p catalog.Provider) error {
 		id := s.confirmedID(actx, m, p.Name())
 		switch {
 		case id == "":
@@ -627,7 +679,7 @@ func (s *JobService) pushFavourite(ctx context.Context, userID, titleID int64, w
 	if !ok {
 		return
 	}
-	s.eachTracker(ctx, userID, s.progressiveTrackers(ctx, userID, titleID), func(actx context.Context, p catalog.Provider) error {
+	go s.eachTracker(ctx, userID, s.progressiveTrackers(ctx, userID, titleID), func(actx context.Context, p catalog.Provider) error {
 		fav, ok := p.(catalog.Favouriter)
 		id := s.confirmedID(actx, m, p.Name())
 		if !ok || id == "" {
@@ -825,7 +877,7 @@ func (s *JobService) syncTitle(ctx, actx context.Context, p catalog.Provider, id
 	if err != nil {
 		return err
 	}
-	return reconcileEntry(actx, p, id, local, false)
+	return reconcileEntry(actx, p, id, remote, found, local, false)
 }
 
 // TrackerSuggestions merges the user's lists on provider, or on every reachable connected tracker when empty.

@@ -323,17 +323,12 @@ func (c *KitsuClient) Viewer(ctx context.Context) (string, string, error) {
 
 var kitsuToStatus = map[string]string{"current": "CURRENT", "planned": "PLANNING", "completed": "COMPLETED", "on_hold": "PAUSED", "dropped": "DROPPED"}
 
-type kitsuEntry struct {
-	id    string
-	entry Entry
-}
-
-func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]kitsuEntry, error) {
+func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]Entry, error) {
 	q.Set("filter[userId]", AccountFrom(ctx).UserID)
 	q.Set("filter[kind]", "manga")
 	q.Set("include", "manga")
 	q.Set("page[limit]", "500")
-	var out []kitsuEntry
+	var out []Entry
 	next := "/library-entries?" + q.Encode()
 	for next != "" {
 		var doc kitsuDoc
@@ -349,13 +344,13 @@ func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]kitsuEntry, 
 				FinishedAt  time.Time `json:"finishedAt"`
 			}
 			_ = json.Unmarshal(r.Attributes, &a)
-			e := kitsuEntry{id: r.ID, entry: Entry{Progress: a.Progress, Status: kitsuToStatus[a.Status], Started: a.StartedAt, Finished: a.FinishedAt}}
+			e := Entry{Progress: a.Progress, Status: kitsuToStatus[a.Status], Started: a.StartedAt, Finished: a.FinishedAt, ref: r.ID}
 			if a.Reconsuming {
-				e.entry.Status = "REPEATING"
+				e.Status = "REPEATING"
 			}
 			for _, ref := range r.refs("manga") {
 				if res, ok := doc.find(ref); ok {
-					e.entry.Manga = doc.manga(res)
+					e.Manga = doc.manga(res)
 				}
 			}
 			out = append(out, e)
@@ -366,32 +361,22 @@ func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]kitsuEntry, 
 }
 
 func (c *KitsuClient) ListEntries(ctx context.Context) ([]Entry, error) {
-	list, err := c.entries(ctx, url.Values{})
-	out := make([]Entry, 0, len(list))
-	for _, e := range list {
-		out = append(out, e.entry)
-	}
-	return out, err
-}
-
-func (c *KitsuClient) entry(ctx context.Context, id string) (kitsuEntry, bool, error) {
-	list, err := c.entries(ctx, url.Values{"filter[mangaId]": {id}})
-	if err != nil || len(list) == 0 {
-		return kitsuEntry{}, false, err
-	}
-	return list[0], true, nil
+	return c.entries(ctx, url.Values{})
 }
 
 func (c *KitsuClient) GetEntry(ctx context.Context, id string) (Entry, bool, error) {
-	e, ok, err := c.entry(ctx, id)
-	return e.entry, ok, err
+	list, err := c.entries(ctx, url.Values{"filter[mangaId]": {id}})
+	if err != nil || len(list) == 0 {
+		return Entry{}, false, err
+	}
+	return list[0], true, nil
 }
 
 func (c *KitsuClient) TracksDates() bool { return true }
 
 func (c *KitsuClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
 	progress, status := u.Progress, u.Status
-	e, found, err := c.entry(ctx, id)
+	e, found, err := u.remote(ctx, id, c.GetEntry)
 	if err != nil {
 		return err
 	}
@@ -437,9 +422,9 @@ func (c *KitsuClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) e
 	return c.writeEntry(ctx, id, e, found, attrs)
 }
 
-func (c *KitsuClient) writeEntry(ctx context.Context, id string, e kitsuEntry, found bool, attrs map[string]any) error {
+func (c *KitsuClient) writeEntry(ctx context.Context, id string, e Entry, found bool, attrs map[string]any) error {
 	if found {
-		return c.do(ctx, http.MethodPatch, "/library-entries/"+e.id, map[string]any{"data": map[string]any{"id": e.id, "type": "libraryEntries", "attributes": attrs}}, nil)
+		return c.do(ctx, http.MethodPatch, "/library-entries/"+e.ref, map[string]any{"data": map[string]any{"id": e.ref, "type": "libraryEntries", "attributes": attrs}}, nil)
 	}
 	body := map[string]any{"data": map[string]any{
 		"type":       "libraryEntries",
@@ -453,11 +438,11 @@ func (c *KitsuClient) writeEntry(ctx context.Context, id string, e kitsuEntry, f
 }
 
 func (c *KitsuClient) DeleteEntry(ctx context.Context, id string) error {
-	e, found, err := c.entry(ctx, id)
+	e, found, err := c.GetEntry(ctx, id)
 	if err != nil || !found {
 		return err
 	}
-	return c.do(ctx, http.MethodDelete, "/library-entries/"+e.id, nil, nil)
+	return c.do(ctx, http.MethodDelete, "/library-entries/"+e.ref, nil, nil)
 }
 
 func (c *KitsuClient) Login(ctx context.Context, username, password string) (Token, error) {

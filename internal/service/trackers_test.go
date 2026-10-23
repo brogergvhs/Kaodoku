@@ -729,6 +729,13 @@ func TestSearchKeepsStoredRecords(t *testing.T) {
 	if after.Status != "FINISHED" || len(after.Authors) != 1 || len(after.Synonyms) != 1 {
 		t.Fatalf("a partial search result overwrote the stored record: %+v", after)
 	}
+	mu.search = nil
+	if again, _, _ := svc.SearchManga(ctx, catalog.MangaUpdatesProvider, "solo", 5, catalog.SearchFilter{}); len(again) != 2 {
+		t.Fatal("a repeated search must come from the cache")
+	}
+	if other, _, _ := svc.SearchManga(ctx, catalog.MangaUpdatesProvider, "solo", 5, catalog.SearchFilter{Page: 2}); len(other) != 0 {
+		t.Fatal("another page must not share the cached results")
+	}
 }
 
 type barrierProvider struct {
@@ -802,5 +809,83 @@ func TestOnlyTrackersInAnOutageArePingedWithBackoff(t *testing.T) {
 	}
 	if fmt.Sprint(at) != "[1 3 7 15 31 61]" || up.pings != 0 {
 		t.Fatalf("pinged the down tracker at minutes %v and the working one %d times", at, up.pings)
+	}
+}
+
+func TestPushesWaitForTheReadingSessionToEnd(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	kitsu := newFake(catalog.KitsuProvider)
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Read", Status: "RELEASING"}, 5, 2)
+	kitsu.entries["9"] = catalog.Entry{Progress: 4, Status: "CURRENT"}
+	uctx := asUser(svc, ctx, t)
+	svc.PushTrackers(uctx, 1, titleID)
+	svc.PushTrackersExact(uctx, 1, titleID)
+	svc.PushTrackers(uctx, 1, titleID)
+	if got := kitsu.savesCopy(); len(got) != 0 {
+		t.Fatalf("pushed before the session ended: %v", got)
+	}
+	svc.FlushPushes(time.Second)
+	svc.FlushPushes(time.Second)
+	if got := kitsu.savesCopy(); len(got) != 1 || got[0] != "9:2:" {
+		t.Fatalf("saves = %v, want one exact push of the final progress", got)
+	}
+}
+
+type refreshProvider struct {
+	*fakeProvider
+	gets  []string
+	vocab int
+}
+
+func (r *refreshProvider) Get(ctx context.Context, id string) (catalog.Manga, []catalog.Relation, error) {
+	r.gets = append(r.gets, id)
+	return r.fakeProvider.Get(ctx, id)
+}
+func (r *refreshProvider) TagVocabulary(context.Context) ([]catalog.ContentTag, error) {
+	r.vocab++
+	return []catalog.ContentTag{{Name: "Drama", Kind: "genre"}}, nil
+}
+
+func TestCatalogRefreshSkipsFinishedWorksAndTagsUntilDue(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	al := &refreshProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	svc.catalog.providers[catalog.AniListProvider] = al
+	for id, status := range map[string]string{"1": "FINISHED", "2": "RELEASING"} {
+		m := catalog.Manga{Provider: catalog.AniListProvider, ProviderID: id, TitleRomaji: "W" + id, Status: status}
+		al.works[id] = m
+		seedTitle(t, svc, ctx, m, 1, 0)
+	}
+	for range 2 {
+		if err := svc.runCatalogRefresh(ctx, noopProgress{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fmt.Sprint(al.gets) != "[2 2]" || al.vocab != 1 {
+		t.Fatalf("refreshed works %v and tag lists %d times, want only the releasing work and the tags once", al.gets, al.vocab)
+	}
+}
+
+func TestMatchingRefetchesOnlyAStaleRecord(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	al := &refreshProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	svc.catalog.providers[catalog.AniListProvider] = al
+	kitsu := newFake(catalog.KitsuProvider)
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	m := catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "1", TitleRomaji: "W"}
+	al.works["1"] = m
+	stored, err := svc.catalog.repo.UpsertManga(ctx, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.resolveID(ctx, stored, kitsu)
+	if _, err := svc.db.ExecContext(ctx, `DELETE FROM catalog_external_ids; UPDATE catalog_manga SET updated_at = '2020-01-01 00:00:00'`); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := svc.catalog.GetManga(ctx, stored.ID)
+	svc.resolveID(ctx, old, kitsu)
+	if fmt.Sprint(al.gets) != "[1]" {
+		t.Fatalf("fetched the stored record %v, want only once it was stale", al.gets)
 	}
 }

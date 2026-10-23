@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/database"
@@ -18,7 +21,17 @@ type CatalogService struct {
 	sources   *sources.Repository
 	library   *library.Repository
 	providers map[string]catalog.Provider
+	searchMu  sync.Mutex
+	searches  map[string]cachedSearch
 }
+
+type cachedSearch struct {
+	items   []catalog.Manga
+	more    bool
+	expires time.Time
+}
+
+const searchTTL = 10 * time.Minute
 
 var providerOrder = []string{catalog.AniListProvider, catalog.MALProvider, catalog.KitsuProvider, catalog.MangaUpdatesProvider}
 
@@ -59,7 +72,7 @@ func (s *CatalogService) Provider(name string) (catalog.Provider, error) {
 
 // Search stores unseen results; known ones keep their stored record, since search results can be partial (no authors or synonyms).
 func (s *CatalogService) Search(ctx context.Context, p catalog.Provider, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {
-	items, more, err := p.Search(ctx, strings.TrimSpace(query), limit, filter)
+	items, more, err := s.searchCached(ctx, p, strings.TrimSpace(query), limit, filter)
 	if err != nil {
 		return nil, false, err
 	}
@@ -86,6 +99,29 @@ func (s *CatalogService) Search(ctx context.Context, p catalog.Provider, query s
 		out = append(out, stored)
 	}
 	return out, more, nil
+}
+
+func (s *CatalogService) searchCached(ctx context.Context, p catalog.Provider, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {
+	key := fmt.Sprintf("%s|%q|%d|%#v", p.Name(), query, limit, filter)
+	now := time.Now()
+	s.searchMu.Lock()
+	c, ok := s.searches[key]
+	s.searchMu.Unlock()
+	if ok && now.Before(c.expires) {
+		return c.items, c.more, nil
+	}
+	items, more, err := p.Search(ctx, query, limit, filter)
+	if err != nil {
+		return nil, false, err
+	}
+	s.searchMu.Lock()
+	if s.searches == nil {
+		s.searches = map[string]cachedSearch{}
+	}
+	maps.DeleteFunc(s.searches, func(_ string, c cachedSearch) bool { return now.After(c.expires) })
+	s.searches[key] = cachedSearch{items, more, now.Add(searchTTL)}
+	s.searchMu.Unlock()
+	return items, more, nil
 }
 
 func (s *CatalogService) fetch(ctx context.Context, p catalog.Provider, id string) (catalog.Manga, error) {

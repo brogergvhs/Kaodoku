@@ -263,7 +263,7 @@ func (c *MangaUpdatesClient) ListEntries(ctx context.Context) ([]Entry, error) {
 				if m.ProviderID == "0" {
 					m = Manga{Provider: MangaUpdatesProvider, ProviderID: strconv.FormatInt(r.Record.Series.ID, 10), TitleRomaji: r.Record.Series.Title, IsAdult: true}
 				}
-				out = append(out, Entry{Manga: m, Progress: r.Record.Status.Chapter, Status: muStatus(list)})
+				out = append(out, Entry{Manga: m, Progress: r.Record.Status.Chapter, Status: muStatus(list), ref: strconv.Itoa(list)})
 			}
 			if page*100 >= resp.TotalHits {
 				break
@@ -273,20 +273,15 @@ func (c *MangaUpdatesClient) ListEntries(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
-func (c *MangaUpdatesClient) entry(ctx context.Context, id string) (muListEntry, bool, error) {
+func (c *MangaUpdatesClient) GetEntry(ctx context.Context, id string) (Entry, bool, error) {
 	var e muListEntry
 	if err := c.do(ctx, http.MethodGet, "/lists/series/"+url.PathEscape(id), nil, &e); err != nil {
 		if IsNotFound(err) {
-			return e, false, nil
+			err = nil
 		}
-		return e, false, err
+		return Entry{}, false, err
 	}
-	return e, true, nil
-}
-
-func (c *MangaUpdatesClient) GetEntry(ctx context.Context, id string) (Entry, bool, error) {
-	e, ok, err := c.entry(ctx, id)
-	return Entry{Progress: e.Status.Chapter, Status: muStatus(e.ListID)}, ok, err
+	return Entry{Progress: e.Status.Chapter, Status: muStatus(e.ListID), ref: strconv.Itoa(e.ListID)}, true, nil
 }
 
 func (c *MangaUpdatesClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
@@ -295,16 +290,16 @@ func (c *MangaUpdatesClient) SaveEntry(ctx context.Context, id string, u EntryUp
 	if err != nil {
 		return ErrNotFound
 	}
-	e, found, err := c.entry(ctx, id)
+	e, found, err := u.remote(ctx, id, c.GetEntry)
 	if err != nil {
 		return err
 	}
 	list, chapter := muListFor(status, progress), progress
 	if found && status == "" {
-		list = e.ListID
+		list, _ = strconv.Atoi(e.ref)
 	}
 	if chapter < 0 {
-		chapter = e.Status.Chapter
+		chapter = e.Progress
 	}
 	item := map[string]any{"series": map[string]any{"id": sid}, "list_id": list, "status": map[string]any{"chapter": chapter}}
 	path := "/lists/series"

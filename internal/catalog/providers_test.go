@@ -120,8 +120,9 @@ func TestKitsuGetMapsIncludedResources(t *testing.T) {
 
 func TestKitsuSaveCreatesThenPatches(t *testing.T) {
 	srv, calls := fakeAPI(t, map[string]string{
-		"GET /library-entries":  `{"data":[]}`,
-		"POST /library-entries": `{}`,
+		"GET /library-entries":      `{"data":[]}`,
+		"POST /library-entries":     `{}`,
+		"PATCH /library-entries/77": `{}`,
 	})
 	c := NewKitsuClient(srv.Client())
 	c.base = srv.URL
@@ -136,6 +137,9 @@ func TestKitsuSaveCreatesThenPatches(t *testing.T) {
 	q, _ := url.ParseQuery((*calls)[0].query)
 	if q.Get("filter[userId]") != "42" || q.Get("filter[mangaId]") != "9" {
 		t.Fatalf("lookup query = %v", q)
+	}
+	if err := c.SaveEntry(ctx, "9", EntryUpdate{Progress: 5, Remote: &Entry{ref: "77"}}); err != nil || len(*calls) != 3 || (*calls)[2].path != "/library-entries/77" {
+		t.Fatalf("patch with a known entry = %+v, %v", (*calls)[2:], err)
 	}
 }
 
@@ -153,11 +157,13 @@ func TestMangaUpdatesListsAndSave(t *testing.T) {
 		t.Fatalf("search = %+v %v %v", items, more, err)
 	}
 	ctx := WithAccount(context.Background(), Account{Token: "s"})
-	if e, ok, err := c.GetEntry(ctx, "55"); err != nil || !ok || e.Status != "PAUSED" || e.Progress != 7 {
+	e, ok, err := c.GetEntry(ctx, "55")
+	if err != nil || !ok || e.Status != "PAUSED" || e.Progress != 7 {
 		t.Fatalf("entry = %+v %v %v", e, ok, err)
 	}
-	if err := c.SaveEntry(ctx, "55", EntryUpdate{Progress: 9}); err != nil {
-		t.Fatal(err)
+	n := len(*calls)
+	if err := c.SaveEntry(ctx, "55", EntryUpdate{Progress: 9, Remote: &e}); err != nil || len(*calls) != n+1 {
+		t.Fatalf("save with the entry just read took %d requests, %v", len(*calls)-n, err)
 	}
 	var update []map[string]any
 	_ = json.Unmarshal([]byte((*calls)[len(*calls)-1].body), &update)

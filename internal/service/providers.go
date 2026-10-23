@@ -29,6 +29,9 @@ const (
 	autoConfirm    = 0.92
 	suggestMatch   = 0.75
 	relatedTTL     = 7 * 24 * time.Hour
+	tagsTTL        = 30 * 24 * time.Hour
+
+	settingTagsRefreshed = "catalog.tags_refreshed_at"
 )
 
 func ProviderNames() []string { return slices.Clone(providerOrder) }
@@ -377,7 +380,7 @@ func (s *JobService) resolveID(ctx context.Context, m catalog.Manga, p catalog.P
 			return ""
 		}
 	}
-	if src, ok := s.catalog.providers[m.Provider]; ok && crossLinks(m.Provider) && s.providerEnabled(ctx, m.Provider) {
+	if src, ok := s.catalog.providers[m.Provider]; ok && crossLinks(m.Provider) && time.Since(m.UpdatedAt) >= mappingRecheck && s.providerEnabled(ctx, m.Provider) {
 		if fresh, err := s.catalog.fetch(ctx, src, m.ProviderID); err == nil {
 			if id := s.confirmedID(ctx, fresh, name); id != "" {
 				return id
@@ -653,12 +656,17 @@ func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog
 	return out, true, nil
 }
 
+// runCatalogRefresh skips finished works and refreshes tag lists monthly.
 func (s *JobService) runCatalogRefresh(ctx context.Context, progress ProgressManager) error {
 	var errs []error
-	if err := s.refreshTagVocabulary(ctx); err != nil {
-		errs = append(errs, err)
+	if t, err := database.ParseTime(s.Setting(ctx, settingTagsRefreshed, "")); err != nil || time.Since(t) >= tagsTTL {
+		if err := s.refreshTagVocabulary(ctx); err != nil {
+			errs = append(errs, err)
+		} else if err := s.SetSetting(ctx, settingTagsRefreshed, database.FormatTime(time.Now())); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT cm.id FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT cm.id FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id WHERE cm.status NOT IN ('FINISHED', 'CANCELLED')`)
 	if err != nil {
 		return err
 	}

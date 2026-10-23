@@ -151,13 +151,22 @@ type Entry struct {
 	Progress          int
 	Status            string
 	Started, Finished time.Time
+	ref               string
 }
 
-// EntryUpdate keeps the remote value for Progress < 0, an empty Status and zero dates.
+// EntryUpdate keeps the remote value for Progress < 0, an empty Status and zero dates; Remote is the entry already read, if any.
 type EntryUpdate struct {
 	Progress          int
 	Status            string
 	Started, Finished time.Time
+	Remote            *Entry
+}
+
+func (u EntryUpdate) remote(ctx context.Context, id string, get func(context.Context, string) (Entry, bool, error)) (Entry, bool, error) {
+	if u.Remote != nil {
+		return *u.Remote, true, nil
+	}
+	return get(ctx, id)
 }
 
 func (u EntryUpdate) Empty() bool {
