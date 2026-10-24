@@ -159,6 +159,9 @@ func (s *Store) Refresh(ctx context.Context, client *http.Client, url, variant s
 	if m := s.Meta(ctx); !force && sum == m.SHA1 && m.Variant == variant {
 		return false, nil
 	}
+	if progress != nil {
+		progress(0)
+	}
 	tmp := s.path + ".tmp"
 	_ = os.Remove(tmp)
 	if err := importDump(ctx, client, url, tmp, sum, variant, progress); err != nil {

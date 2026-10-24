@@ -59,6 +59,7 @@ type JobService struct {
 	pushes     map[[2]int64]*pendingPush
 	pushLocks  sync.Map // [user, title] -> *sync.Mutex held while pushing that title
 	mb         *mangabaka.Store
+	mbProgress atomic.Pointer[MangaBakaProgress] // set while a MangaBaka refresh runs
 	adultMu    sync.Mutex
 	adultTags  []string // vocabulary names flagged adult, briefly cached
 	adultExp   time.Time

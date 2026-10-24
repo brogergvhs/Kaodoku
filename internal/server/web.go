@@ -194,7 +194,7 @@ type settingGroup struct {
 	Title     string
 	Fields    []settingField
 	Apps      []settingApp
-	MangaBaka string // status line of the local MangaBaka copy
+	MangaBaka *mangaBakaStatusView
 }
 
 type settingApp struct {
@@ -472,6 +472,9 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /img/{sig}/{key}", u.image)
 	mux.HandleFunc("POST /ui/settings/caches/{key}/clear", u.clearCache)
 	mux.HandleFunc("POST /ui/settings/mangabaka/refresh", u.mangaBakaRefresh)
+	mux.HandleFunc("GET /ui/settings/mangabaka/status", func(w http.ResponseWriter, r *http.Request) {
+		u.frag(w, "mangaBakaStatus", u.mangaBakaStatus(r.Context(), "", false))
+	})
 	mux.HandleFunc("GET /ui/search/trending", u.trendingManga)
 	mux.HandleFunc("GET /anilist/connect", u.trackerConnect)
 	mux.HandleFunc("GET /anilist/callback", u.trackerCallback)
@@ -4260,7 +4263,7 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 				{Provider: catalog.MALProvider, Label: "MyAnimeList", Fields: fields(service.SettingMALClientID, service.SettingMALClientSecret)},
 			}},
 			settingGroup{Title: "MangaBaka", Fields: fields(service.SettingMangaBakaEnabled, service.SettingMangaBakaEvery,
-				service.SettingMangaBakaVariant, service.SettingMangaBakaAggressive), MangaBaka: mangaBakaNote(u.svc.MangaBakaStatus(ctx))},
+				service.SettingMangaBakaVariant, service.SettingMangaBakaAggressive), MangaBaka: u.mangaBakaStatus(ctx, "", false)},
 		)
 	}
 	return settingsView{Groups: groups}
@@ -4309,18 +4312,35 @@ func (u *webUI) image(w http.ResponseWriter, r *http.Request) {
 	proxyRemoteImage(w, r, u.svc, raw, "Web image")
 }
 
-func mangaBakaNote(st service.MangaBakaStatus) string {
-	note := "Not downloaded yet."
+type mangaBakaStatusView struct {
+	Note, Progress, Error, Message string
+	Running, Confirm               bool
+}
+
+// mangaBakaStatus describes the local copy and a running refresh; message and confirm answer a Refresh now click.
+func (u *webUI) mangaBakaStatus(ctx context.Context, message string, confirm bool) *mangaBakaStatusView {
+	st := u.svc.MangaBakaStatus(ctx)
+	v := &mangaBakaStatusView{Note: "Not downloaded yet.", Error: st.LastError, Running: st.Running, Message: message, Confirm: confirm && !st.Running}
 	if st.Series > 0 {
-		note = fmt.Sprintf("%s series, %s variant, imported %s, %s on disk.", humanCount(st.Series), st.Variant, st.ImportedAt.Local().Format("2 Jan 2006 15:04"), util.Human(st.Size))
+		v.Note = fmt.Sprintf("%s series, %s variant, imported %s, %s on disk.", humanCount(st.Series), st.Variant, st.ImportedAt.Local().Format("2 Jan 2006 15:04"), util.Human(st.Size))
 	}
-	if !st.Next.IsZero() {
-		note += " Next check " + st.Next.Local().Format("2 Jan 15:04") + "."
+	if !st.Next.IsZero() && !st.Running {
+		v.Note += " Next check " + st.Next.Local().Format("2 Jan 15:04") + "."
 	}
-	if st.LastError != "" {
-		note += " Last refresh failed: " + st.LastError
+	switch st.Progress.Step {
+	case "importing":
+		v.Progress = "Downloading and importing: " + humanCount(st.Progress.Read) + " series read…"
+		if st.Progress.Read == 0 {
+			v.Progress = "Downloading the database…"
+		}
+	case "linking":
+		v.Progress = "Linking library titles…"
+	case "checking":
+		v.Progress = "Checking for a newer database…"
+	default:
+		v.Progress = "Waiting to start…"
 	}
-	return note
+	return v
 }
 
 func humanCount(n int) string {
@@ -4338,26 +4358,29 @@ func (u *webUI) mangaBakaRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "refreshing MangaBaka needs the settings permission")
 		return
 	}
+	status := func(message string, confirm bool) {
+		u.frag(w, "mangaBakaStatus", u.mangaBakaStatus(ctx, message, confirm))
+	}
 	if !u.svc.MangaBakaEnabled(ctx) {
-		u.frag(w, "mangaBakaNote", "Turn on Use MangaBaka and save first.")
+		status("Turn on Use MangaBaka and save first.", false)
 		return
 	}
 	force := r.FormValue("force") != ""
 	if force && r.FormValue("confirm") == "" {
 		if same, err := u.svc.MangaBakaUnchanged(ctx); err != nil {
-			u.frag(w, "mangaBakaNote", "Couldn't reach MangaBaka: "+err.Error())
+			status("Couldn't reach MangaBaka: "+err.Error(), false)
 			return
 		} else if same {
-			u.frag(w, "mangaBakaConfirm", nil)
+			status("", true)
 			return
 		}
 	}
-	if err := u.svc.RefreshMangaBaka(ctx, force); err != nil {
+	if err := u.svc.RefreshMangaBaka(ctx, force); err != nil && !errors.Is(err, service.ErrMangaBakaBusy) {
 		u.fail(w, err)
 		return
 	}
 	u.kick()
-	u.frag(w, "mangaBakaNote", "Refresh started. It shows in Jobs and takes a few minutes.")
+	status("", false)
 }
 
 func (u *webUI) clearCache(w http.ResponseWriter, r *http.Request) {

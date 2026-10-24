@@ -1298,10 +1298,21 @@
 </div>
 {{end}}
 
-{{define "mangaBakaNote"}}<p class="mt-1 text-sm">{{.}}</p>{{end}}
-
-{{define "mangaBakaConfirm"}}
-<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">The published database is the one already imported. Re-import it anyway?
-  <button type="button" class="btn btn-xs btn-warning" hx-post="/ui/settings/mangabaka/refresh" hx-vals='{"force": "1", "confirm": "1"}' hx-target="#mangabaka-note">Re-import</button>
+{{define "mangaBakaStatus"}}
+<div id="mangabaka-status" class="flex items-start justify-between gap-4 py-3 max-sm:flex-col max-sm:gap-1"{{if .Running}} hx-get="/ui/settings/mangabaka/status" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
+  <div class="min-w-0">
+    <div class="font-medium">Database</div>
+    <div class="text-sm text-base-content/60 max-w-prose">{{.Note}} Data from <a class="link" href="https://mangabaka.org" target="_blank" rel="noopener">MangaBaka</a>, CC BY-NC-SA 4.0.</div>
+    {{if .Running}}<p class="mt-1 flex items-center gap-2 text-sm"><span class="loading loading-spinner loading-xs"></span>{{.Progress}}</p>
+    {{else}}{{with .Error}}<p class="mt-1 text-sm text-error">Last refresh failed: {{.}}</p>{{end}}{{end}}
+    {{with .Message}}<p class="mt-1 text-sm">{{.}}</p>{{end}}
+    {{if .Confirm}}<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">The published database is the one already imported. Re-import it anyway?
+      <button type="button" class="btn btn-xs btn-warning" hx-post="/ui/settings/mangabaka/refresh" hx-vals='{"force": "1", "confirm": "1"}' hx-target="#mangabaka-status" hx-swap="outerHTML">Re-import</button>
+    </div>{{end}}
+  </div>
+  <div class="flex shrink-0 items-center gap-3">
+    <label class="flex items-center gap-2 text-sm tip" data-tip="Re-import even if the database didn't change"><input type="checkbox" class="checkbox checkbox-sm" name="force" value="1" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>Force</label>
+    <button class="btn btn-sm" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>{{if .Running}}Refreshing…{{else}}Refresh now{{end}}</button>
+  </div>
 </div>
 {{end}}

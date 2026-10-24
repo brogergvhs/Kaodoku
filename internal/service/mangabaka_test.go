@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -299,5 +300,28 @@ func TestAggressiveBrowseStaysOnMangaBaka(t *testing.T) {
 	}
 	if _, _, _ = svc.SearchManga(ctx, catalog.AniListProvider, "abyss", 10, catalog.SearchFilter{}); al.calls.Load() != 1 {
 		t.Fatal("a typed search should still go to the picked tracker")
+	}
+}
+
+func TestMangaBakaRefreshRunsOneAtATime(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	if err := svc.SetSetting(ctx, SettingMangaBakaEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RefreshMangaBaka(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RefreshMangaBaka(ctx, true); !errors.Is(err, ErrMangaBakaBusy) || !svc.MangaBakaStatus(ctx).Running {
+		t.Fatalf("second refresh = %v, want it refused while one is queued", err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `DELETE FROM jobs`); err != nil {
+		t.Fatal(err)
+	}
+	svc.mbProgress.Store(&MangaBakaProgress{Step: "importing", Read: 10000})
+	if st := svc.MangaBakaStatus(ctx); !st.Running || st.Progress.Read != 10000 {
+		t.Fatalf("status = %+v, want the running import shown", st)
+	}
+	if err := svc.runMangaBakaRefresh(ctx, true, nil); err != nil {
+		t.Fatalf("an overlapping run should step aside, got %v", err)
 	}
 }

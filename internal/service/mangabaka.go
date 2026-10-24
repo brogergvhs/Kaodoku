@@ -3,6 +3,7 @@ package service
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -71,22 +72,45 @@ func (s *JobService) MangaBakaUnchanged(ctx context.Context) (bool, error) {
 	return err == nil && sum == m.SHA1 && v == m.Variant, err
 }
 
+var ErrMangaBakaBusy = errors.New("a MangaBaka refresh is already running")
+
 func (s *JobService) RefreshMangaBaka(ctx context.Context, force bool) error {
+	if s.mbBusy(ctx) {
+		return ErrMangaBakaBusy
+	}
 	_, err := s.enqueueExact(ctx, jobs.TypeMangaBakaRefresh, JobPayload{Force: force}, time.Now())
 	return err
 }
 
+// mbBusy: a refresh runs or waits in the queue.
+func (s *JobService) mbBusy(ctx context.Context) bool {
+	var queued int
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE type = ? AND status IN ('queued', 'running')`, jobs.TypeMangaBakaRefresh).Scan(&queued)
+	return queued > 0 || s.mbProgress.Load() != nil
+}
+
+// MangaBakaProgress is a running refresh's step: checking, importing (with series read so far) or linking.
+type MangaBakaProgress struct {
+	Step string
+	Read int
+}
+
 func (s *JobService) runMangaBakaRefresh(ctx context.Context, force bool, progress ProgressManager) error {
-	if !s.MangaBakaEnabled(ctx) {
+	if !s.MangaBakaEnabled(ctx) || !s.mbProgress.CompareAndSwap(nil, &MangaBakaProgress{Step: "checking"}) {
 		return nil
 	}
+	defer s.mbProgress.Store(nil)
 	handle := progress.Register("mangabaka")
 	defer handle.MarkDone()
 	v := s.mangaBakaVariant(ctx)
-	if _, err := s.mb.Refresh(ctx, mangaBakaClient, mangabaka.DumpURL(v), v, force, func(n int) { handle.Update(n, 0, 0) }); err != nil {
+	if _, err := s.mb.Refresh(ctx, mangaBakaClient, mangabaka.DumpURL(v), v, force, func(n int) {
+		handle.Update(n, 0, 0)
+		s.mbProgress.Store(&MangaBakaProgress{Step: "importing", Read: n})
+	}); err != nil {
 		return err
 	}
 	_ = s.catalog.saveCalls(ctx, catalog.MangaBakaProvider, catalog.Call{Kind: "Database", Reason: "Database refresh"}, 1)
+	s.mbProgress.Store(&MangaBakaProgress{Step: "linking"})
 	if err := s.syncMangaBakaTags(ctx); err != nil {
 		return err
 	}
@@ -97,10 +121,15 @@ type MangaBakaStatus struct {
 	mangabaka.Meta
 	Next      time.Time
 	LastError string
+	Running   bool
+	Progress  MangaBakaProgress
 }
 
 func (s *JobService) MangaBakaStatus(ctx context.Context) MangaBakaStatus {
-	st := MangaBakaStatus{Meta: s.mb.Meta(ctx)}
+	st := MangaBakaStatus{Meta: s.mb.Meta(ctx), Running: s.mbBusy(ctx)}
+	if p := s.mbProgress.Load(); p != nil {
+		st.Progress = *p
+	}
 	if every := s.MangaBakaEvery(ctx); every > 0 {
 		if last := s.LastJobTime(ctx, jobs.TypeMangaBakaRefresh); !last.IsZero() {
 			st.Next = last.Add(every)
