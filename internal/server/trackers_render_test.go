@@ -106,7 +106,7 @@ func TestTrackerTemplatesRender(t *testing.T) {
 		{Provider: "other", Label: "Other"},
 	}})
 	expect(panel, `data-tip="Metadata source"`, `data-tip="Progressive sync"`, "Stop progressive sync", `data-tip="Suggested match"`, "Confirm match", `data-tip="Not linked"`, `data-tip="Linked"`, `data-tip="Not on Kitsu"`, `"provider":"other","provider_id":""`, "Not on Other", `"provider":"mangaupdates","provider_id":""`, "Not on MangaUpdates", "None of these, not on Other", `"mode":"primary"`, "Use for metadata", "Relink", "Unlink",
-		`"provider":"mal","provider_id":"2","mode":"primary"`, `"provider":"mal","provider_id":""`, "Connect MyAnimeList", "https://c/2.jpg", "openPicker('3-mal')", `id="picker-3-kitsu"`, `hx-include="#picker-form-3-mal"`, "Relink MyAnimeList")
+		`"provider":"mal","provider_id":"2","mode":"primary"`, `"provider":"mal","provider_id":""`, "https://c/2.jpg", "openPicker('3-mal')", `id="picker-3-kitsu"`, `hx-include="#picker-form-3-mal"`, "Relink MyAnimeList")
 
 	if strings.Contains(panel, "Not on Kitsu</button>") || strings.Contains(panel, `"provider":"kitsu","provider_id":""`) {
 		t.Fatalf("title already marked as not on Kitsu still offers the mark:\n%s", panel)

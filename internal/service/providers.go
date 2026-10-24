@@ -602,7 +602,7 @@ func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id s
 type RelatedFetch struct{ Relations, Recommendations []string }
 
 // RelatedManga merges a work's relations and recommendations from MangaBaka and its linked trackers. In aggressive
-// MangaBaka mode trackers aren't asked; what they sent before still shows, and fetch lists the ones to ask on request.
+// MangaBaka mode trackers aren't asked; what they sent before still shows, and fetch lists the connected ones to ask.
 func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, fetch RelatedFetch, err error) {
 	ctx = catalog.WithReason(ctx, "Related titles")
 	m, err := s.catalog.GetManga(ctx, catalogID)
@@ -645,10 +645,10 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 		if aggressive {
 			var relAt, recAt time.Time
 			rel, rec, relAt, recAt = s.relatedStored(ctx, p.Name(), e.ProviderID)
-			if wantRel && time.Since(relAt) >= relatedTTL {
+			if connected && wantRel && time.Since(relAt) >= relatedTTL {
 				fetch.Relations = append(fetch.Relations, p.Name())
 			}
-			if wantRec && time.Since(recAt) >= relatedTTL {
+			if connected && wantRec && time.Since(recAt) >= relatedTTL {
 				fetch.Recommendations = append(fetch.Recommendations, p.Name())
 			}
 		} else if rel, rec, err = s.relatedCached(ctx, p, e.ProviderID, true, true); err != nil {
@@ -924,7 +924,7 @@ func (s *JobService) TitleLinks(ctx context.Context, titleID int64) ([]ProviderL
 	primary.Cover = m.CoverImage
 	out := []ProviderLink{primary}
 	for _, p := range s.Trackers(ctx) {
-		if p.Name() == m.Provider {
+		if p.Name() == m.Provider || !slices.Contains(connected, p.Name()) {
 			continue
 		}
 		l := link(p.Name(), p.Label())

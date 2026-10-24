@@ -194,6 +194,11 @@ func TestAggressiveRelatedAsksTrackersOnlyOnRequest(t *testing.T) {
 	svc.catalog.providers[catalog.MangaUpdatesProvider] = &spyProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
 	_, work := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "86551", TitleRomaji: "Made in Abyss"}, 1, 0)
 	svc.mbLink(ctx, []catalog.Manga{work})
+	if _, _, fetch, _ := svc.RelatedManga(ctx, work.ID, 24); fetch.Relations != nil || fetch.Recommendations != nil {
+		t.Fatalf("fetch = %v; trackers the user hasn't connected shouldn't be offered", fetch)
+	}
+	connect(t, svc, ctx, catalog.AniListProvider, time.Now())
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
 
 	rels, recs, fetch, err := svc.RelatedManga(ctx, work.ID, 24)
 	if err != nil || len(rels) != 1 || rels[0].ProviderID != "113956" || rels[0].RelationType != "SIDE_STORY" || len(recs) != 0 {

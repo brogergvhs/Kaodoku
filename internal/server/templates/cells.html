@@ -875,7 +875,6 @@
             </div>
           </div>
           {{if .URL}}<a class="text-xs text-base-content/50 link-hover" href="{{.URL}}" target="_blank" rel="noreferrer noopener">#{{.ID}} ↗</a>{{end}}
-          {{if and $linked (not .Connected)}}<div class="text-xs text-base-content/50"><a class="link" href="/me">Connect {{.Label}}</a> to sync your progress</div>{{end}}
         </div>
         {{$sync := and $linked .Connected}}
         {{if .Outage}}<button type="button" class="btn btn-ghost btn-sm btn-square shrink-0" disabled aria-label="{{.Label}} is temporarily unavailable">{{template "iconDots"}}</button>

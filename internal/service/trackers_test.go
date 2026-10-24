@@ -492,7 +492,7 @@ func TestLinkedTitleSyncsOnlyWhenAsked(t *testing.T) {
 	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil {
 		t.Fatal(err)
 	}
-	if links, _ := svc.TitleLinks(uctx, titleID); len(kitsu.savesCopy()) != 0 || links[0].Syncing {
+	if links, _ := svc.TitleLinks(uctx, titleID); len(kitsu.savesCopy()) != 0 || len(links) != 1 || links[0].Syncing {
 		t.Fatalf("linked title synced without consent: saves=%v links=%+v", kitsu.savesCopy(), links)
 	}
 	if err := svc.SyncTrackersTitle(uctx, titleID, catalog.KitsuProvider); err != nil || len(kitsu.savesCopy()) != 1 {
