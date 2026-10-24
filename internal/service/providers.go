@@ -553,44 +553,61 @@ func (s *JobService) resolveLibrary(ctx context.Context, p catalog.Provider, lim
 	}
 }
 
-// relatedStored is what a tracker last sent for a work, without asking it again.
-func (s *JobService) relatedStored(ctx context.Context, provider, id string) (rel, recs []catalog.Manga, fetched time.Time, ok bool) {
-	var relJSON, recJSON, at string
-	err := s.db.QueryRowContext(ctx, `SELECT relations_json, recommendations_json, fetched_at FROM tracker_related WHERE provider = ? AND provider_id = ?`, provider, id).Scan(&relJSON, &recJSON, &at)
-	ok = err == nil && json.Unmarshal([]byte(relJSON), &rel) == nil && json.Unmarshal([]byte(recJSON), &recs) == nil
-	fetched, _ = database.ParseTime(at)
-	return rel, recs, fetched, ok
+// relatedStored is what a tracker last sent for a work, without asking it again; each list has its own fetch time.
+func (s *JobService) relatedStored(ctx context.Context, provider, id string) (rel, recs []catalog.Manga, relAt, recAt time.Time) {
+	var relJSON, recJSON, relTime, recTime string
+	if s.db.QueryRowContext(ctx, `SELECT relations_json, recommendations_json, relations_fetched_at, recommendations_fetched_at FROM tracker_related WHERE provider = ? AND provider_id = ?`, provider, id).Scan(&relJSON, &recJSON, &relTime, &recTime) != nil {
+		return nil, nil, time.Time{}, time.Time{}
+	}
+	_ = json.Unmarshal([]byte(relJSON), &rel)
+	_ = json.Unmarshal([]byte(recJSON), &recs)
+	relAt, _ = database.ParseTime(relTime)
+	recAt, _ = database.ParseTime(recTime)
+	return rel, recs, relAt, recAt
 }
 
-// relatedCached keeps a work's relations and recommendations in the database for a week; a stale copy stands in while a refresh fails.
-func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id string) ([]catalog.Manga, []catalog.Manga, error) {
-	rel, recs, fetched, stored := s.relatedStored(ctx, p.Name(), id)
-	if stored && time.Since(fetched) < relatedTTL {
+// relatedCached keeps a work's relations and recommendations in the database for a week, asking the tracker again
+// when a wanted list went stale and storing only the wanted ones; a stale copy stands in while a refresh fails.
+func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id string, relations, recommendations bool) ([]catalog.Manga, []catalog.Manga, error) {
+	rel, recs, relAt, recAt := s.relatedStored(ctx, p.Name(), id)
+	stale := func(want bool, at time.Time) bool { return want && time.Since(at) >= relatedTTL }
+	if !stale(relations, relAt) && !stale(recommendations, recAt) {
 		return rel, recs, nil
 	}
 	freshRel, freshRecs, err := p.Related(ctx, id, 24)
 	if err != nil && !catalog.IsNotFound(err) {
-		if stored {
+		if (!relations || !relAt.IsZero()) && (!recommendations || !recAt.IsZero()) {
 			return rel, recs, nil
 		}
 		return nil, nil, err
 	}
-	relData, _ := json.Marshal(freshRel)
-	recData, _ := json.Marshal(freshRecs)
-	_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_related (provider, provider_id, relations_json, recommendations_json, fetched_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (provider, provider_id) DO UPDATE SET relations_json = excluded.relations_json, recommendations_json = excluded.recommendations_json, fetched_at = excluded.fetched_at`,
-		p.Name(), id, relData, recData, database.FormatTime(time.Now()))
+	now := time.Now()
+	if relations {
+		rel, relAt = freshRel, now
+	}
+	if recommendations {
+		recs, recAt = freshRecs, now
+	}
+	relData, _ := json.Marshal(rel)
+	recData, _ := json.Marshal(recs)
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_related (provider, provider_id, relations_json, recommendations_json, relations_fetched_at, recommendations_fetched_at) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (provider, provider_id) DO UPDATE SET relations_json = excluded.relations_json, recommendations_json = excluded.recommendations_json,
+			relations_fetched_at = excluded.relations_fetched_at, recommendations_fetched_at = excluded.recommendations_fetched_at`,
+		p.Name(), id, relData, recData, database.FormatTime(relAt), database.FormatTime(recAt))
 	s.trimRelated(ctx)
-	return freshRel, freshRecs, nil
+	return rel, recs, nil
 }
 
+// RelatedFetch lists the trackers to ask for each list on request.
+type RelatedFetch struct{ Relations, Recommendations []string }
+
 // RelatedManga merges a work's relations and recommendations from MangaBaka and its linked trackers. In aggressive
-// MangaBaka mode trackers aren't asked; what they sent before still shows, and fetchable lists the ones to ask on request.
-func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, fetchable []string, err error) {
+// MangaBaka mode trackers aren't asked; what they sent before still shows, and fetch lists the ones to ask on request.
+func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, fetch RelatedFetch, err error) {
 	ctx = catalog.WithReason(ctx, "Related titles")
 	m, err := s.catalog.GetManga(ctx, catalogID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, fetch, err
 	}
 	maps := s.mappings(ctx, m)
 	self := map[string]bool{}
@@ -620,22 +637,27 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 	for _, p := range s.Providers(ctx) {
 		e := maps[p.Name()]
 		pref, connected := prefs[p.Name()]
-		if !e.Confirmed || e.ProviderID == "" || connected && !pref.Relations && !pref.Recommendations || p.Name() == catalog.MangaBakaProvider {
+		wantRel, wantRec := !connected || pref.Relations, !connected || pref.Recommendations
+		if !e.Confirmed || e.ProviderID == "" || !wantRel && !wantRec || p.Name() == catalog.MangaBakaProvider {
 			continue
 		}
 		var rel, rec []catalog.Manga
 		if aggressive {
-			var fetched time.Time
-			if rel, rec, fetched, _ = s.relatedStored(ctx, p.Name(), e.ProviderID); time.Since(fetched) >= relatedTTL {
-				fetchable = append(fetchable, p.Name())
+			var relAt, recAt time.Time
+			rel, rec, relAt, recAt = s.relatedStored(ctx, p.Name(), e.ProviderID)
+			if wantRel && time.Since(relAt) >= relatedTTL {
+				fetch.Relations = append(fetch.Relations, p.Name())
 			}
-		} else if rel, rec, err = s.relatedCached(ctx, p, e.ProviderID); err != nil {
+			if wantRec && time.Since(recAt) >= relatedTTL {
+				fetch.Recommendations = append(fetch.Recommendations, p.Name())
+			}
+		} else if rel, rec, err = s.relatedCached(ctx, p, e.ProviderID, true, true); err != nil {
 			continue
 		}
-		if !connected || pref.Relations {
+		if wantRel {
 			rels = append(rels, s.mbUnify(ctx, s.fillFromStore(ctx, p.Name(), rel)))
 		}
-		if !connected || pref.Recommendations {
+		if wantRec {
 			recs = append(recs, s.mbUnify(ctx, s.fillFromStore(ctx, p.Name(), rec)))
 		}
 	}
@@ -643,11 +665,11 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 	if len(relations)+len(recommendations) > 0 {
 		err = nil
 	}
-	return relations, recommendations, fetchable, err
+	return relations, recommendations, fetch, err
 }
 
-// FetchRelated asks one linked tracker for a work's relations and recommendations, on a user's request.
-func (s *JobService) FetchRelated(ctx context.Context, catalogID int64, provider string) error {
+// FetchRelated asks one linked tracker for a work's relations or recommendations, on a user's request.
+func (s *JobService) FetchRelated(ctx context.Context, catalogID int64, provider string, recommendations bool) error {
 	m, err := s.catalog.GetManga(ctx, catalogID)
 	if err != nil {
 		return err
@@ -660,7 +682,7 @@ func (s *JobService) FetchRelated(ctx context.Context, catalogID int64, provider
 	if id == "" {
 		return fmt.Errorf("this title isn't linked to %s", p.Label())
 	}
-	_, _, err = s.relatedCached(catalog.WithReason(ctx, "Related titles"), p, id)
+	_, _, err = s.relatedCached(catalog.WithReason(ctx, "Related titles"), p, id, !recommendations, recommendations)
 	return err
 }
 
@@ -692,8 +714,10 @@ func mergeManga(lists [][]catalog.Manga, exclude map[string]bool, limit int) []c
 			} else {
 				fillBlanks(&hit.m, m)
 			}
-			if !slices.Contains(hit.m.Sources, m.Provider) {
-				hit.m.Sources = append(hit.m.Sources, m.Provider)
+			for _, src := range m.Origins() {
+				if !slices.Contains(hit.m.Sources, src) {
+					hit.m.Sources = append(hit.m.Sources, src)
+				}
 			}
 			hit.votes++
 			for _, k := range keys {

@@ -596,16 +596,17 @@ func (a *apiV1) trackerDisconnect(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// searchItemDTO is a manga plus its library title id when already tracked.
+// searchItemDTO is a manga plus its library title id when already tracked, and where it was listed from.
 type searchItemDTO struct {
 	catalog.Manga
-	TitleID int64 `json:"title_id,omitempty"`
+	TitleID int64    `json:"title_id,omitempty"`
+	Sources []string `json:"sources"`
 }
 
 func toSearchItems(views []searchResultView) []searchItemDTO {
 	out := make([]searchItemDTO, 0, len(views))
 	for _, v := range views {
-		out = append(out, searchItemDTO{Manga: v.Manga, TitleID: v.TitleID})
+		out = append(out, searchItemDTO{Manga: v.Manga, TitleID: v.TitleID, Sources: v.Origins()})
 	}
 	return out
 }

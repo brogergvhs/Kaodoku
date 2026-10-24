@@ -153,7 +153,7 @@ func (s *JobService) trimLists(ctx context.Context) {
 
 func (s *JobService) trimRelated(ctx context.Context) {
 	s.trimRows(ctx, int64(s.cacheLimit(ctx, SettingCacheRelatedMB))<<20,
-		`SELECT provider, provider_id, LENGTH(relations_json) + LENGTH(recommendations_json) FROM tracker_related ORDER BY fetched_at DESC`,
+		`SELECT provider, provider_id, LENGTH(relations_json) + LENGTH(recommendations_json) FROM tracker_related ORDER BY MAX(relations_fetched_at, recommendations_fetched_at) DESC`,
 		func(provider, id any) {
 			_, _ = s.db.ExecContext(ctx, `DELETE FROM tracker_related WHERE provider = ? AND provider_id = ?`, provider, id)
 		})

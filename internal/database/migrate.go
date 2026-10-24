@@ -325,7 +325,8 @@ CREATE TABLE IF NOT EXISTS tracker_related (
 	provider_id TEXT NOT NULL,
 	relations_json TEXT NOT NULL,
 	recommendations_json TEXT NOT NULL,
-	fetched_at TEXT NOT NULL,
+	relations_fetched_at TEXT NOT NULL DEFAULT '',
+	recommendations_fetched_at TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (provider, provider_id)
 );
 
@@ -485,6 +486,15 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	} else if oldSource {
 		if _, err = tx.ExecContext(ctx, `ALTER TABLE tracker_accounts RENAME COLUMN rating_source TO source`); err != nil {
+			return err
+		}
+	}
+	if oldRelated, _, err := txHasColumn(ctx, tx, "tracker_related", "fetched_at"); err != nil {
+		return err
+	} else if oldRelated {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE tracker_related RENAME COLUMN fetched_at TO relations_fetched_at;
+			ALTER TABLE tracker_related ADD COLUMN recommendations_fetched_at TEXT NOT NULL DEFAULT '';
+			UPDATE tracker_related SET recommendations_fetched_at = relations_fetched_at`); err != nil {
 			return err
 		}
 	}

@@ -545,6 +545,37 @@ type mangaResults struct {
 	CanAdd        bool
 	ShowRelations bool
 	ShowProvider  bool
+	ShowOrigin    bool
+}
+
+type originView struct {
+	Local bool     // listed by the local MangaBaka copy
+	APIs  []string // labels of the trackers whose APIs listed it
+}
+
+func (u *webUI) origin(origins []string) originView {
+	var o originView
+	for _, p := range origins {
+		if p == catalog.MangaBakaProvider {
+			o.Local = true
+		} else if u.svc != nil {
+			o.APIs = append(o.APIs, u.svc.ProviderLabel(p))
+		}
+	}
+	return o
+}
+
+func (o originView) Note() string {
+	var parts []string
+	if o.Local {
+		parts = append(parts, "the local MangaBaka database")
+	}
+	if n := len(o.APIs); n == 1 {
+		parts = append(parts, "the "+o.APIs[0]+" API")
+	} else if n > 1 {
+		parts = append(parts, "the "+strings.Join(o.APIs[:n-1], ", ")+" and "+o.APIs[n-1]+" APIs")
+	}
+	return "From " + strings.Join(parts, " and ")
 }
 
 // resultView picks the search results layout from the request.
@@ -564,7 +595,7 @@ func (u *webUI) mangaResultsView(ctx context.Context, heading, view string, item
 	for _, v := range views {
 		mixed = mixed || v.Provider != views[0].Provider
 	}
-	return mangaResults{Heading: heading, View: view, Items: views, CanAdd: user.Can(auth.PermLibraryAdd), ShowProvider: mixed}
+	return mangaResults{Heading: heading, View: view, Items: views, CanAdd: user.Can(auth.PermLibraryAdd), ShowProvider: mixed, ShowOrigin: u.svc.MangaBakaEnabled(ctx)}
 }
 
 func (u *webUI) stripItems(ctx context.Context, items []catalog.Manga) []searchResultView {
@@ -625,29 +656,33 @@ func (u *webUI) relatedManga(w http.ResponseWriter, r *http.Request) {
 	}
 	title, err := u.svc.GetTitle(r.Context(), id)
 	if err != nil || title.CatalogMangaID == nil || !contentAllowed(r.Context(), title.IsAdult, title.ContentTags) {
-		u.frag(w, "relatedSections", relatedView{})
+		u.frag(w, "relatedSections", []relatedSection(nil))
 		return
 	}
-	relations, recs, fetchable, _ := u.svc.RelatedManga(r.Context(), *title.CatalogMangaID, 24)
-	view := relatedView{
-		TitleID:         id,
-		Open:            r.Method == http.MethodPost,
-		Relations:       u.mangaResultsView(r.Context(), "", "cards", relations),
-		Recommendations: u.mangaResultsView(r.Context(), "", "cards", recs),
+	relations, recs, fetch, _ := u.svc.RelatedManga(r.Context(), *title.CatalogMangaID, 24)
+	sections := []relatedSection{
+		{TitleID: id, Kind: "relations", Heading: "Related manga", Results: u.mangaResultsView(r.Context(), "", "cards", relations), Fetch: u.providerOptions(fetch.Relations)},
+		{TitleID: id, Kind: "recommendations", Heading: "Recommended manga", Results: u.mangaResultsView(r.Context(), "", "cards", recs), Fetch: u.providerOptions(fetch.Recommendations)},
 	}
-	for _, p := range fetchable {
-		view.Fetch = append(view.Fetch, providerOption{p, u.svc.ProviderLabel(p)})
+	sections[0].Results.ShowRelations = true
+	if kind := r.FormValue("kind"); r.Method == http.MethodPost {
+		section := sections[0]
+		if kind == "recommendations" {
+			section = sections[1]
+		}
+		section.Open = true
+		u.frag(w, "relatedSection", section)
+		return
 	}
-	view.Relations.ShowRelations = true
-	u.frag(w, "relatedSections", view)
+	u.frag(w, "relatedSections", sections)
 }
 
-type relatedView struct {
-	TitleID         int64
-	Relations       mangaResults
-	Recommendations mangaResults
-	Fetch           []providerOption // trackers to ask on request, in aggressive MangaBaka mode
-	Open            bool
+type relatedSection struct {
+	TitleID       int64
+	Kind, Heading string
+	Results       mangaResults
+	Fetch         []providerOption // trackers to ask on request, in aggressive MangaBaka mode
+	Open          bool
 }
 
 func (u *webUI) relatedFetch(w http.ResponseWriter, r *http.Request) {
@@ -661,7 +696,7 @@ func (u *webUI) relatedFetch(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := u.svc.FetchRelated(r.Context(), *title.CatalogMangaID, r.FormValue("provider")); err != nil {
+	if err := u.svc.FetchRelated(r.Context(), *title.CatalogMangaID, r.FormValue("provider"), r.FormValue("kind") == "recommendations"); err != nil {
 		u.fail(w, err)
 		return
 	}
@@ -3029,7 +3064,7 @@ func (u *webUI) mePage(w http.ResponseWriter, r *http.Request) {
 	if user := userFrom(r.Context()); user.Can(auth.PermUsersManage) {
 		if me, err := u.svc.Auth().GetUser(r.Context(), user.ID); err == nil && me != nil {
 			opts, _ := u.svc.ContentTagOptions(r.Context())
-			view.Content = &userEditView{User: *me, TagOptions: opts, ProviderOptions: u.providerOptions()}
+			view.Content = &userEditView{User: *me, TagOptions: opts, ProviderOptions: u.providerOptions(service.ProviderNames())}
 		}
 	}
 	u.page(w, r, "settings", "My settings", view)
@@ -4198,9 +4233,9 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 		case key == service.SettingBrowserSolverProvider:
 			f.Kind, f.Options = "select", []providerOption{{browserfetch.ProviderFlareSolverr, "FlareSolverr"}}
 		case key == service.SettingProvidersDefault:
-			f.Kind, f.Options = "select", u.providerOptions()
+			f.Kind, f.Options = "select", u.providerOptions(service.ProviderNames())
 		case multiSetting(key):
-			f.Kind, f.Options = "multi", u.providerOptions()
+			f.Kind, f.Options = "multi", u.providerOptions(service.ProviderNames())
 			for _, o := range f.Options {
 				if slices.Contains(strings.Split(value, ","), o.Name) {
 					f.Selected = append(f.Selected, o.Name)
@@ -4627,6 +4662,7 @@ func (u *webUI) funcs() template.FuncMap {
 		"mangaURL":    mangaURL,
 		"coverURL":    coverURL,
 		"providerURL": catalog.MangaURL,
+		"origin":      u.origin,
 		"providerLabel": func(name string) string {
 			if u.svc == nil {
 				return name

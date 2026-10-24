@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -194,26 +195,32 @@ func TestAggressiveRelatedAsksTrackersOnlyOnRequest(t *testing.T) {
 	_, work := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "86551", TitleRomaji: "Made in Abyss"}, 1, 0)
 	svc.mbLink(ctx, []catalog.Manga{work})
 
-	rels, recs, fetchable, err := svc.RelatedManga(ctx, work.ID, 24)
+	rels, recs, fetch, err := svc.RelatedManga(ctx, work.ID, 24)
 	if err != nil || len(rels) != 1 || rels[0].ProviderID != "113956" || rels[0].RelationType != "SIDE_STORY" || len(recs) != 0 {
 		t.Fatalf("related = %+v / %+v, %v", rels, recs, err)
 	}
-	if anilist.calls.Load()+kitsu.calls.Load() != 0 || len(fetchable) != 2 {
-		t.Fatalf("%d tracker calls, fetchable %v; want none and both trackers offered", anilist.calls.Load()+kitsu.calls.Load(), fetchable)
+	if !slices.Equal(rels[0].Origins(), []string{catalog.MangaBakaProvider}) {
+		t.Fatalf("relation origins = %v, want the local copy", rels[0].Origins())
 	}
-	if err := svc.FetchRelated(ctx, work.ID, catalog.KitsuProvider); err != nil || kitsu.calls.Load() != 1 {
+	if anilist.calls.Load()+kitsu.calls.Load() != 0 || len(fetch.Relations) != 2 || len(fetch.Recommendations) != 2 {
+		t.Fatalf("%d tracker calls, fetch %v; want none and both trackers offered", anilist.calls.Load()+kitsu.calls.Load(), fetch)
+	}
+	if err := svc.FetchRelated(ctx, work.ID, catalog.KitsuProvider, true); err != nil || kitsu.calls.Load() != 1 {
 		t.Fatalf("fetch = %v with %d calls", err, kitsu.calls.Load())
 	}
-	_, recs, fetchable, _ = svc.RelatedManga(ctx, work.ID, 24)
-	if len(recs) != 1 || recs[0].ProviderID != "77" || len(fetchable) != 1 || kitsu.calls.Load() != 1 {
-		t.Fatalf("after fetch recs = %+v, fetchable %v, %d calls", recs, fetchable, kitsu.calls.Load())
+	_, recs, fetch, _ = svc.RelatedManga(ctx, work.ID, 24)
+	if len(recs) != 1 || recs[0].ProviderID != "77" || !slices.Equal(recs[0].Origins(), []string{catalog.KitsuProvider}) || kitsu.calls.Load() != 1 {
+		t.Fatalf("after fetch recs = %+v, %d calls", recs, kitsu.calls.Load())
+	}
+	if len(fetch.Recommendations) != 1 || len(fetch.Relations) != 2 {
+		t.Fatalf("after fetching recommendations, fetch = %v; want Kitsu still offered for relations", fetch)
 	}
 
 	if err := svc.SetSetting(ctx, SettingMangaBakaAggressive, "false"); err != nil {
 		t.Fatal(err)
 	}
-	if rels, _, fetchable, _ = svc.RelatedManga(ctx, work.ID, 24); len(rels) != 1 || fetchable != nil || anilist.calls.Load() != 1 {
-		t.Fatalf("not aggressive: rels %+v, fetchable %v, %d anilist calls", rels, fetchable, anilist.calls.Load())
+	if rels, _, fetch, _ = svc.RelatedManga(ctx, work.ID, 24); len(rels) != 1 || fetch.Relations != nil || fetch.Recommendations != nil || anilist.calls.Load() != 1 {
+		t.Fatalf("not aggressive: rels %+v, fetch %v, %d anilist calls", rels, fetch, anilist.calls.Load())
 	}
 }
 

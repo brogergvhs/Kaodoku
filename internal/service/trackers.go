@@ -1303,7 +1303,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string, f
 	var lists [][]catalog.Manga
 	for _, id := range seeds {
 		if !aggressive {
-			if _, recs, err := s.relatedCached(ctx, p, id); err == nil {
+			if _, recs, err := s.relatedCached(ctx, p, id, !s.mbAggressive(ctx), true); err == nil {
 				lists = append(lists, s.mbUnify(ctx, recs))
 			}
 			continue
@@ -1312,7 +1312,7 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string, f
 			rels, recs := s.mbRelated(ctx, strconv.FormatInt(sr.ID, 10), 24)
 			lists = append(lists, recs, rels)
 		}
-		_, recs, fetched, _ := s.relatedStored(ctx, provider, id)
+		_, recs, _, fetched := s.relatedStored(ctx, provider, id)
 		fetchable = fetchable || recommends(provider) && time.Since(fetched) >= relatedTTL
 		lists = append(lists, s.mbUnify(ctx, recs))
 	}

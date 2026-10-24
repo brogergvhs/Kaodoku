@@ -594,31 +594,27 @@
 {{end}}
 
 {{define "relatedSections"}}
-<div id="related-sections">
-{{if or .Relations.Items .Fetch}}
-<div class="collapse collapse-arrow bg-base-100 mt-4">
-  <input type="checkbox"{{if .Open}} checked{{end}}>
-  <div class="collapse-title font-semibold">Related manga <span class="badge badge-sm badge-ghost ml-1">{{len .Relations.Items}}</span></div>
-  <div class="collapse-content">{{template "relatedFetch" .}}{{template "mangaResults" .Relations}}</div>
-</div>
-{{end}}
-{{if or .Recommendations.Items .Fetch}}
-<div class="collapse collapse-arrow bg-base-100 mt-4">
-  <input type="checkbox"{{if .Open}} checked{{end}}>
-  <div class="collapse-title font-semibold">Recommended manga <span class="badge badge-sm badge-ghost ml-1">{{len .Recommendations.Items}}</span></div>
-  <div class="collapse-content">{{template "relatedFetch" .}}{{template "mangaResults" .Recommendations}}</div>
-</div>
-{{end}}
-</div>
+<div id="related-sections">{{range .}}{{template "relatedSection" .}}{{end}}</div>
 {{end}}
 
-{{define "relatedFetch"}}{{with .Fetch}}
-<form class="mb-3 flex flex-wrap items-center gap-2 text-sm" hx-post="/ui/library/{{$.TitleID}}/related/fetch" hx-target="#related-sections" hx-swap="outerHTML" hx-disabled-elt="find button">
-  <span class="text-base-content/60">Fetch from</span>
-  {{if eq (len .) 1}}{{with index . 0}}<input type="hidden" name="provider" value="{{.Name}}"><button class="btn btn-xs btn-outline">{{.Label}}</button>{{end}}
-  {{else}}<select class="select select-xs w-auto" name="provider" aria-label="Tracker">{{range .}}<option value="{{.Name}}">{{.Label}}</option>{{end}}</select><button class="btn btn-xs btn-outline">Fetch</button>{{end}}
-</form>
-{{end}}{{end}}
+{{define "relatedSection"}}
+<div id="related-{{.Kind}}">{{if or .Results.Items .Fetch}}
+<div class="collapse collapse-arrow bg-base-100 mt-4">
+  <input type="checkbox"{{if .Open}} checked{{end}}>
+  <div class="collapse-title font-semibold">{{.Heading}} <span class="badge badge-sm badge-ghost ml-1">{{len .Results.Items}}</span></div>
+  <div class="collapse-content">
+    {{with .Fetch}}<form class="mb-3 flex flex-wrap items-center gap-2 text-sm" hx-post="/ui/library/{{$.TitleID}}/related/fetch" hx-vals='{"kind":"{{$.Kind}}"}' hx-target="#related-{{$.Kind}}" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <span class="text-base-content/60">Fetch from</span>
+      {{if eq (len .) 1}}{{with index . 0}}<input type="hidden" name="provider" value="{{.Name}}"><button class="btn btn-xs btn-outline">{{.Label}}</button>{{end}}
+      {{else}}<select class="select select-xs w-auto" name="provider" aria-label="Tracker">{{range .}}<option value="{{.Name}}">{{.Label}}</option>{{end}}</select><button class="btn btn-xs btn-outline">Fetch</button>{{end}}
+    </form>{{end}}
+    {{template "mangaResults" .Results}}
+  </div>
+</div>
+{{end}}</div>
+{{end}}
+
+{{define "mangaOrigin"}}{{with origin .Origins}}<span class="inline-flex items-center gap-0.5 align-middle [&>svg]:size-3" role="img" title="{{.Note}}" aria-label="{{.Note}}">{{if .Local}}{{template "iconDatabase"}}{{end}}{{if .APIs}}{{template "iconCloud"}}{{end}}</span>{{end}}{{end}}
 
 {{define "mangaResults"}}
 {{if .Heading}}<h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-base-content/60">{{.Heading}}</h2>{{end}}
@@ -633,7 +629,7 @@
         <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a></td>
         <td class="min-w-0">
           <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}">{{mangaTitle .Manga}}</a>
-          <div class="text-xs text-base-content/50">{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
+          <div class="text-xs text-base-content/50">{{if or $.ShowOrigin (gt (len .Origins) 1)}}{{template "mangaOrigin" .}} {{end}}{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
         </td>
         <td class="whitespace-nowrap text-right">
           {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
@@ -655,7 +651,7 @@
       </figure>
       <div class="flex min-w-0 flex-1 flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}{{if $.ShowProvider}} <span class="badge badge-ghost badge-sm align-middle">{{providerLabel .Provider}}</span>{{end}}</h3>
+          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}{{if $.ShowProvider}} <span class="badge badge-ghost badge-sm align-middle">{{providerLabel .Provider}}</span>{{end}}{{if or $.ShowOrigin (gt (len .Origins) 1)}} <span class="text-base-content/50 align-middle">{{template "mangaOrigin" .}}</span>{{end}}</h3>
           <div class="shrink-0">
             {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
             {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
@@ -679,10 +675,10 @@
         <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
       </div>{{end}}
     </div>
-    <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight"{{if gt (len .Sources) 1}} title="Listed by {{range $i, $p := .Sources}}{{if $i}}, {{end}}{{providerLabel $p}}{{end}}"{{end}}>{{mangaTitle .Manga}}</div>
+    <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{mangaTitle .Manga}}</div>
     <div class="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-base-content/50">
       <span class="truncate">{{.Format}}{{if .Chapters}} · {{.Chapters}} ch{{end}}</span>
-      <span class="shrink-0">{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
+      <span class="shrink-0">{{if or $.ShowOrigin (gt (len .Origins) 1)}}{{template "mangaOrigin" .}} {{end}}{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
     </div>
     {{if .TitleID}}<a class="btn btn-xs btn-success btn-soft mt-auto w-full pt-0.5" href="/library/{{.TitleID}}">✓ In library</a>
     {{else if $canAdd}}<button class="btn btn-xs btn-outline mt-auto w-full" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}","card":"1"}' hx-target="this" hx-swap="outerHTML">Add</button>

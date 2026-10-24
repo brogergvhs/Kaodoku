@@ -33,6 +33,14 @@ type Manga struct {
 	Sources      []string          `json:"-"` // providers that listed it, once merged
 }
 
+// Origins names where a listing came from: "mangabaka" for the local MangaBaka copy, else the trackers whose APIs sent it.
+func (m Manga) Origins() []string {
+	if len(m.Sources) > 0 {
+		return m.Sources
+	}
+	return []string{m.Provider}
+}
+
 // Match is one possible source URL for a canonical manga.
 type Match struct {
 	ID                int64     `json:"id"`
