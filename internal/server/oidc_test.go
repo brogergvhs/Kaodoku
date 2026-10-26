@@ -180,7 +180,7 @@ func TestOIDCFullFlow(t *testing.T) {
 	}
 
 	// Tampered state is rejected.
-	state, nonce, cookie = begin()
+	_, nonce, cookie = begin()
 	idp.claims["nonce"] = nonce
 	if rec := finish("forged-state", cookie); rec.Code != http.StatusBadRequest {
 		t.Fatalf("forged state = %d", rec.Code)

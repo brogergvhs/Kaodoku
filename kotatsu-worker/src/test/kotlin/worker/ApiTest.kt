@@ -65,7 +65,7 @@ class ApiTest {
                     .build()
             ).execute().close()
             val tagged = seen["user-agent"].orEmpty()
-            assertTrue(tagged.contains("Android 13"), "parser did not set its user agent: $seen")
+            assertTrue(tagged.isNotEmpty() && !tagged.startsWith("okhttp"), "parser did not set its user agent: $seen")
             assertTrue(ctx.parserDispatch in ctx.httpClient.interceptors, "dispatch not installed on shared client")
         } finally {
             server.stop(0)

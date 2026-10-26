@@ -1,4 +1,4 @@
-FROM gradle:8.10-jdk21 AS build
+FROM --platform=$BUILDPLATFORM gradle:8.10-jdk21 AS build
 WORKDIR /app
 COPY settings.gradle.kts build.gradle.kts ./
 RUN gradle --no-daemon dependencies --configuration runtimeClasspath > /dev/null \
