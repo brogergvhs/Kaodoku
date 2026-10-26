@@ -534,8 +534,14 @@ func (a *apiV1) syncAllTrackers(w http.ResponseWriter, r *http.Request) {
 	a.syncTrackers(w, r, "")
 }
 
+// trackerSettings applies the settings sent over the current ones, so a client that doesn't know a newer setting keeps it.
 func (a *apiV1) trackerSettings(w http.ResponseWriter, r *http.Request) {
 	var body service.TrackerPrefs
+	for _, acc := range a.svc.TrackerAccounts(r.Context(), userFrom(r.Context()).ID) {
+		if acc.Provider == r.PathValue("provider") {
+			body = acc.TrackerPrefs
+		}
+	}
 	if !decodeBody(w, r, &body) {
 		return
 	}

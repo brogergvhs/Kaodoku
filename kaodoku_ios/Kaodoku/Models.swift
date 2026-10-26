@@ -174,6 +174,7 @@ struct TrackerSettings: Codable, Hashable {
   var recommendations: Bool
   var ratingSync: String
   var source: String
+  var exclusive: Bool?
 }
 
 struct TitleActivity: Decodable {

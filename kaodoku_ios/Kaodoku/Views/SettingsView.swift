@@ -151,6 +151,15 @@ struct TrackerSettingsView: View {
             : "Kaodoku takes progress, favourites and ratings from \(tracker.label).")
         }
         Section {
+          Toggle("Only Kaodoku updates \(tracker.label)", isOn: Binding(
+            get: { settings.exclusive ?? false },
+            set: { settings.exclusive = $0 }
+          ))
+        } footer: {
+          Text("Skips reading an entry from \(tracker.label) before each update. "
+            + "Leave off if you also update \(tracker.label) from another app or its website.")
+        }
+        Section {
           Button("Sync \(tracker.label) now", action: sync).disabled(tracker.unavailable != nil)
         } footer: {
           if let note {
