@@ -21,7 +21,7 @@ struct KaodokuApp: App {
     WindowGroup {
       Group {
         if !storeReady {
-          ProgressView("Loading downloads…")
+          ProgressView("Loading downloads...")
             .task {
               await app.bootstrapStore()
               storeReady = true

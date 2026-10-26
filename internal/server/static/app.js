@@ -1091,7 +1091,7 @@ document.body.addEventListener("htmx:afterRequest", function (e) {
 })();
 
 function showLoading(el) {
-  el.innerHTML = '<p class="flex items-center gap-2 py-2 text-sm text-base-content/60"><span class="loading loading-spinner loading-xs"></span>Loading…</p>';
+  el.innerHTML = '<p class="flex items-center gap-2 py-2 text-sm text-base-content/60"><span class="loading loading-spinner loading-xs"></span>Loading...</p>';
 }
 
 function openPicker(key) {

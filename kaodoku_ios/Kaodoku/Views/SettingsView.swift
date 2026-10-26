@@ -62,7 +62,7 @@ struct SettingsView: View {
                   .font(.caption).foregroundStyle(.secondary)
               }
             } else {
-              LabeledContent("Status", value: "…")
+              LabeledContent("Status", value: "...")
             }
           }
           if app.me?.can("jobs.view") == true {

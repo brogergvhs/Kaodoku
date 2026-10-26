@@ -63,7 +63,7 @@ struct SyncStatusView: View {
     if app.store.flushing {
       HStack {
         ProgressView()
-        Text("Syncing \(app.store.pendingMarks) marks…")
+        Text("Syncing \(app.store.pendingMarks) marks...")
       }
     } else if app.store.pendingMarks == 0 {
       LabeledContent("Status", value: "Up to date")

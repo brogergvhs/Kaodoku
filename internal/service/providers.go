@@ -104,7 +104,7 @@ type outageRetry struct {
 	at   time.Time
 }
 
-// probeOutages re-checks each tracker in an outage 1, 2, 4… up to 30 minutes apart until it answers again.
+// probeOutages re-checks each tracker in an outage 1, 2, 4... up to 30 minutes apart until it answers again.
 func (s *JobService) probeOutages(ctx context.Context, retries map[string]outageRetry, now time.Time) {
 	for _, name := range providerOrder {
 		r, seen := retries[name]

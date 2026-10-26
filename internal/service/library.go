@@ -363,7 +363,7 @@ func (s *LibraryService) RefreshTitle(
 	if err != nil {
 		msg = err.Error()
 		if len(msg) > 500 {
-			msg = msg[:500] + "…"
+			msg = msg[:500] + "..."
 		}
 	}
 	if serr := s.repo.SetFetchError(context.WithoutCancel(ctx), title.ID, msg); serr != nil {

@@ -48,7 +48,7 @@ func (u *webUI) trackerConnect(w http.ResponseWriter, r *http.Request) {
 	p, err := u.svc.Provider(r.Context(), provider)
 	o, ok := p.(catalog.OAuth)
 	if err != nil || !ok || u.svc.TrackerLogin(r.Context(), provider) != "oauth" {
-		http.Error(w, "this tracker is not configured yet (settings → Metadata & tracking)", http.StatusBadRequest)
+		http.Error(w, "this tracker is not configured yet (settings -> Metadata & tracking)", http.StatusBadRequest)
 		return
 	}
 	state, verifier := randomHex(16), randomHex(48)

@@ -16,7 +16,7 @@ const (
 	PermJobsView           = "jobs.view"           // dashboard jobs list
 	PermReaderUse          = "reader.use"          // reader + own read marking
 	PermLibraryAdd         = "library.add"         // search page + adding titles
-	PermLibraryManage      = "library.manage"      // title mutations (remove, refresh, download, linking…)
+	PermLibraryManage      = "library.manage"      // title mutations (remove, refresh, download, linking...)
 	PermImportUse          = "import.use"          // import page + importing folders
 	PermSourcesManage      = "sources.manage"      // sources administration
 	PermJobsManage         = "jobs.manage"         // cancelling jobs

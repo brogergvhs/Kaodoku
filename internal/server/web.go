@@ -4367,16 +4367,16 @@ func (u *webUI) mangaBakaStatus(ctx context.Context, message string, confirm boo
 	}
 	switch st.Progress.Step {
 	case "importing":
-		v.Progress = "Downloading and importing: " + humanCount(st.Progress.Read) + " series read…"
+		v.Progress = "Downloading and importing: " + humanCount(st.Progress.Read) + " series read..."
 		if st.Progress.Read == 0 {
-			v.Progress = "Downloading the database…"
+			v.Progress = "Downloading the database..."
 		}
 	case "linking":
-		v.Progress = "Linking library titles…"
+		v.Progress = "Linking library titles..."
 	case "checking":
-		v.Progress = "Checking for a newer database…"
+		v.Progress = "Checking for a newer database..."
 	default:
-		v.Progress = "Waiting to start…"
+		v.Progress = "Waiting to start..."
 	}
 	return v
 }

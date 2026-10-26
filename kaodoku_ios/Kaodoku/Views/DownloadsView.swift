@@ -164,7 +164,7 @@ extension LocalStore.LocalTitle {
 extension LocalTitleCard {
   var cardLine: String {
     if title.entries.isEmpty, !title.pending.isEmpty {
-      return "downloading \(title.pending.count)…"
+      return "downloading \(title.pending.count)..."
     }
     let ch = title.chapterEntries, vols = title.volumeEntries
     if !vols.isEmpty, !ch.isEmpty {
@@ -293,7 +293,7 @@ struct LocalTitleView: View {
             app.store.deleteTitle(titleId)
             dismiss()
           }
-          Button("Range…") { showRemoveRange = true }
+          Button("Range...") { showRemoveRange = true }
         } label: {
           Label("Remove downloads", systemImage: "trash")
         }

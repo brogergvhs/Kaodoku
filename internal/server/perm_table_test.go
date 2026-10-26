@@ -7,7 +7,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/auth"
 )
 
-// TestRequiredPerm locks the route→permission gate so a route can't silently
+// TestRequiredPerm locks the route->permission gate so a route can't silently
 // lose its guard.
 func TestRequiredPerm(t *testing.T) {
 	cases := []struct {

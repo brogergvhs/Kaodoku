@@ -94,7 +94,6 @@ func (s *JobService) Image(ctx context.Context, rawURL, reason string) ([]byte, 
 }
 
 // trimImages deletes the least recently used images until the cache fits.
-// ponytail: scans the folder on every miss; keep a running total if image counts grow large.
 func (s *JobService) trimImages(limit int64) {
 	entries, _ := os.ReadDir(s.imageDir())
 	type file struct {

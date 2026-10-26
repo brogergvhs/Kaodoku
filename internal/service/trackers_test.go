@@ -23,20 +23,52 @@ type fakeProvider struct {
 	byQuery map[string][]catalog.Manga
 	listErr error
 	dates   bool
+	limit   int // caps saved progress, like a tracker that knows fewer chapters
+	outage  string
 	mu      sync.Mutex
 	entries map[string]catalog.Entry
 	saves   []string
+	calls   map[string]int
 }
 
 func newFake(name string) *fakeProvider {
-	return &fakeProvider{name: name, works: map[string]catalog.Manga{}, entries: map[string]catalog.Entry{}}
+	return &fakeProvider{name: name, works: map[string]catalog.Manga{}, entries: map[string]catalog.Entry{}, calls: map[string]int{}}
 }
+
+func (f *fakeProvider) hit(method string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls[method]++
+}
+
+func (f *fakeProvider) called(methods ...string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, m := range methods {
+		n += f.calls[m]
+	}
+	return n
+}
+
+// shared counts the calls for data every user shares, which MangaBaka should spare.
+func (f *fakeProvider) shared() int { return f.called("Get", "Search", "Related", "Trending") }
+
+func (f *fakeProvider) want(t *testing.T, lists, gets, saves int) {
+	t.Helper()
+	if l, g, s := f.called("ListEntries"), f.called("GetEntry"), f.savesCopy(); l != lists || g != gets || len(s) != saves {
+		t.Fatalf("list downloads = %d, entry reads = %d, saves = %v; want %d, %d and %d", l, g, s, lists, gets, saves)
+	}
+}
+
+func (f *fakeProvider) Outage() string { return f.outage }
 
 func (f *fakeProvider) Name() string { return f.name }
 func (f *fakeProvider) Label() string {
 	return map[string]string{catalog.AniListProvider: "AniList", catalog.MALProvider: "MyAnimeList", catalog.KitsuProvider: "Kitsu", catalog.MangaUpdatesProvider: "MangaUpdates"}[f.name]
 }
 func (f *fakeProvider) Get(_ context.Context, id string) (catalog.Manga, []catalog.Relation, error) {
+	f.hit("Get")
 	m, ok := f.works[id]
 	if !ok {
 		return catalog.Manga{}, nil, catalog.ErrNotFound
@@ -44,17 +76,26 @@ func (f *fakeProvider) Get(_ context.Context, id string) (catalog.Manga, []catal
 	return m, nil, nil
 }
 func (f *fakeProvider) Search(_ context.Context, q string, _ int, _ catalog.SearchFilter) ([]catalog.Manga, bool, error) {
+	f.hit("Search")
 	if f.byQuery != nil {
 		return f.byQuery[q], false, nil
 	}
 	return f.search, false, nil
 }
-func (f *fakeProvider) Trending(context.Context, int) ([]catalog.Manga, error) { return f.search, nil }
+func (f *fakeProvider) Trending(context.Context, int) ([]catalog.Manga, error) {
+	f.hit("Trending")
+	return f.search, nil
+}
 func (f *fakeProvider) Related(context.Context, string, int) ([]catalog.Manga, []catalog.Manga, error) {
+	f.hit("Related")
 	return nil, f.search, nil
 }
 func (f *fakeProvider) Viewer(context.Context) (string, string, error) { return "7", "me", nil }
 func (f *fakeProvider) ListEntries(context.Context) ([]catalog.Entry, error) {
+	f.hit("ListEntries")
+	return f.list()
+}
+func (f *fakeProvider) list() ([]catalog.Entry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []catalog.Entry
@@ -65,6 +106,7 @@ func (f *fakeProvider) ListEntries(context.Context) ([]catalog.Entry, error) {
 	return out, f.listErr
 }
 func (f *fakeProvider) GetEntry(_ context.Context, id string) (catalog.Entry, bool, error) {
+	f.hit("GetEntry")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	e, ok := f.entries[id]
@@ -73,6 +115,9 @@ func (f *fakeProvider) GetEntry(_ context.Context, id string) (catalog.Entry, bo
 func (f *fakeProvider) SaveEntry(_ context.Context, id string, u catalog.EntryUpdate) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.limit > 0 {
+		u.Progress = min(u.Progress, f.limit)
+	}
 	save := fmt.Sprintf("%s:%d:%s", id, u.Progress, u.Status)
 	if f.dates {
 		save += fmt.Sprintf(":%s:%s", day(u.Started), day(u.Finished))
@@ -478,38 +523,10 @@ func TestSyncPushesReadingDatesOnlyWhenRemoteHasNone(t *testing.T) {
 	}
 }
 
-type cappedTracker struct {
-	*fakeProvider
-	limit, lists, gets int
-}
-
-func (c *cappedTracker) ListEntries(ctx context.Context) ([]catalog.Entry, error) {
-	c.lists++
-	return c.fakeProvider.ListEntries(ctx)
-}
-
-func (c *cappedTracker) GetEntry(ctx context.Context, id string) (catalog.Entry, bool, error) {
-	c.gets++
-	return c.fakeProvider.GetEntry(ctx, id)
-}
-
-func (c *cappedTracker) SaveEntry(ctx context.Context, id string, u catalog.EntryUpdate) error {
-	if c.limit > 0 {
-		u.Progress = min(u.Progress, c.limit)
-	}
-	return c.fakeProvider.SaveEntry(ctx, id, u)
-}
-
-func (c *cappedTracker) want(t *testing.T, lists, gets, saves int) {
-	t.Helper()
-	if c.lists != lists || c.gets != gets || len(c.savesCopy()) != saves {
-		t.Fatalf("list downloads = %d, entry reads = %d, saves = %v; want %d, %d and %d", c.lists, c.gets, c.savesCopy(), lists, gets, saves)
-	}
-}
-
 func TestScheduledSyncCallsTrackersOnlyForChanges(t *testing.T) {
 	svc, ctx := openTestJobs(t)
-	kitsu := &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider), limit: 2}
+	kitsu := newFake(catalog.KitsuProvider)
+	kitsu.limit = 2
 	svc.catalog.providers[catalog.KitsuProvider] = kitsu
 	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
 	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Capped", Status: "FINISHED"}, 3, 3)
@@ -537,7 +554,7 @@ func TestScheduledSyncCallsTrackersOnlyForChanges(t *testing.T) {
 }
 
 type batchingTracker struct {
-	*cappedTracker
+	*fakeProvider
 	batches [][]string
 	changes int
 }
@@ -554,12 +571,12 @@ func (b *batchingTracker) SaveEntries(ctx context.Context, updates map[string]ca
 
 func (b *batchingTracker) ChangedEntries(ctx context.Context, _ time.Time) ([]catalog.Entry, error) {
 	b.changes++
-	return b.fakeProvider.ListEntries(ctx)
+	return b.list()
 }
 
 func TestSyncPullsChangesAndBatchesWrites(t *testing.T) {
 	svc, ctx := openTestJobs(t)
-	tr := &batchingTracker{cappedTracker: &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider)}}
+	tr := &batchingTracker{fakeProvider: newFake(catalog.KitsuProvider)}
 	svc.catalog.providers[catalog.KitsuProvider] = tr
 	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
 	var titles []int64
@@ -572,8 +589,8 @@ func TestSyncPullsChangesAndBatchesWrites(t *testing.T) {
 		if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, full, nil); err != nil {
 			t.Fatal(err)
 		}
-		if tr.lists != lists || tr.changes != changes || len(tr.batches) != batches || tr.gets != 0 {
-			t.Fatalf("lists = %d, change pulls = %d, batches = %v, reads = %d", tr.lists, tr.changes, tr.batches, tr.gets)
+		if tr.called("ListEntries") != lists || tr.changes != changes || len(tr.batches) != batches || tr.called("GetEntry") != 0 {
+			t.Fatalf("lists = %d, change pulls = %d, batches = %v, reads = %d", tr.called("ListEntries"), tr.changes, tr.batches, tr.called("GetEntry"))
 		}
 	}
 	sync(false, 1, 0, 1)
@@ -591,7 +608,7 @@ func TestSyncPullsChangesAndBatchesWrites(t *testing.T) {
 
 func TestPushesSettleSoSyncsStayQuiet(t *testing.T) {
 	svc, ctx := openTestJobs(t)
-	kitsu := &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider)}
+	kitsu := newFake(catalog.KitsuProvider)
 	svc.catalog.providers[catalog.KitsuProvider] = kitsu
 	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
 	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Read", Status: "RELEASING"}, 4, 1)
@@ -723,25 +740,11 @@ func TestTrackerPrefsDriveLinkingSyncAndRelated(t *testing.T) {
 	}
 }
 
-type recommendingProvider struct {
-	*fakeProvider
-	lists   atomic.Int32
-	related int
-}
-
-func (r *recommendingProvider) ListEntries(ctx context.Context) ([]catalog.Entry, error) {
-	r.lists.Add(1)
-	return r.fakeProvider.ListEntries(ctx)
-}
-func (r *recommendingProvider) Related(context.Context, string, int) ([]catalog.Manga, []catalog.Manga, error) {
-	r.related++
-	return nil, []catalog.Manga{{Provider: catalog.MangaUpdatesProvider, ProviderID: "8", TitleRomaji: "Stub", IsAdult: true}}, nil
-}
-
 func TestSuggestionsReuseStoredListsAndRecommendations(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
-	mu := &recommendingProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
+	mu := newFake(catalog.MangaUpdatesProvider)
+	mu.search = []catalog.Manga{{Provider: catalog.MangaUpdatesProvider, ProviderID: "8", TitleRomaji: "Stub", IsAdult: true}}
 	mu.entries["1"] = catalog.Entry{Status: "CURRENT"}
 	svc.catalog.providers[catalog.MangaUpdatesProvider] = mu
 	connect(t, svc, ctx, catalog.MangaUpdatesProvider, time.Now())
@@ -759,15 +762,15 @@ func TestSuggestionsReuseStoredListsAndRecommendations(t *testing.T) {
 	if !ok || len(got) != 1 || got[0].TitleRomaji != "Known" || got[0].IsAdult {
 		t.Fatalf("suggestions = %+v, want the stub filled from the stored record", got)
 	}
-	if mu.lists.Load() != 1 || mu.related != 1 {
-		t.Fatalf("list downloads = %d, Related calls = %d; want 1 and 1", mu.lists.Load(), mu.related)
+	if mu.called("ListEntries") != 1 || mu.called("Related") != 1 {
+		t.Fatalf("list downloads = %d, Related calls = %d; want 1 and 1", mu.called("ListEntries"), mu.called("Related"))
 	}
 	svc.invalidateRecs(1)
 	svc.listMu.Lock()
 	svc.listCache = nil
 	svc.listMu.Unlock()
-	if got, _, _ := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider, false); len(got) != 1 || mu.lists.Load() != 1 || mu.related != 1 {
-		t.Fatalf("after a restart: %d suggestions, %d list downloads, %d Related calls; want the stored copies", len(got), mu.lists.Load(), mu.related)
+	if got, _, _ := svc.ProviderSuggestions(ctx, catalog.MangaUpdatesProvider, false); len(got) != 1 || mu.called("ListEntries") != 1 || mu.called("Related") != 1 {
+		t.Fatalf("after a restart: %d suggestions, %d list downloads, %d Related calls; want the stored copies", len(got), mu.called("ListEntries"), mu.called("Related"))
 	}
 	if err := svc.DisconnectTracker(ctx, 1, catalog.MangaUpdatesProvider); err != nil {
 		t.Fatal(err)
@@ -780,7 +783,7 @@ func TestSuggestionsReuseStoredListsAndRecommendations(t *testing.T) {
 func TestStoredListFollowsWritesWithoutDownloads(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
-	kitsu := &recommendingProvider{fakeProvider: newFake(catalog.KitsuProvider)}
+	kitsu := newFake(catalog.KitsuProvider)
 	kitsu.entries["1"] = catalog.Entry{Status: "CURRENT"}
 	svc.catalog.providers[catalog.KitsuProvider] = kitsu
 	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
@@ -807,14 +810,14 @@ func TestStoredListFollowsWritesWithoutDownloads(t *testing.T) {
 		}
 		return out
 	}
-	if got := listed(); len(got) != 2 || got["9"].Progress != 1 || got["9"].Status != "CURRENT" || got["9"].Manga.TitleRomaji != "Pushed" || kitsu.lists.Load() != 1 {
-		t.Fatalf("stored list = %+v after %d downloads, want the old entry kept and the pushed one added", got, kitsu.lists.Load())
+	if got := listed(); len(got) != 2 || got["9"].Progress != 1 || got["9"].Status != "CURRENT" || got["9"].Manga.TitleRomaji != "Pushed" || kitsu.called("ListEntries") != 1 {
+		t.Fatalf("stored list = %+v after %d downloads, want the old entry kept and the pushed one added", got, kitsu.called("ListEntries"))
 	}
 	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := listed(); len(got) != 1 || got["9"].Progress != 1 || kitsu.lists.Load() != 2 {
-		t.Fatalf("after a full sync = %+v, %d downloads", got, kitsu.lists.Load())
+	if got := listed(); len(got) != 1 || got["9"].Progress != 1 || kitsu.called("ListEntries") != 2 {
+		t.Fatalf("after a full sync = %+v, %d downloads", got, kitsu.called("ListEntries"))
 	}
 }
 
@@ -921,11 +924,9 @@ func TestSearchKeepsStoredRecords(t *testing.T) {
 type barrierProvider struct {
 	*fakeProvider
 	started *sync.WaitGroup
-	outage  string
 	calls   atomic.Int32
 }
 
-func (b *barrierProvider) Outage() string { return b.outage }
 func (b *barrierProvider) ListEntries(ctx context.Context) ([]catalog.Entry, error) {
 	b.calls.Add(1)
 	b.started.Done()
@@ -946,7 +947,8 @@ func TestTrackerListsDownloadSideBySideAndSkipOutages(t *testing.T) {
 	started.Add(2)
 	kitsu := &barrierProvider{fakeProvider: newFake(catalog.KitsuProvider), started: &started}
 	mu := &barrierProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider), started: &started}
-	down := &barrierProvider{fakeProvider: newFake(catalog.AniListProvider), started: &started, outage: "maintenance"}
+	down := &barrierProvider{fakeProvider: newFake(catalog.AniListProvider), started: &started}
+	down.outage = "maintenance"
 	kitsu.entries["1"], mu.entries["2"], down.entries["3"] = catalog.Entry{Status: "CURRENT"}, catalog.Entry{Status: "CURRENT"}, catalog.Entry{Status: "CURRENT"}
 	svc.catalog.providers[catalog.KitsuProvider], svc.catalog.providers[catalog.MangaUpdatesProvider], svc.catalog.providers[catalog.AniListProvider] = kitsu, mu, down
 	for _, p := range []string{catalog.KitsuProvider, catalog.MangaUpdatesProvider, catalog.AniListProvider} {
@@ -960,35 +962,23 @@ func TestTrackerListsDownloadSideBySideAndSkipOutages(t *testing.T) {
 	}
 }
 
-type pingedProvider struct {
-	*fakeProvider
-	outage string
-	pings  int
-}
-
-func (p *pingedProvider) Outage() string { return p.outage }
-func (p *pingedProvider) Trending(context.Context, int) ([]catalog.Manga, error) {
-	p.pings++
-	return nil, nil
-}
-
 func TestOnlyTrackersInAnOutageArePingedWithBackoff(t *testing.T) {
 	svc, ctx := openTestJobs(t)
-	down := &pingedProvider{fakeProvider: newFake(catalog.KitsuProvider), outage: "down"}
-	up := &pingedProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
+	down, up := newFake(catalog.KitsuProvider), newFake(catalog.MangaUpdatesProvider)
+	down.outage = "down"
 	svc.catalog.providers[catalog.KitsuProvider], svc.catalog.providers[catalog.MangaUpdatesProvider] = down, up
 	retries := map[string]outageRetry{}
 	start := time.Now()
 	var at []int
 	for m := range 62 {
-		before := down.pings
+		before := down.called("Trending")
 		svc.probeOutages(ctx, retries, start.Add(time.Duration(m)*time.Minute))
-		if down.pings > before {
+		if down.called("Trending") > before {
 			at = append(at, m)
 		}
 	}
-	if fmt.Sprint(at) != "[1 3 7 15 31 61]" || up.pings != 0 {
-		t.Fatalf("pinged the down tracker at minutes %v and the working one %d times", at, up.pings)
+	if fmt.Sprint(at) != "[1 3 7 15 31 61]" || up.called("Trending") != 0 {
+		t.Fatalf("pinged the down tracker at minutes %v and the working one %d times", at, up.called("Trending"))
 	}
 }
 

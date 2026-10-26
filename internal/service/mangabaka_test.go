@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,46 +113,23 @@ func TestMangaBakaSkipsIdsLinkedToAnotherTitle(t *testing.T) {
 func TestAggressiveResolveMakesNoTrackerCalls(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	useMangaBaka(t, svc, ctx, anthology)
-	mu := &spyProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
+	mu := newFake(catalog.MangaUpdatesProvider)
 	svc.catalog.providers[catalog.MangaUpdatesProvider] = mu
 	_, known := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "113956"}, 1, 0)
 	_, unknown := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "5", TitleRomaji: "Not in the dump"}, 1, 0)
 	if id := svc.resolveID(ctx, known, mu); id != "70807749862" {
 		t.Fatalf("resolved %q from MangaBaka", id)
 	}
-	if id := svc.resolveID(ctx, unknown, mu); id != "" || mu.calls.Load() != 0 {
-		t.Fatalf("resolved %q with %d tracker calls, want none in aggressive mode", id, mu.calls.Load())
+	if id := svc.resolveID(ctx, unknown, mu); id != "" || mu.shared() != 0 {
+		t.Fatalf("resolved %q with %d tracker calls, want none in aggressive mode", id, mu.shared())
 	}
 	if err := svc.SetSetting(ctx, SettingMangaBakaAggressive, "false"); err != nil {
 		t.Fatal(err)
 	}
 	_, other := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "6", TitleRomaji: "Also not in the dump"}, 1, 0)
-	if svc.resolveID(ctx, other, mu); mu.calls.Load() == 0 {
+	if svc.resolveID(ctx, other, mu); mu.shared() == 0 {
 		t.Fatal("not aggressive, a title MangaBaka lacks must fall back to a title search")
 	}
-}
-
-// spyProvider counts calls that would reach a tracker's API for shared data.
-type spyProvider struct {
-	*fakeProvider
-	calls atomic.Int32
-}
-
-func (p *spyProvider) Get(ctx context.Context, id string) (catalog.Manga, []catalog.Relation, error) {
-	p.calls.Add(1)
-	return p.fakeProvider.Get(ctx, id)
-}
-func (p *spyProvider) Search(ctx context.Context, q string, n int, f catalog.SearchFilter) ([]catalog.Manga, bool, error) {
-	p.calls.Add(1)
-	return p.fakeProvider.Search(ctx, q, n, f)
-}
-func (p *spyProvider) Related(ctx context.Context, id string, n int) ([]catalog.Manga, []catalog.Manga, error) {
-	p.calls.Add(1)
-	return p.fakeProvider.Related(ctx, id, n)
-}
-func (p *spyProvider) Trending(ctx context.Context, n int) ([]catalog.Manga, error) {
-	p.calls.Add(1)
-	return p.fakeProvider.Trending(ctx, n)
 }
 
 func TestMangaBakaMergesListingsOfOneWork(t *testing.T) {
@@ -188,10 +164,10 @@ func TestAggressiveRelatedAsksTrackersOnlyOnRequest(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
 	useMangaBaka(t, svc, ctx, anthology+abyss)
-	anilist, kitsu := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}, &spyProvider{fakeProvider: newFake(catalog.KitsuProvider)}
+	anilist, kitsu := newFake(catalog.AniListProvider), newFake(catalog.KitsuProvider)
 	kitsu.search = []catalog.Manga{{Provider: catalog.KitsuProvider, ProviderID: "77", TitleRomaji: "Kitsu pick"}}
 	svc.catalog.providers[catalog.AniListProvider], svc.catalog.providers[catalog.KitsuProvider] = anilist, kitsu
-	svc.catalog.providers[catalog.MangaUpdatesProvider] = &spyProvider{fakeProvider: newFake(catalog.MangaUpdatesProvider)}
+	svc.catalog.providers[catalog.MangaUpdatesProvider] = newFake(catalog.MangaUpdatesProvider)
 	_, work := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "86551", TitleRomaji: "Made in Abyss"}, 1, 0)
 	svc.mbLink(ctx, []catalog.Manga{work})
 	if _, _, fetch, _ := svc.RelatedManga(ctx, work.ID, 24); fetch.Relations != nil || fetch.Recommendations != nil {
@@ -207,15 +183,15 @@ func TestAggressiveRelatedAsksTrackersOnlyOnRequest(t *testing.T) {
 	if !slices.Equal(rels[0].Origins(), []string{catalog.MangaBakaProvider}) {
 		t.Fatalf("relation origins = %v, want the local copy", rels[0].Origins())
 	}
-	if anilist.calls.Load()+kitsu.calls.Load() != 0 || len(fetch.Relations) != 2 || len(fetch.Recommendations) != 2 {
-		t.Fatalf("%d tracker calls, fetch %v; want none and both trackers offered", anilist.calls.Load()+kitsu.calls.Load(), fetch)
+	if anilist.shared()+kitsu.shared() != 0 || len(fetch.Relations) != 2 || len(fetch.Recommendations) != 2 {
+		t.Fatalf("%d tracker calls, fetch %v; want none and both trackers offered", anilist.shared()+kitsu.shared(), fetch)
 	}
-	if err := svc.FetchRelated(ctx, work.ID, catalog.KitsuProvider, true); err != nil || kitsu.calls.Load() != 1 {
-		t.Fatalf("fetch = %v with %d calls", err, kitsu.calls.Load())
+	if err := svc.FetchRelated(ctx, work.ID, catalog.KitsuProvider, true); err != nil || kitsu.shared() != 1 {
+		t.Fatalf("fetch = %v with %d calls", err, kitsu.shared())
 	}
 	_, recs, fetch, _ = svc.RelatedManga(ctx, work.ID, 24)
-	if len(recs) != 1 || recs[0].ProviderID != "77" || !slices.Equal(recs[0].Origins(), []string{catalog.KitsuProvider}) || kitsu.calls.Load() != 1 {
-		t.Fatalf("after fetch recs = %+v, %d calls", recs, kitsu.calls.Load())
+	if len(recs) != 1 || recs[0].ProviderID != "77" || !slices.Equal(recs[0].Origins(), []string{catalog.KitsuProvider}) || kitsu.shared() != 1 {
+		t.Fatalf("after fetch recs = %+v, %d calls", recs, kitsu.shared())
 	}
 	if len(fetch.Recommendations) != 1 || len(fetch.Relations) != 2 {
 		t.Fatalf("after fetching recommendations, fetch = %v; want Kitsu still offered for relations", fetch)
@@ -224,8 +200,8 @@ func TestAggressiveRelatedAsksTrackersOnlyOnRequest(t *testing.T) {
 	if err := svc.SetSetting(ctx, SettingMangaBakaAggressive, "false"); err != nil {
 		t.Fatal(err)
 	}
-	if rels, _, fetch, _ = svc.RelatedManga(ctx, work.ID, 24); len(rels) != 1 || fetch.Relations != nil || fetch.Recommendations != nil || anilist.calls.Load() != 1 {
-		t.Fatalf("not aggressive: rels %+v, fetch %v, %d anilist calls", rels, fetch, anilist.calls.Load())
+	if rels, _, fetch, _ = svc.RelatedManga(ctx, work.ID, 24); len(rels) != 1 || fetch.Relations != nil || fetch.Recommendations != nil || anilist.shared() != 1 {
+		t.Fatalf("not aggressive: rels %+v, fetch %v, %d anilist calls", rels, fetch, anilist.shared())
 	}
 }
 
@@ -233,24 +209,24 @@ func TestAggressiveSuggestionsComeFromMangaBakaUntilFetched(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
 	useMangaBaka(t, svc, ctx, anthology+abyss)
-	al := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	al := newFake(catalog.AniListProvider)
 	al.entries["86551"] = catalog.Entry{Status: "CURRENT"}
 	svc.catalog.providers[catalog.AniListProvider] = al
 	connect(t, svc, ctx, catalog.AniListProvider, time.Now())
 
 	got, fetchable, ok := svc.ProviderSuggestions(ctx, catalog.AniListProvider, false)
-	if !ok || len(got) != 1 || got[0].ProviderID != "113956" || !fetchable || al.calls.Load() != 0 {
-		t.Fatalf("suggestions %+v, fetchable %v, %d calls; want MangaBaka's anthology and no calls", got, fetchable, al.calls.Load())
+	if !ok || len(got) != 1 || got[0].ProviderID != "113956" || !fetchable || al.shared() != 0 {
+		t.Fatalf("suggestions %+v, fetchable %v, %d calls; want MangaBaka's anthology and no calls", got, fetchable, al.shared())
 	}
-	if _, fetchable, _ = svc.ProviderSuggestions(ctx, catalog.AniListProvider, true); al.calls.Load() != 1 || fetchable {
-		t.Fatalf("fetch made %d calls, fetchable %v", al.calls.Load(), fetchable)
+	if _, fetchable, _ = svc.ProviderSuggestions(ctx, catalog.AniListProvider, true); al.shared() != 1 || fetchable {
+		t.Fatalf("fetch made %d calls, fetchable %v", al.shared(), fetchable)
 	}
 }
 
 func TestCatalogRefreshUsesMangaBaka(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	useMangaBaka(t, svc, ctx, anthology)
-	al := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	al := newFake(catalog.AniListProvider)
 	al.works["113956"] = catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "113956", Status: "RELEASING"}
 	svc.catalog.providers[catalog.AniListProvider] = al
 	_, work := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.AniListProvider, ProviderID: "113956", Status: "RELEASING", CoverImage: "https://s4.anilist.co/a.jpg"}, 1, 0)
@@ -259,14 +235,14 @@ func TestCatalogRefreshUsesMangaBaka(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := svc.catalog.GetManga(ctx, work.ID)
-	if got.Status != "FINISHED" || got.Chapters == nil || *got.Chapters != 40 || !strings.HasPrefix(got.CoverImage, "https://cdn.mangabaka.dev/") || al.calls.Load() != 0 {
-		t.Fatalf("refreshed %+v with %d calls, want MangaBaka's status, count and cover, no calls", got, al.calls.Load())
+	if got.Status != "FINISHED" || got.Chapters == nil || *got.Chapters != 40 || !strings.HasPrefix(got.CoverImage, "https://cdn.mangabaka.dev/") || al.shared() != 0 {
+		t.Fatalf("refreshed %+v with %d calls, want MangaBaka's status, count and cover, no calls", got, al.shared())
 	}
 	if err := svc.SetSetting(ctx, SettingMangaBakaAggressive, "false"); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.refreshWork(ctx, got); err != nil || al.calls.Load() != 1 {
-		t.Fatalf("stale MangaBaka data with aggressive off made %d calls, %v; want the tracker asked", al.calls.Load(), err)
+	if err := svc.refreshWork(ctx, got); err != nil || al.shared() != 1 {
+		t.Fatalf("stale MangaBaka data with aggressive off made %d calls, %v; want the tracker asked", al.shared(), err)
 	}
 }
 
@@ -274,7 +250,7 @@ func TestMangaBakaIsALocalMetadataSource(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
 	useMangaBaka(t, svc, ctx, strings.Replace(anthology, `"total_chapters":"40"`, `"total_chapters":"40","genres":["Sci Fi"],"tags":["Anthology","Webtoons"]`, 1)+abyss)
-	al := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	al := newFake(catalog.AniListProvider)
 	svc.catalog.providers[catalog.AniListProvider] = al
 	if err := svc.catalog.repo.ReplaceContentTags(ctx, catalog.AniListProvider, []catalog.ContentTag{{Name: "Sci-Fi", Kind: "genre"}, {Name: "Anthology", Kind: "tag"}}); err != nil {
 		t.Fatal(err)
@@ -296,8 +272,8 @@ func TestMangaBakaIsALocalMetadataSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, _ := svc.titleWork(ctx, title.ID)
-	if svc.confirmedID(ctx, m, catalog.AniListProvider) != "113956" || al.calls.Load() != 0 {
-		t.Fatalf("added work links anilist %q with %d calls", svc.confirmedID(ctx, m, catalog.AniListProvider), al.calls.Load())
+	if svc.confirmedID(ctx, m, catalog.AniListProvider) != "113956" || al.shared() != 0 {
+		t.Fatalf("added work links anilist %q with %d calls", svc.confirmedID(ctx, m, catalog.AniListProvider), al.shared())
 	}
 }
 
@@ -305,12 +281,12 @@ func TestAggressiveBrowseStaysOnMangaBaka(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
 	useMangaBaka(t, svc, ctx, anthology)
-	al := &spyProvider{fakeProvider: newFake(catalog.AniListProvider)}
+	al := newFake(catalog.AniListProvider)
 	svc.catalog.providers[catalog.AniListProvider] = al
-	if found, _, err := svc.SearchManga(ctx, catalog.AniListProvider, "", 10, catalog.SearchFilter{}); err != nil || len(found) != 1 || al.calls.Load() != 0 {
-		t.Fatalf("browse = %+v, %v with %d AniList calls", found, err, al.calls.Load())
+	if found, _, err := svc.SearchManga(ctx, catalog.AniListProvider, "", 10, catalog.SearchFilter{}); err != nil || len(found) != 1 || al.shared() != 0 {
+		t.Fatalf("browse = %+v, %v with %d AniList calls", found, err, al.shared())
 	}
-	if _, _, _ = svc.SearchManga(ctx, catalog.AniListProvider, "abyss", 10, catalog.SearchFilter{}); al.calls.Load() != 1 {
+	if _, _, _ = svc.SearchManga(ctx, catalog.AniListProvider, "abyss", 10, catalog.SearchFilter{}); al.shared() != 1 {
 		t.Fatal("a typed search should still go to the picked tracker")
 	}
 }

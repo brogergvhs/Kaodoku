@@ -5,8 +5,8 @@ import UIKit
 /// warmth and a dim, optionally confined to white/near-white pixels so colored
 /// pages keep their hues.
 struct ComfortParams: Equatable {
-  var warmth: Double // 0…1, amber tint strength
-  var dim: Double // 0…1, darkening
+  var warmth: Double // 0...1, amber tint strength
+  var dim: Double // 0...1, darkening
   var whiteOnly: Bool // confine the effect to white/near-white pixels
 
   var isIdentity: Bool {

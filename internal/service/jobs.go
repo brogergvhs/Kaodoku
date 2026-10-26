@@ -828,8 +828,8 @@ func ownsTitle(userID, addedBy int64) bool {
 }
 
 // localTrackerState computes the user's progress and list status for a title:
-// nothing read → PLANNING; everything read AND the series finished releasing
-// → COMPLETED (a caught-up ongoing series stays CURRENT); otherwise CURRENT.
+// nothing read -> PLANNING; everything read AND the series finished releasing
+// -> COMPLETED (a caught-up ongoing series stays CURRENT); otherwise CURRENT.
 // Status keys off the read count, not the numeric progress: sub-chapters like
 // 0.1–0.3 carry progress 0 on trackers but still mean the user is reading.
 func (s *JobService) localTrackerState(ctx context.Context, userID, titleID int64) (int, string, error) {

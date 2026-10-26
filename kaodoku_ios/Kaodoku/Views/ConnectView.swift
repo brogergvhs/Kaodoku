@@ -156,8 +156,8 @@ struct ServerEditSheet: View {
             TextField("Home mini", text: $server.name)
           }
           Section("Addresses") {
-            addressRow("Local (http://192.168…)", text: $local, check: $localCheck)
-            addressRow("Public (https://…)", text: $external, check: $externalCheck)
+            addressRow("Local (http://192.168...)", text: $local, check: $localCheck)
+            addressRow("Public (https://...)", text: $external, check: $externalCheck)
           }
           Section("Use") {
             Picker("Use", selection: $server.mode) {
@@ -184,7 +184,7 @@ struct ServerEditSheet: View {
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {
-          Button(verifying ? "Checking…" : "Save") { save() }.disabled(verifying)
+          Button(verifying ? "Checking..." : "Save") { save() }.disabled(verifying)
         }
       }
       .onAppear {

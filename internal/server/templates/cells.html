@@ -3,7 +3,7 @@
 {{define "addToCollection"}}
 <div class="grid gap-4">
   <form class="flex gap-2" hx-post="/ui/library/{{.TitleID}}/collections/add" hx-target="#toast" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful){add_to_collection_modal.close()}">
-    <input class="input input-sm w-full" name="name" required placeholder="New collection name…">
+    <input class="input input-sm w-full" name="name" required placeholder="New collection name...">
     <button class="btn btn-sm btn-primary shrink-0">Create &amp; add</button>
   </form>
   {{if .Custom}}
@@ -156,7 +156,7 @@
     </div>
     <form id="kotatsu-filters" class="mt-3 grid gap-2" hx-get="/ui/sources/kotatsu/list" hx-target="#kotatsu-browse" hx-swap="outerHTML"
       hx-trigger="submit, change target:select, keyup changed delay:300ms from:input[name='q']">
-      <input class="input input-sm w-full" name="q" value="{{.Filter.Q}}" placeholder="Search by name, id, or domain…">
+      <input class="input input-sm w-full" name="q" value="{{.Filter.Q}}" placeholder="Search by name, id, or domain...">
       <div class="grid grid-cols-4 gap-2">
         <select class="select select-sm" name="lang">
           <option value="">Any language</option>
@@ -781,7 +781,7 @@
 
   {{if eq .Tab "volumes"}}
   {{if .Attaching}}
-  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Attaching volumes…</div>
+  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Attaching volumes...</div>
   {{end}}
   {{if .Volumes}}
   <div class="divide-y divide-line/25 rounded-xl bg-base-100 px-4">
@@ -819,7 +819,7 @@
   <form class="mb-2 flex items-center gap-2"
     hx-get="/ui/library/{{.Title.ID}}/chapters" hx-target="#chapters-table" hx-swap="outerHTML"
     hx-trigger="change, keyup changed delay:300ms from:input[name='q']">
-    <input class="input input-sm w-full" name="q" placeholder="Filter chapters…">
+    <input class="input input-sm w-full" name="q" placeholder="Filter chapters...">
     <select class="select select-sm shrink-0" name="order" aria-label="Sort chapters">
       <option value="number-asc">Oldest first</option>
       <option value="number-desc">Newest first</option>
@@ -835,14 +835,14 @@
   <dialog id="chapter_rename_modal" class="modal">
     <div class="modal-box max-w-sm">
       <h3 class="text-lg font-bold mb-3">Rename chapter</h3>
-      <div id="chapter-rename-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+      <div id="chapter-rename-body"><p class="text-sm text-base-content/60">Loading...</p></div>
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>
   <dialog id="bulk_rename_modal" class="modal">
     <div class="modal-box max-w-2xl">
       <h3 class="text-lg font-bold mb-3">Bulk rename chapters</h3>
-      <div id="bulk-rename-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+      <div id="bulk-rename-body"><p class="text-sm text-base-content/60">Loading...</p></div>
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>
@@ -1026,7 +1026,7 @@
       <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
     </div>
     <select class="select select-sm w-full" aria-label="Tracker" onchange="trackerConnectPick(this)">
-      <option value="" selected disabled>Pick a tracker…</option>
+      <option value="" selected disabled>Pick a tracker...</option>
       {{range .Cards}}{{if and (not .Account) .Login}}<option value="{{.Provider}}"{{with .Outage}} disabled title="Temporarily unavailable: {{.}}"{{end}}>{{.Label}}{{if .Outage}} (unavailable){{end}}</option>{{end}}{{end}}
     </select>
     {{range .Cards}}{{if and (not .Account) .Login (not .Outage)}}
@@ -1036,7 +1036,7 @@
       <a class="btn btn-sm btn-primary" href="/trackers/{{.Provider}}/connect">Continue to {{.Label}}</a>
       {{else if eq .Login "token"}}
       <form class="grid gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
-        <input class="input input-sm w-full" type="password" name="password" placeholder="mb-…" aria-label="{{.Label}} personal access token" autocomplete="off" required>
+        <input class="input input-sm w-full" type="password" name="password" placeholder="mb-..." aria-label="{{.Label}} personal access token" autocomplete="off" required>
         <span class="text-xs text-base-content/50">Create a personal access token with library access in your {{.Label}} account settings.</span>
         <button class="btn btn-sm btn-primary">Connect</button>
       </form>
@@ -1056,7 +1056,7 @@
 {{end}}
 <dialog id="tracker_prefs_modal" class="modal">
   <div class="modal-box max-w-lg">
-    <div id="tracker-prefs-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+    <div id="tracker-prefs-body"><p class="text-sm text-base-content/60">Loading...</p></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
@@ -1098,7 +1098,7 @@
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2">
   {{if .Titles}}
-  <input class="input input-sm w-full shrink-0" aria-label="Filter titles" placeholder="Filter titles…" data-tag-filter form="">
+  <input class="input input-sm w-full shrink-0" aria-label="Filter titles" placeholder="Filter titles..." data-tag-filter form="">
   <div class="min-h-0 flex-1 divide-y divide-line/25 overflow-y-auto rounded-lg border border-line/40">
     {{range .Titles}}
     <details class="group" data-unlinked data-filter-row>
@@ -1308,7 +1308,7 @@
   </div>
   <div class="flex shrink-0 items-center gap-3">
     <label class="flex items-center gap-2 text-sm tip" data-tip="Re-import even if the database didn't change"><input type="checkbox" class="checkbox checkbox-sm" name="force" value="1" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>Force</label>
-    <button class="btn btn-sm" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>{{if .Running}}Refreshing…{{else}}Refresh now{{end}}</button>
+    <button class="btn btn-sm" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>{{if .Running}}Refreshing...{{else}}Refresh now{{end}}</button>
   </div>
 </div>
 {{end}}

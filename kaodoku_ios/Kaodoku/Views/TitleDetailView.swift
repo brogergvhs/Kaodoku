@@ -210,7 +210,7 @@ struct TitleDetailView: View {
       HStack(spacing: 8) {
         if !a.active.isEmpty {
           ProgressView().controlSize(.small)
-          Text("\(a.active)…").font(.subheadline)
+          Text("\(a.active)...").font(.subheadline)
         }
         if !a.queued.isEmpty {
           Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
@@ -285,7 +285,7 @@ struct TitleDetailView: View {
         Button(volumes ? "All volumes" : "All chapters") { downloadToDevice(p) { _ in true } }
         Button("Unread only") { downloadToDevice(p) { !$0.completed } }
         if !volumes {
-          Button("Range…") { showRange = true }
+          Button("Range...") { showRange = true }
         }
       } label: {
         Label("Download to device", systemImage: "arrow.down.to.line")
@@ -300,7 +300,7 @@ struct TitleDetailView: View {
             note = "Device downloads removed"
           }
           if !volumes {
-            Button("Range…") { showRemoveRange = true }
+            Button("Range...") { showRemoveRange = true }
           }
         } label: {
           Label("Remove device downloads", systemImage: "trash")
@@ -324,17 +324,17 @@ struct TitleDetailView: View {
         Button("Scan files", systemImage: "internaldrive") {
           enqueue("scan_downloads", done: "Scan queued")
         }
-        Button("Sources…", systemImage: "link") { showSources = true }
+        Button("Sources...", systemImage: "link") { showSources = true }
         if trackersConnected {
           Button("Sync trackers", systemImage: "arrow.triangle.2.circlepath") {
             post("/api/v1/trackers/sync", body: ["title_id": titleID], done: "Trackers synced")
           }
         }
         if p.title.linked {
-          Button("Title settings…", systemImage: "gearshape") { showSettings = true }
+          Button("Title settings...", systemImage: "gearshape") { showSettings = true }
         }
-        Button("Add to collection…", systemImage: "square.stack.3d.up") { showCollections = true }
-        Button("Remove title…", systemImage: "trash", role: .destructive) { showRemove = true }
+        Button("Add to collection...", systemImage: "square.stack.3d.up") { showCollections = true }
+        Button("Remove title...", systemImage: "trash", role: .destructive) { showRemove = true }
       }
     } label: {
       toolbarIcon("ellipsis.circle").foregroundStyle(.tint)
@@ -378,7 +378,7 @@ struct TitleDetailView: View {
           note = "Not enough device storage for \(name)"
           return
         }
-        note = "Downloading \(i + 1)/\(todo.count)…"
+        note = "Downloading \(i + 1)/\(todo.count)..."
         app.store.markActive(ch.id, volume: volumes)
         let store = app.store
         do {
@@ -484,7 +484,7 @@ struct TitleDetailView: View {
   }
 }
 
-/// RangeSheet mirrors the web bulk from/to dropdowns (download, delete, …).
+/// RangeSheet mirrors the web bulk from/to dropdowns (download, delete, ...).
 struct RangeSheet: View {
   @Environment(\.dismiss) private var dismiss
   let title: String

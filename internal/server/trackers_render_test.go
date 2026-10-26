@@ -142,7 +142,7 @@ func TestTrackerTemplatesRender(t *testing.T) {
 	if !strings.Contains(queued, "Search queued") || strings.Contains(queued, "loading-spinner") || !strings.Contains(queued, `hx-get="/p"`) {
 		t.Fatalf("queued source search:\n%s", queued)
 	}
-	expect(render("matches", matchView{DomID: "s", PollURL: "/p", Active: true}), "Searching sources…", "loading-spinner")
+	expect(render("matches", matchView{DomID: "s", PollURL: "/p", Active: true}), "Searching sources...", "loading-spinner")
 
 	banner := render("titleBanner", map[string]string{"Image": "", "Cover": "cover.jpg"})
 	expect(banner, `src="cover.jpg"`, "object-cover")
