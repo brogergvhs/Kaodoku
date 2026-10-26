@@ -1252,9 +1252,8 @@ func (s *JobService) GetVolume(ctx context.Context, id int64) (library.Volume, e
 	return s.lib.GetVolume(ctx, id)
 }
 
-// MarkPageReadAt marks a page read at an explicit time (offline replay).
-func (s *JobService) MarkPageReadAt(ctx context.Context, chapterID int64, page, totalPages int, readAt string) (library.ChapterReadStatus, error) {
-	return s.lib.MarkPageReadAt(ctx, chapterID, page, totalPages, readAt)
+func (s *JobService) ApplyReadMarks(ctx context.Context, marks []library.ReadMark) error {
+	return s.lib.ApplyReadMarks(ctx, marks)
 }
 
 // ProgressSince returns chapter and volume progress touched after since.

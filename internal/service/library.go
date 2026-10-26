@@ -224,9 +224,8 @@ func (s *LibraryService) MarkPageRead(ctx context.Context, chapterID int64, page
 	return s.repo.MarkPageRead(ctx, chapterID, page, totalPages)
 }
 
-// MarkPageReadAt marks a page read at an explicit time (offline replay).
-func (s *LibraryService) MarkPageReadAt(ctx context.Context, chapterID int64, page, totalPages int, readAt string) (library.ChapterReadStatus, error) {
-	return s.repo.MarkPageReadAt(ctx, chapterID, page, totalPages, readAt)
+func (s *LibraryService) ApplyReadMarks(ctx context.Context, marks []library.ReadMark) error {
+	return s.repo.ApplyReadMarks(ctx, marks)
 }
 
 // ChaptersReadSince returns chapter progress touched after since.

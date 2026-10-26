@@ -848,21 +848,15 @@ func (r *Repository) TitleReadStatuses(ctx context.Context, titleID int64) ([]Ch
 
 // MarkPageRead records one completed page and updates the chapter read summary.
 func (r *Repository) MarkPageRead(ctx context.Context, chapterID int64, page, totalPages int) (ChapterReadStatus, error) {
-	return r.MarkPageReadAt(ctx, chapterID, page, totalPages, "")
-}
-
-// MarkPageReadAt marks a page read with an explicit read_at ("" = now) so
-// offline reads replay with their original timestamps.
-func (r *Repository) MarkPageReadAt(ctx context.Context, chapterID int64, page, totalPages int, readAt string) (ChapterReadStatus, error) {
 	if page <= 0 {
 		return ChapterReadStatus{}, fmt.Errorf("page must be positive")
 	}
 	return retryBusy(ctx, func() (ChapterReadStatus, error) {
-		return r.markPageRead(ctx, chapterID, page, totalPages, readAt)
+		return r.markPageRead(ctx, chapterID, page, totalPages)
 	})
 }
 
-func (r *Repository) markPageRead(ctx context.Context, chapterID int64, page, totalPages int, readAt string) (ChapterReadStatus, error) {
+func (r *Repository) markPageRead(ctx context.Context, chapterID int64, page, totalPages int) (ChapterReadStatus, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ChapterReadStatus{}, fmt.Errorf("begin read progress: %w", err)
@@ -872,18 +866,27 @@ func (r *Repository) markPageRead(ctx context.Context, chapterID int64, page, to
 			_ = tx.Rollback()
 		}
 	}()
+	if err = r.markPageTx(ctx, tx, chapterID, page, totalPages, ""); err != nil {
+		return ChapterReadStatus{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return ChapterReadStatus{}, fmt.Errorf("commit read progress: %w", err)
+	}
+	return r.GetChapterReadStatus(ctx, chapterID)
+}
 
+func (r *Repository) markPageTx(ctx context.Context, tx *sql.Tx, chapterID int64, page, totalPages int, readAt string) error {
 	var downloadPages int
-	if err = tx.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 		SELECT COALESCE(d.pages, 0)
 		FROM chapters c
 		LEFT JOIN downloads d ON d.chapter_id = c.id
 		WHERE c.id = ?
 	`, chapterID).Scan(&downloadPages); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ChapterReadStatus{}, fmt.Errorf("chapter %d not found", chapterID)
+			return fmt.Errorf("chapter %d not found", chapterID)
 		}
-		return ChapterReadStatus{}, fmt.Errorf("load chapter page count: %w", err)
+		return fmt.Errorf("load chapter page count: %w", err)
 	}
 	totalPagesProvided := totalPages > 0
 	if !totalPagesProvided {
@@ -898,16 +901,48 @@ func (r *Repository) markPageRead(ctx context.Context, chapterID int64, page, to
 		VALUES (?, ?, ?, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP))
 	`, auth.UserID(ctx), chapterID, page, readAt)
 	if err != nil {
-		return ChapterReadStatus{}, fmt.Errorf("mark page read: %w", err)
+		return fmt.Errorf("mark page read: %w", err)
 	}
 	inserted, _ := res.RowsAffected()
-	if err = r.updateReadProgress(ctx, tx, chapterID, totalPages, false, inserted == 0); err != nil {
-		return ChapterReadStatus{}, err
+	return r.updateReadProgress(ctx, tx, chapterID, totalPages, false, inserted == 0)
+}
+
+type ReadMark struct {
+	ChapterID  int64
+	VolumeID   int64
+	Page       int
+	TotalPages int
+	ReadAt     string
+}
+
+func (r *Repository) ApplyReadMarks(ctx context.Context, marks []ReadMark) error {
+	_, err := retryBusy(ctx, func() (struct{}, error) {
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return struct{}{}, fmt.Errorf("begin read marks: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		for _, m := range marks {
+			if err := r.applyReadMark(ctx, tx, m); err != nil {
+				return struct{}{}, err
+			}
+		}
+		return struct{}{}, tx.Commit()
+	})
+	return err
+}
+
+func (r *Repository) applyReadMark(ctx context.Context, tx *sql.Tx, m ReadMark) error {
+	if m.ChapterID > 0 {
+		return r.markPageTx(ctx, tx, m.ChapterID, m.Page, m.TotalPages, m.ReadAt)
 	}
-	if err = tx.Commit(); err != nil {
-		return ChapterReadStatus{}, fmt.Errorf("commit read progress: %w", err)
+	total := m.TotalPages
+	if total <= 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT pages FROM volumes WHERE id = ?`, m.VolumeID).Scan(&total); err != nil {
+			return err
+		}
 	}
-	return r.GetChapterReadStatus(ctx, chapterID)
+	return upsertVolumePage(ctx, tx.ExecContext, m.VolumeID, m.Page, total)
 }
 
 // MarkChapterRead marks every known page in a chapter and completes it.

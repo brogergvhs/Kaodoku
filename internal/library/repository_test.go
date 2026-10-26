@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -792,5 +793,61 @@ func TestUpsertChaptersSurvivesLabelShift(t *testing.T) {
 	}
 	if url("1") != "https://x.test/b" || url("2") != "https://x.test/c" {
 		t.Fatalf("urls after shift: 1=%q 2=%q", url("1"), url("2"))
+	}
+}
+
+func TestApplyReadMarksMatchesPerPageMarks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	title, err := repo.AddTitle(ctx, AddTitleParams{SourceURL: "https://x.test/m", DisplayTitle: "M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertChapters(ctx, title.ID, []chapters.Chapter{
+		{Chapter: providers.Chapter{URL: "https://x.test/c1", Label: "1", NumMain: 1}},
+		{Chapter: providers.Chapter{URL: "https://x.test/c2", Label: "2", NumMain: 2}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ch1, _ := repo.GetChapterByLabel(ctx, title.ID, "1")
+	ch2, _ := repo.GetChapterByLabel(ctx, title.ID, "2")
+	for _, ch := range []Chapter{ch1, ch2} {
+		if err := repo.MarkDownloadCompleted(ctx, ch.ID, "c.cbz", 100, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	row := func(id int64) string {
+		var last, read, total, completed, manual int
+		_ = db.QueryRowContext(ctx, `SELECT last_page, read_pages, total_pages, completed, manual FROM chapter_read_progress WHERE chapter_id = ?`, id).
+			Scan(&last, &read, &total, &completed, &manual)
+		return fmt.Sprint(last, read, total, completed, manual)
+	}
+	if err := repo.ApplyReadMarks(ctx, []ReadMark{{ChapterID: ch1.ID, Page: 1, TotalPages: 3}, {ChapterID: 999999, Page: 1, TotalPages: 3}}); err == nil || row(ch1.ID) != "0 0 0 0 0" {
+		t.Fatalf("failed batch: err=%v, progress=%s, want an error and nothing written", err, row(ch1.ID))
+	}
+	if err := repo.ApplyReadMarks(ctx, []ReadMark{
+		{ChapterID: ch1.ID, Page: 1, TotalPages: 3},
+		{ChapterID: ch1.ID, Page: 2, TotalPages: 3},
+		{ChapterID: ch1.ID, Page: 3, TotalPages: 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for page := 1; page <= 3; page++ {
+		if _, err := repo.MarkPageRead(ctx, ch2.ID, page, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := row(ch1.ID), row(ch2.ID); got != want || want != "3 3 3 1 0" {
+		t.Fatalf("batched progress = %s, per-page progress = %s, want 3 3 3 1 0", got, want)
 	}
 }
