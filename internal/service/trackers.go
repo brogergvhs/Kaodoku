@@ -533,7 +533,7 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 			remoteFav[id] = true
 		}
 	}
-	failed := map[int64]bool{}
+	failed, writes := map[int64]bool{}, map[string]*catalog.EntryUpdate{}
 	handle := progress.Register(p.Name() + " sync")
 	handle.SetTotal(len(tracked))
 	defer handle.MarkDone()
@@ -579,10 +579,13 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 				continue
 			}
 		}
-		if err := s.pushEntry(ctx, actx, p, pid, user.ID, titleID, e, listed, push, false, score); err != nil {
+		if sent, err := s.writeEntry(ctx, actx, p, pid, user.ID, titleID, e, listed, push, false, score); err != nil {
 			errs, failed[titleID] = append(errs, fmt.Errorf("push %s: %w", pid, err)), true
+		} else {
+			writes[pid] = &sent
 		}
 	}
+	s.patchList(ctx, user.ID, p.Name(), writes, tracked)
 	for _, titleID := range tracked {
 		if st, ok := states[titleID]; ok && !failed[titleID] {
 			s.settle(ctx, user.ID, titleID, p.Name(), st, settled...)
@@ -719,6 +722,7 @@ func applyEntry(e catalog.Entry, u catalog.EntryUpdate) catalog.Entry {
 	if u.Progress >= 0 {
 		e.Progress = u.Progress
 	}
+	e.Status = cmp.Or(u.Status, e.Status)
 	if u.Score != 0 {
 		e.Score = max(u.Score, 0)
 	}
@@ -778,21 +782,30 @@ func entryDiff(local catalog.EntryUpdate, remote catalog.Entry, exact bool) cata
 	return out
 }
 
-// pushEntry raises a tracker's progress/status and fills empty dates when it syncs progressively, and sends score unless 0;
-// exact also lowers progress after an explicit unread.
-func (s *JobService) pushEntry(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64, remote catalog.Entry, found, progress, exact bool, score int) (err error) {
-	sent := catalog.EntryUpdate{Progress: -1}
+// pushEntry writes one title and patches the stored list with it.
+func (s *JobService) pushEntry(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64, remote catalog.Entry, found, progress, exact bool, score int) error {
+	sent, err := s.writeEntry(ctx, actx, p, id, userID, titleID, remote, found, progress, exact, score)
+	if err == nil {
+		s.patchList(ctx, userID, p.Name(), map[string]*catalog.EntryUpdate{id: &sent}, map[string]int64{id: titleID})
+	}
+	return err
+}
+
+// writeEntry raises a tracker's progress/status and fills empty dates when it syncs progressively, and sends score
+// unless 0; exact also lowers progress after an explicit unread. It returns what it sent.
+func (s *JobService) writeEntry(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64, remote catalog.Entry, found, progress, exact bool, score int) (sent catalog.EntryUpdate, err error) {
+	sent = catalog.EntryUpdate{Progress: -1}
 	defer func() {
 		if err == nil {
 			s.keepRemote(ctx, userID, titleID, p.Name(), applyEntry(remote, sent), found && sent.Status == "")
 		}
 	}()
 	if !progress && score == 0 {
-		return nil
+		return sent, nil
 	}
 	local, err := s.localUpdate(ctx, p, userID, titleID)
 	if err != nil {
-		return err
+		return sent, err
 	}
 	u := local
 	if found {
@@ -803,16 +816,16 @@ func (s *JobService) pushEntry(ctx, actx context.Context, p catalog.Provider, id
 	}
 	u.Score = score
 	if u.Empty() {
-		return nil
+		return sent, nil
 	}
 	if err := p.SaveEntry(actx, id, u); err != nil {
-		return err
+		return sent, err
 	}
 	sent = u
 	if score != 0 {
-		return s.setTrackerRating(ctx, userID, titleID, p.Name(), max(score, 0))
+		return sent, s.setTrackerRating(ctx, userID, titleID, p.Name(), max(score, 0))
 	}
-	return nil
+	return sent, nil
 }
 
 func (s *JobService) PushTrackers(ctx context.Context, userID, titleID int64) {
@@ -948,14 +961,21 @@ func (s *JobService) dropFromTrackers(ctx context.Context, userID int64, names [
 	ctx = catalog.WithReason(ctx, "Title removed")
 	go s.eachTracker(context.WithoutCancel(ctx), userID, names, func(actx context.Context, p catalog.Provider) error {
 		id := s.confirmedID(actx, m, p.Name())
-		switch {
-		case id == "":
+		if id == "" {
 			return nil
-		case remove:
-			return p.DeleteEntry(actx, id)
-		default:
-			return p.SaveEntry(actx, id, catalog.EntryUpdate{Progress: -1, Status: "DROPPED"})
 		}
+		var u *catalog.EntryUpdate
+		var err error
+		if remove {
+			err = p.DeleteEntry(actx, id)
+		} else {
+			u = &catalog.EntryUpdate{Progress: -1, Status: "DROPPED"}
+			err = p.SaveEntry(actx, id, *u)
+		}
+		if err == nil {
+			s.patchList(ctx, userID, p.Name(), map[string]*catalog.EntryUpdate{id: u}, nil)
+		}
+		return err
 	})
 }
 
@@ -1390,26 +1410,16 @@ type cachedList struct {
 	fetched time.Time
 }
 
-const listFresh = time.Hour
-
 func listKey(uid int64, provider string) string { return fmt.Sprintf("%d:%s", uid, provider) }
 
-// cachedEntries serves a user's list from memory or the database and downloads it only when there is none;
-// a copy older than listFresh is still served while a new one downloads in the background.
+// cachedEntries serves a user's list from memory or the database and downloads it only when there is none yet;
+// syncs replace the stored copy and Kaodoku's own writes patch it, so pages never download it again.
 func (s *JobService) cachedEntries(ctx context.Context, uid int64, provider string) ([]catalog.Entry, error) {
-	v, _ := s.listLocks.LoadOrStore(listKey(uid, provider), &sync.Mutex{})
-	lock := v.(*sync.Mutex)
 	if c, ok := s.cachedList(ctx, uid, provider); ok {
-		if time.Since(c.fetched) >= listFresh && lock.TryLock() {
-			go func() {
-				defer lock.Unlock()
-				bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
-				defer cancel()
-				_, _ = s.fetchList(bctx, uid, provider)
-			}()
-		}
 		return c.entries, nil
 	}
+	v, _ := s.listLocks.LoadOrStore(listKey(uid, provider), &sync.Mutex{})
+	lock := v.(*sync.Mutex)
 	lock.Lock()
 	defer lock.Unlock()
 	if c, ok := s.cachedList(ctx, uid, provider); ok {
@@ -1469,12 +1479,46 @@ func (s *JobService) fetchList(ctx context.Context, uid int64, provider string) 
 
 // storeList keeps a downloaded list in memory and in the database, so a restart does not download it again.
 func (s *JobService) storeList(ctx context.Context, uid int64, provider string, entries []catalog.Entry) {
-	now := time.Now()
-	s.keepList(listKey(uid, provider), cachedList{entries, now})
-	if data, err := json.Marshal(entries); err == nil {
-		_, _ = s.db.ExecContext(ctx, `UPDATE tracker_accounts SET list_json = ?, list_fetched_at = ? WHERE user_id = ? AND provider = ?`, data, database.FormatTime(now), uid, provider)
+	s.saveList(ctx, uid, provider, cachedList{entries, time.Now()})
+}
+
+func (s *JobService) saveList(ctx context.Context, uid int64, provider string, c cachedList) {
+	s.keepList(listKey(uid, provider), c)
+	if data, err := json.Marshal(c.entries); err == nil {
+		_, _ = s.db.ExecContext(ctx, `UPDATE tracker_accounts SET list_json = ?, list_fetched_at = ? WHERE user_id = ? AND provider = ?`, data, database.FormatTime(c.fetched), uid, provider)
 	}
 	s.trimLists(ctx)
+}
+
+// patchList applies writes Kaodoku made to the stored list, adding titles (by id in titles) that weren't listed;
+// a nil write removes the entry.
+func (s *JobService) patchList(ctx context.Context, uid int64, provider string, writes map[string]*catalog.EntryUpdate, titles map[string]int64) {
+	c, ok := s.cachedList(ctx, uid, provider)
+	if !ok {
+		return
+	}
+	entries, changed := slices.Clone(c.entries), false
+	for id, u := range writes {
+		if u != nil && u.Empty() {
+			continue
+		}
+		i := slices.IndexFunc(entries, func(e catalog.Entry) bool { return e.Manga.ProviderID == id })
+		switch {
+		case u == nil && i >= 0:
+			entries, changed = slices.Delete(entries, i, i+1), true
+		case u == nil:
+		case i >= 0:
+			entries[i], changed = applyEntry(entries[i], *u), true
+		default:
+			if m, ok := s.titleWork(ctx, titles[id]); ok {
+				m.Provider, m.ProviderID = provider, id
+				entries, changed = append(entries, applyEntry(catalog.Entry{Manga: m}, *u)), true
+			}
+		}
+	}
+	if changed {
+		s.saveList(ctx, uid, provider, cachedList{entries, c.fetched})
+	}
 }
 
 // ProviderSuggestions approximates a backend's own suggestions from community recommendations for the user's reading

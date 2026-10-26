@@ -724,7 +724,7 @@ func TestSuggestionsReuseStoredListsAndRecommendations(t *testing.T) {
 	}
 }
 
-func TestListCacheRefreshesInTheBackground(t *testing.T) {
+func TestStoredListFollowsWritesWithoutDownloads(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	ctx = asUser(svc, ctx, t)
 	kitsu := &recommendingProvider{fakeProvider: newFake(catalog.KitsuProvider)}
@@ -737,19 +737,32 @@ func TestListCacheRefreshesInTheBackground(t *testing.T) {
 	kitsu.mu.Lock()
 	delete(kitsu.entries, "1")
 	kitsu.mu.Unlock()
-	if got := svc.TrackerSuggestions(ctx, catalog.KitsuProvider); len(got) != 1 || kitsu.lists.Load() != 1 {
-		t.Fatal("a fresh list must be served from memory")
-	}
 	svc.listMu.Lock()
 	for k, c := range svc.listCache {
-		c.fetched = time.Now().Add(-listFresh)
+		c.fetched = time.Now().Add(-48 * time.Hour)
 		svc.listCache[k] = c
 	}
 	svc.listMu.Unlock()
-	if got := svc.TrackerSuggestions(ctx, catalog.KitsuProvider); len(got) != 1 {
-		t.Fatal("an aging list is still served right away")
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Pushed", Status: "RELEASING"}, 3, 1)
+	svc.PushTrackers(ctx, 1, titleID)
+	svc.FlushPushes(time.Second)
+	listed := func() map[string]catalog.Entry {
+		entries, _ := svc.cachedEntries(ctx, 1, catalog.KitsuProvider)
+		out := map[string]catalog.Entry{}
+		for _, e := range entries {
+			out[e.Manga.ProviderID] = e
+		}
+		return out
 	}
-	waitFor(t, func() bool { return len(svc.TrackerSuggestions(ctx, catalog.KitsuProvider)) == 0 }, "the background refresh should drop the removed entry")
+	if got := listed(); len(got) != 2 || got["9"].Progress != 1 || got["9"].Status != "CURRENT" || got["9"].Manga.TitleRomaji != "Pushed" || kitsu.lists.Load() != 1 {
+		t.Fatalf("stored list = %+v after %d downloads, want the old entry kept and the pushed one added", got, kitsu.lists.Load())
+	}
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := listed(); len(got) != 1 || got["9"].Progress != 1 || kitsu.lists.Load() != 2 {
+		t.Fatalf("after a full sync = %+v, %d downloads", got, kitsu.lists.Load())
+	}
 }
 
 func waitFor(t *testing.T, ok func() bool, msg string) {
