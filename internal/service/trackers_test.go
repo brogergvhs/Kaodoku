@@ -558,6 +558,18 @@ func TestPushesSettleSoSyncsStayQuiet(t *testing.T) {
 		t.Fatal(err)
 	}
 	kitsu.want(t, 0, 1, 1)
+	prefs := svc.TrackerAccounts(uctx, 1)[0].TrackerPrefs
+	prefs.Exclusive = true
+	if err := svc.SetTrackerPrefs(uctx, catalog.KitsuProvider, prefs); err != nil {
+		t.Fatal(err)
+	}
+	read(3)
+	kitsu.want(t, 0, 2, 2)
+	read(4)
+	kitsu.want(t, 0, 2, 3)
+	if got := kitsu.savesCopy(); got[2] != "9:4:" {
+		t.Fatalf("exclusive push = %q, want progress from the kept entry", got[2])
+	}
 }
 
 func TestLinkedTitleSyncsOnlyWhenAsked(t *testing.T) {

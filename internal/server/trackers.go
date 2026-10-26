@@ -265,7 +265,7 @@ func (u *webUI) trackerPrefsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := u.svc.SetTrackerPrefs(r.Context(), pathProvider(r), service.TrackerPrefs{
 		AutoLink: on("auto_link"), AutoProgressive: on("auto_progressive"), Relations: on("relations"), Recommendations: on("recommendations"),
-		RatingSync: r.FormValue("rating_sync"), Source: source,
+		RatingSync: r.FormValue("rating_sync"), Source: source, Exclusive: on("exclusive"),
 	}); err != nil {
 		u.fail(w, err)
 		return

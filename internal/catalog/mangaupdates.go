@@ -271,7 +271,7 @@ func (c *MangaUpdatesClient) ListEntries(ctx context.Context) ([]Entry, error) {
 				if m.ProviderID == "0" {
 					m = Manga{Provider: MangaUpdatesProvider, ProviderID: strconv.FormatInt(r.Record.Series.ID, 10), TitleRomaji: r.Record.Series.Title, IsAdult: true}
 				}
-				out = append(out, Entry{Manga: m, Progress: r.Record.Status.Chapter, Status: muStatus(list), Score: roundScore(r.Metadata.UserRating), ref: strconv.Itoa(list)})
+				out = append(out, Entry{Manga: m, Progress: r.Record.Status.Chapter, Status: muStatus(list), Score: roundScore(r.Metadata.UserRating), Ref: strconv.Itoa(list)})
 			}
 			if page*100 >= resp.TotalHits {
 				break
@@ -290,7 +290,7 @@ func (c *MangaUpdatesClient) GetEntry(ctx context.Context, id string) (Entry, bo
 		}
 		return Entry{Score: -1}, false, err
 	}
-	return Entry{Progress: e.Status.Chapter, Status: muStatus(e.ListID), Score: -1, ref: strconv.Itoa(e.ListID)}, true, nil
+	return Entry{Progress: e.Status.Chapter, Status: muStatus(e.ListID), Score: -1, Ref: strconv.Itoa(e.ListID)}, true, nil
 }
 
 func (c *MangaUpdatesClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
@@ -323,7 +323,7 @@ func (c *MangaUpdatesClient) saveListEntry(ctx context.Context, sid int64, u Ent
 	}
 	list, chapter := muListFor(u.Status, u.Progress), u.Progress
 	if found && u.Status == "" {
-		list, _ = strconv.Atoi(e.ref)
+		list, _ = strconv.Atoi(e.Ref)
 	}
 	if chapter < 0 {
 		chapter = e.Progress

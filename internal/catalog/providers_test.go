@@ -144,7 +144,7 @@ func TestKitsuSaveCreatesThenPatches(t *testing.T) {
 	if q.Get("filter[userId]") != "42" || q.Get("filter[mangaId]") != "9" {
 		t.Fatalf("lookup query = %v", q)
 	}
-	if err := c.SaveEntry(ctx, "9", EntryUpdate{Progress: 5, Score: 7, Remote: &Entry{ref: "77"}}); err != nil || len(*calls) != 3 || (*calls)[2].path != "/library-entries/77" || !strings.Contains((*calls)[2].body, `"ratingTwenty":14`) {
+	if err := c.SaveEntry(ctx, "9", EntryUpdate{Progress: 5, Score: 7, Remote: &Entry{Ref: "77"}}); err != nil || len(*calls) != 3 || (*calls)[2].path != "/library-entries/77" || !strings.Contains((*calls)[2].body, `"ratingTwenty":14`) {
 		t.Fatalf("patch with a known entry = %+v, %v", (*calls)[2:], err)
 	}
 }

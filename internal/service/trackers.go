@@ -33,7 +33,7 @@ type TrackerAccount struct {
 }
 
 // TrackerPrefs RatingSync is "" to follow progressive sync, "on" or "off"; Source is "kaodoku" or "tracker",
-// the side progress, favourites and ratings flow from.
+// the side progress, favourites and ratings flow from; Exclusive trusts that only kaodoku writes to the tracker.
 type TrackerPrefs struct {
 	AutoLink        bool   `json:"auto_link"`
 	AutoProgressive bool   `json:"auto_progressive"`
@@ -41,6 +41,7 @@ type TrackerPrefs struct {
 	Recommendations bool   `json:"recommendations"`
 	RatingSync      string `json:"rating_sync"`
 	Source          string `json:"source"`
+	Exclusive       bool   `json:"exclusive"`
 }
 
 const (
@@ -57,7 +58,7 @@ func (p TrackerPrefs) ratingFor(progressive bool) string {
 }
 
 func (s *JobService) TrackerAccounts(ctx context.Context, userID int64) []TrackerAccount {
-	rows, err := s.db.QueryContext(ctx, `SELECT provider, remote_name, expires_at, last_error, refresh_token = '', auto_link, auto_progressive, use_relations, use_recommendations, rating_sync, source, position FROM tracker_accounts WHERE user_id = ? ORDER BY created_at, rowid`, userID)
+	rows, err := s.db.QueryContext(ctx, `SELECT provider, remote_name, expires_at, last_error, refresh_token = '', auto_link, auto_progressive, use_relations, use_recommendations, rating_sync, source, position, exclusive FROM tracker_accounts WHERE user_id = ? ORDER BY created_at, rowid`, userID)
 	if err != nil {
 		return nil
 	}
@@ -66,7 +67,7 @@ func (s *JobService) TrackerAccounts(ctx context.Context, userID int64) []Tracke
 	for rows.Next() {
 		var a TrackerAccount
 		var noRefresh bool
-		if rows.Scan(&a.Provider, &a.Name, &a.ExpiresAt, &a.LastError, &noRefresh, &a.AutoLink, &a.AutoProgressive, &a.Relations, &a.Recommendations, &a.RatingSync, &a.Source, &a.Position) != nil {
+		if rows.Scan(&a.Provider, &a.Name, &a.ExpiresAt, &a.LastError, &noRefresh, &a.AutoLink, &a.AutoProgressive, &a.Relations, &a.Recommendations, &a.RatingSync, &a.Source, &a.Position, &a.Exclusive) != nil {
 			continue
 		}
 		if _, known := s.catalog.providers[a.Provider]; !known {
@@ -96,13 +97,19 @@ func (s *JobService) SetTrackerPrefs(ctx context.Context, provider string, p Tra
 		return fmt.Errorf("unknown rating sync setting")
 	}
 	uid := auth.UserID(ctx)
-	res, err := s.db.ExecContext(ctx, `UPDATE tracker_accounts SET auto_link = ?, auto_progressive = ?, use_relations = ?, use_recommendations = ?, rating_sync = ?, source = ? WHERE user_id = ? AND provider = ?`,
-		p.AutoLink, p.AutoProgressive, p.Relations, p.Recommendations, p.RatingSync, p.Source, uid, provider)
+	prev, _ := s.trackerAccount(ctx, uid, provider)
+	res, err := s.db.ExecContext(ctx, `UPDATE tracker_accounts SET auto_link = ?, auto_progressive = ?, use_relations = ?, use_recommendations = ?, rating_sync = ?, source = ?, exclusive = ? WHERE user_id = ? AND provider = ?`,
+		p.AutoLink, p.AutoProgressive, p.Relations, p.Recommendations, p.RatingSync, p.Source, p.Exclusive, uid, provider)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("no %s account connected", s.ProviderLabel(provider))
+	}
+	if p.Exclusive && !prev.Exclusive {
+		if _, err := s.db.ExecContext(ctx, `UPDATE tracker_synced SET remote = '' WHERE user_id = ? AND provider = ?`, uid, provider); err != nil {
+			return err
+		}
 	}
 	s.invalidateRecs(uid)
 	return nil
@@ -484,8 +491,8 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	lookup := a.Source == SourceKaodoku && !full && len(tracked) <= maxEntryLookups
 	remote := map[string]catalog.Entry{}
 	if lookup {
-		for pid := range tracked {
-			e, found, err := p.GetEntry(actx, pid)
+		for pid, titleID := range tracked {
+			e, found, err := remoteEntry(actx, p, a.Exclusive, saved[titleID].remote, pid)
 			if err != nil {
 				return err
 			}
@@ -645,14 +652,15 @@ func favPart(v syncView, pid string, titleID int64, fav bool) string {
 	return fmt.Sprint(pid, v.enabled(titleID), ContentAllowed(v.user, t.IsAdult, t.ContentTags), fav)
 }
 
-// syncedRow is what a title last settled at on a tracker.
+// syncedRow is what a title last settled at on a tracker: its parts, and the tracker's entry as last read and written.
 type syncedRow struct {
-	parts [3]string
+	parts  [3]string
+	remote string
 }
 
 func (s *JobService) syncedRows(ctx context.Context, userID int64, provider string, titleID int64) map[int64]syncedRow {
 	out := map[int64]syncedRow{}
-	rows, err := s.db.QueryContext(ctx, `SELECT title_id, progress, rating, favourite FROM tracker_synced WHERE user_id = ? AND provider = ? AND ? IN (0, title_id)`, userID, provider, titleID)
+	rows, err := s.db.QueryContext(ctx, `SELECT title_id, progress, rating, favourite, remote FROM tracker_synced WHERE user_id = ? AND provider = ? AND ? IN (0, title_id)`, userID, provider, titleID)
 	if err != nil {
 		return out
 	}
@@ -660,7 +668,7 @@ func (s *JobService) syncedRows(ctx context.Context, userID int64, provider stri
 	for rows.Next() {
 		var id int64
 		var r syncedRow
-		if rows.Scan(&id, &r.parts[0], &r.parts[1], &r.parts[2]) == nil {
+		if rows.Scan(&id, &r.parts[0], &r.parts[1], &r.parts[2], &r.remote) == nil {
 			out[id] = r
 		}
 	}
@@ -686,6 +694,43 @@ func (s *JobService) settle(ctx context.Context, userID, titleID int64, provider
 		_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_synced (user_id, title_id, provider, `+col+`) VALUES (?, ?, ?, ?)
 			ON CONFLICT (user_id, title_id, provider) DO UPDATE SET `+col+` = excluded.`+col, userID, titleID, provider, st[i])
 	}
+}
+
+// remoteEntry trusts the entry kept from the last read and writes when only kaodoku updates the tracker, else reads it.
+func remoteEntry(actx context.Context, p catalog.Provider, exclusive bool, kept, id string) (catalog.Entry, bool, error) {
+	var e catalog.Entry
+	if exclusive && kept != "" && json.Unmarshal([]byte(kept), &e) == nil {
+		return e, true, nil
+	}
+	return p.GetEntry(actx, id)
+}
+
+// keepRemote stores the tracker's entry after a write, or forgets it when a write may have moved it (a new entry or status).
+func (s *JobService) keepRemote(ctx context.Context, userID, titleID int64, provider string, e catalog.Entry, ok bool) {
+	data := ""
+	if ok {
+		e.Manga = catalog.Manga{}
+		b, _ := json.Marshal(e)
+		data = string(b)
+	}
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_synced (user_id, title_id, provider, remote) VALUES (?, ?, ?, ?)
+		ON CONFLICT (user_id, title_id, provider) DO UPDATE SET remote = excluded.remote`, userID, titleID, provider, data)
+}
+
+func applyEntry(e catalog.Entry, u catalog.EntryUpdate) catalog.Entry {
+	if u.Progress >= 0 {
+		e.Progress = u.Progress
+	}
+	if u.Score != 0 {
+		e.Score = max(u.Score, 0)
+	}
+	if !u.Started.IsZero() {
+		e.Started = u.Started
+	}
+	if !u.Finished.IsZero() {
+		e.Finished = u.Finished
+	}
+	return e
 }
 
 func (s *JobService) pushPending(userID, titleID int64) bool {
@@ -737,7 +782,13 @@ func entryDiff(local catalog.EntryUpdate, remote catalog.Entry, exact bool) cata
 
 // pushEntry raises a tracker's progress/status and fills empty dates when it syncs progressively, and sends score unless 0;
 // exact also lowers progress after an explicit unread.
-func (s *JobService) pushEntry(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64, remote catalog.Entry, found, progress, exact bool, score int) error {
+func (s *JobService) pushEntry(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64, remote catalog.Entry, found, progress, exact bool, score int) (err error) {
+	sent := catalog.EntryUpdate{Progress: -1}
+	defer func() {
+		if err == nil {
+			s.keepRemote(ctx, userID, titleID, p.Name(), applyEntry(remote, sent), found && sent.Status == "")
+		}
+	}()
 	if !progress && score == 0 {
 		return nil
 	}
@@ -759,6 +810,7 @@ func (s *JobService) pushEntry(ctx, actx context.Context, p catalog.Provider, id
 	if err := p.SaveEntry(actx, id, u); err != nil {
 		return err
 	}
+	sent = u
 	if score != 0 {
 		return s.setTrackerRating(ctx, userID, titleID, p.Name(), max(score, 0))
 	}
@@ -857,11 +909,11 @@ func (s *JobService) pushTitle(ctx context.Context, userID, titleID int64, progr
 		if id == "" {
 			return nil
 		}
-		_, st, _, err := s.titleState(ctx, userID, titleID, p, id)
+		v, st, row, err := s.titleState(ctx, userID, titleID, p, id)
 		if err != nil {
 			return err
 		}
-		remote, found, err := p.GetEntry(actx, id)
+		remote, found, err := remoteEntry(actx, p, v.account.Exclusive, row.remote, id)
 		if err != nil {
 			return err
 		}
@@ -928,13 +980,15 @@ func (s *JobService) pushFavourite(ctx context.Context, userID, titleID int64, w
 		if !ok || id == "" {
 			return nil
 		}
-		v, _, _, err := s.titleState(ctx, userID, titleID, p, id)
+		v, _, row, err := s.titleState(ctx, userID, titleID, p, id)
 		if err != nil {
 			return err
 		}
-		remote, err := fav.IsFavourite(actx, id)
-		if err != nil {
-			return err
+		remote := !want
+		if !v.account.Exclusive || row.parts[favouritePart] != favPart(v, id, titleID, remote) {
+			if remote, err = fav.IsFavourite(actx, id); err != nil {
+				return err
+			}
 		}
 		if remote != want {
 			if err := fav.ToggleFavourite(actx, id); err != nil {

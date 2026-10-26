@@ -198,7 +198,7 @@ type Entry struct {
 	Status            string
 	Score             int
 	Started, Finished time.Time
-	ref               string
+	Ref               string // the tracker's own handle: Kitsu's library entry, MangaUpdates' list
 }
 
 // EntryUpdate keeps the remote value for Progress < 0, an empty Status, zero dates and a zero Score; Remote is the entry already read, if any.

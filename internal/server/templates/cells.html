@@ -1278,6 +1278,7 @@
     </select>
   </div>
   {{template "trackerPrefToggle" (pref "kaodoku_leads" "Kaodoku is the source of truth" (printf "On: Kaodoku sends progress, favourites and ratings to %s. Off: Kaodoku takes them from %s." .Label .Label) (eq .Source "kaodoku"))}}
+  {{template "trackerPrefToggle" (pref "exclusive" (printf "Only Kaodoku updates %s" .Label) (printf "Skips reading an entry from %s before each update and trusts what Kaodoku last sent, halving the calls. Leave off if you also update %s from another app or its website, or progress made there may be overwritten." .Label .Label) .Exclusive)}}
   <button class="btn btn-sm btn-primary mt-3">Save</button>
 </form>
 {{end}}

@@ -525,6 +525,8 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"tracker_accounts", "rating_sync", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "source", "TEXT NOT NULL DEFAULT 'kaodoku'"},
 		{"tracker_accounts", "position", "INTEGER NOT NULL DEFAULT 0"},
+		{"tracker_accounts", "exclusive", "INTEGER NOT NULL DEFAULT 0"},
+		{"tracker_synced", "remote", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_ratings", "choice", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_json", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_fetched_at", "TEXT NOT NULL DEFAULT ''"},
