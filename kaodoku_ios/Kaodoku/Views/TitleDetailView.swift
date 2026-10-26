@@ -715,7 +715,7 @@ struct RatingRow: View {
   let set: (Int) -> Void
   let answer: (String, Bool) -> Void
 
-  static func symbol(_ star: Int, rating: Int) -> String {
+  nonisolated static func symbol(_ star: Int, rating: Int) -> String {
     rating >= star * 2 ? "star.fill" : rating == star * 2 - 1 ? "star.leadinghalf.filled" : "star"
   }
 
