@@ -614,7 +614,7 @@
 {{end}}</div>
 {{end}}
 
-{{define "mangaOrigin"}}{{with origin .Origins}}{{if .APIs}}<span class="mr-1 inline-flex align-middle [&>svg]:size-3" role="img" title="{{.Note}}" aria-label="{{.Note}}">{{template "iconCloud"}}</span>{{end}}{{end}}{{end}}
+{{define "mangaOrigin"}}{{if .APIs}}<span class="mr-1 inline-flex align-middle [&>svg]:size-3" role="img" title="{{.Note}}" aria-label="{{.Note}}">{{template "iconCloud"}}</span>{{end}}{{end}}
 
 {{define "mangaResults"}}
 {{if .Heading}}<h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-base-content/60">{{.Heading}}</h2>{{end}}
@@ -629,7 +629,7 @@
         <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a></td>
         <td class="min-w-0">
           <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}">{{mangaTitle .Manga}}</a>
-          <div class="text-xs text-base-content/50">{{if or $.ShowOrigin (gt (len .Origins) 1)}}{{template "mangaOrigin" .}}{{end}}{{if has .Origins "mangabaka"}}Local DB · {{end}}{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
+          <div class="text-xs text-base-content/50">{{template "mangaOrigin" .Origin}}{{if .Origin.Local}}Local DB · {{end}}{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
         </td>
         <td class="whitespace-nowrap text-right">
           {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
@@ -651,7 +651,7 @@
       </figure>
       <div class="flex min-w-0 flex-1 flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}{{if $.ShowProvider}} <span class="badge badge-ghost badge-sm align-middle">{{providerLabel .Provider}}</span>{{end}}{{if has .Origins "mangabaka"}} <span class="badge badge-ghost badge-sm align-middle">Local DB</span>{{end}}{{if or $.ShowOrigin (gt (len .Origins) 1)}} <span class="text-base-content/50 align-middle">{{template "mangaOrigin" .}}</span>{{end}}</h3>
+          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}{{if $.ShowProvider}} <span class="badge badge-ghost badge-sm align-middle">{{providerLabel .Provider}}</span>{{end}}{{if .Origin.Local}} <span class="badge badge-ghost badge-sm align-middle">Local DB</span>{{end}}{{if .Origin.APIs}} <span class="text-base-content/50 align-middle">{{template "mangaOrigin" .Origin}}</span>{{end}}</h3>
           <div class="shrink-0">
             {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
             {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
@@ -670,7 +670,7 @@
     <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
       {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>
       {{else}}<a href="{{mangaURL .Manga}}"><img class="h-full w-full object-cover" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>{{end}}
-      {{if or $.ShowProvider (has .Origins "mangabaka")}}<div class="pointer-events-none absolute left-2 top-2 flex flex-wrap gap-1">{{if $.ShowProvider}}<span class="badge badge-sm bg-base-100">{{providerLabel .Provider}}</span>{{end}}{{if has .Origins "mangabaka"}}<span class="badge badge-sm bg-base-100">Local DB</span>{{end}}</div>{{end}}
+      {{if or $.ShowProvider .Origin.Local}}<div class="pointer-events-none absolute left-2 top-2 flex flex-wrap gap-1">{{if $.ShowProvider}}<span class="badge badge-sm bg-base-100">{{providerLabel .Provider}}</span>{{end}}{{if .Origin.Local}}<span class="badge badge-sm bg-base-100">Local DB</span>{{end}}</div>{{end}}
       {{if $.ShowRelations}}<div class="pointer-events-none absolute inset-x-2 bottom-2 flex">
         <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
       </div>{{end}}
@@ -678,7 +678,7 @@
     <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{mangaTitle .Manga}}</div>
     <div class="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-base-content/50">
       <span class="truncate">{{.Format}}{{if .Chapters}} · {{.Chapters}} ch{{end}}</span>
-      <span class="shrink-0">{{if or $.ShowOrigin (gt (len .Origins) 1)}}{{template "mangaOrigin" .}}{{end}}{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
+      <span class="shrink-0">{{template "mangaOrigin" .Origin}}{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
     </div>
     {{if .TitleID}}<a class="btn btn-xs btn-success btn-soft mt-auto w-full pt-0.5" href="/library/{{.TitleID}}">✓ In library</a>
     {{else if $canAdd}}<button class="btn btn-xs btn-outline mt-auto w-full" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}","card":"1"}' hx-target="this" hx-swap="outerHTML">Add</button>

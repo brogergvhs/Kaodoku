@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -570,8 +571,7 @@ func (s *JobService) relatedStored(ctx context.Context, provider, id string) (re
 // when a wanted list went stale and storing only the wanted ones; a stale copy stands in while a refresh fails.
 func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id string, relations, recommendations bool) ([]catalog.Manga, []catalog.Manga, error) {
 	rel, recs, relAt, recAt := s.relatedStored(ctx, p.Name(), id)
-	stale := func(want bool, at time.Time) bool { return want && time.Since(at) >= relatedTTL }
-	if !stale(relations, relAt) && !stale(recommendations, recAt) {
+	if (!relations || !relatedStale(relAt)) && (!recommendations || !relatedStale(recAt)) {
 		return rel, recs, nil
 	}
 	freshRel, freshRecs, err := p.Related(ctx, id, 24)
@@ -597,6 +597,8 @@ func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id s
 	s.trimRelated(ctx)
 	return rel, recs, nil
 }
+
+func relatedStale(at time.Time) bool { return time.Since(at) >= relatedTTL }
 
 // RelatedFetch lists the trackers to ask for each list on request.
 type RelatedFetch struct{ Relations, Recommendations []string }
@@ -625,9 +627,9 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 	if m.Provider == catalog.MangaBakaProvider && s.mbOn(ctx) {
 		mbID = m.ProviderID
 	}
-	if mbID != "" {
-		rel, rec := s.mbRelated(ctx, mbID, limit)
-		rels, recs = append(rels, rel), append(recs, rec)
+	if n, err := strconv.ParseInt(mbID, 10, 64); err == nil {
+		rel, rec := s.mb.Related(ctx, n, limit)
+		rels, recs = append(rels, s.mbMangas(ctx, rel)), append(recs, s.mbMangas(ctx, rec))
 	}
 	prefs := map[string]TrackerPrefs{}
 	for _, a := range s.TrackerAccounts(ctx, auth.UserID(ctx)) {
@@ -645,10 +647,10 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 		if aggressive {
 			var relAt, recAt time.Time
 			rel, rec, relAt, recAt = s.relatedStored(ctx, p.Name(), e.ProviderID)
-			if connected && wantRel && time.Since(relAt) >= relatedTTL {
+			if connected && wantRel && relatedStale(relAt) {
 				fetch.Relations = append(fetch.Relations, p.Name())
 			}
-			if connected && wantRec && time.Since(recAt) >= relatedTTL {
+			if connected && wantRec && relatedStale(recAt) {
 				fetch.Recommendations = append(fetch.Recommendations, p.Name())
 			}
 		} else if rel, rec, err = s.relatedCached(ctx, p, e.ProviderID, true, true); err != nil {

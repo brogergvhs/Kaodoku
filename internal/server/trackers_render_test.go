@@ -132,7 +132,7 @@ func TestTrackerTemplatesRender(t *testing.T) {
 	mixed := render("mangaResults", mangaResults{View: "cards", ShowProvider: true, Items: []searchResultView{
 		{Manga: catalog.Manga{Provider: "mangaupdates", ProviderID: "55"}}, {Manga: catalog.Manga{Provider: "anilist", ProviderID: "1"}}}})
 	expect(mixed, ">mangaupdates</span>", ">anilist</span>")
-	local := render("mangaResults", mangaResults{View: "cards", ShowOrigin: true, Items: []searchResultView{{Manga: catalog.Manga{Provider: "anilist", ProviderID: "1", Sources: []string{"mangabaka"}}}}})
+	local := render("mangaResults", mangaResults{View: "cards", Items: []searchResultView{{Manga: catalog.Manga{Provider: "anilist", ProviderID: "1"}, Origin: originView{Local: true}}}})
 	expect(local, ">Local DB</span>")
 	if strings.Contains(local, "<svg") && strings.Contains(local, `role="img"`) {
 		t.Fatalf("local-only card still shows a source icon:\n%s", local)

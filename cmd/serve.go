@@ -177,7 +177,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			runEvery = fallbackDuration(service.SettingDefault(service.SettingServeRunEvery))
 		}
 		if changed || oldRun != runEvery {
-			fmt.Printf("Serving: refresh=%s scan=%s download=%s source_verify=%s backup=%s run=%s\n", schedules[0].every, schedules[1].every, schedules[2].every, schedules[3].every, schedules[4].every, runEvery)
+			fmt.Print("Serving:")
+			for _, sc := range schedules {
+				fmt.Printf(" %s=%s", sc.typ, sc.every)
+			}
+			fmt.Printf(" run=%s\n", runEvery)
 		}
 		for _, sc := range schedules {
 			if !nextDue(&sc.next, sc.every) {

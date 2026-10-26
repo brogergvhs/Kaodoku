@@ -13,16 +13,16 @@ import (
 )
 
 type Series struct {
-	ID                                               int64
-	IDs                                              map[string]string // tracker name -> id
-	Type, Status, ContentRating                      string
-	Title, English, Native, Romanized, Description   string
-	Cover, StartDate, EndDate                        string
-	Titles, Genres, Tags, Authors                    []string
-	Year, Chapters, Volumes, Popularity, PrevPopular int
-	Rating                                           float64
-	UpdatedAt                                        time.Time
-	Relation                                         string // set on related series
+	ID                                             int64
+	IDs                                            map[string]string // tracker name -> id
+	Type, Status, ContentRating                    string
+	Title, English, Native, Romanized, Description string
+	Cover                                          string
+	Titles, Genres, Tags, Authors                  []string
+	Year, Chapters, Volumes                        int
+	Rating                                         float64
+	UpdatedAt                                      time.Time
+	Relation                                       string // set on related series
 }
 
 // CoverURL is the cover resized by MangaBaka's CDN to width px (150, 250 or 350).
@@ -34,24 +34,24 @@ func (s Series) CoverURL(width int) string {
 }
 
 const columns = `s.id, s.anilist, s.mal, s.kitsu, s.mangaupdates, s.type, s.status, s.content_rating, s.year, s.chapters, s.volumes,
-	s.title, s.english, s.native, s.romanized, s.titles, s.description, s.cover, s.genres, s.tags, s.authors, s.rating,
-	s.popularity, s.popularity_week, s.start_date, s.end_date, s.updated_at`
+	s.title, s.english, s.native, s.romanized, s.titles, s.description, s.cover, s.genres, s.tags, s.authors, s.rating, s.updated_at`
+
+var columnCount = strings.Count(columns, ",") + 1
 
 func scan(rows *sql.Rows, extra ...any) (Series, error) {
 	var s Series
 	var ids [4]sql.NullInt64
-	var year, chapters, volumes, pop, prev sql.NullInt64
+	var year, chapters, volumes sql.NullInt64
 	var titles, genres, tags, authors, updated string
 	err := rows.Scan(append([]any{&s.ID, &ids[0], &ids[1], &ids[2], &ids[3], &s.Type, &s.Status, &s.ContentRating, &year, &chapters, &volumes,
-		&s.Title, &s.English, &s.Native, &s.Romanized, &titles, &s.Description, &s.Cover, &genres, &tags, &authors, &s.Rating,
-		&pop, &prev, &s.StartDate, &s.EndDate, &updated}, extra...)...)
+		&s.Title, &s.English, &s.Native, &s.Romanized, &titles, &s.Description, &s.Cover, &genres, &tags, &authors, &s.Rating, &updated}, extra...)...)
 	s.IDs = map[string]string{}
 	for i, id := range ids {
 		if id.Valid {
-			s.IDs[Trackers[i]] = strconv.FormatInt(id.Int64, 10)
+			s.IDs[trackers[i]] = strconv.FormatInt(id.Int64, 10)
 		}
 	}
-	s.Year, s.Chapters, s.Volumes, s.Popularity, s.PrevPopular = int(year.Int64), int(chapters.Int64), int(volumes.Int64), int(pop.Int64), int(prev.Int64)
+	s.Year, s.Chapters, s.Volumes = int(year.Int64), int(chapters.Int64), int(volumes.Int64)
 	_ = json.Unmarshal([]byte(titles), &s.Titles)
 	_ = json.Unmarshal([]byte(genres), &s.Genres)
 	_ = json.Unmarshal([]byte(tags), &s.Tags)
@@ -60,7 +60,7 @@ func scan(rows *sql.Rows, extra ...any) (Series, error) {
 	return s, err
 }
 
-// list scans series rows; an optional extra column after them lands in Relation.
+// list scans series rows; a relation type selected after them lands in Relation.
 func (s *Store) list(ctx context.Context, q string, args ...any) []Series {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -77,7 +77,7 @@ func (s *Store) list(ctx context.Context, q string, args ...any) []Series {
 	for rows.Next() {
 		var extra sql.NullString
 		var dest []any
-		if len(cols) > 27 {
+		if len(cols) > columnCount {
 			dest = append(dest, &extra)
 		}
 		if sr, err := scan(rows, dest...); err == nil {
@@ -99,7 +99,7 @@ func (s *Store) ByProvider(ctx context.Context, provider, id string) (Series, bo
 func (s *Store) ByRefs(ctx context.Context, refs map[string][]string) map[string]Series {
 	out := map[string]Series{}
 	for provider, ids := range refs {
-		if !slices.Contains(Trackers, provider) {
+		if !slices.Contains(trackers, provider) {
 			continue
 		}
 		var nums []any
@@ -119,23 +119,14 @@ func (s *Store) ByRefs(ctx context.Context, refs map[string][]string) map[string
 	return out
 }
 
-// ByIDs follows merges, so an old id still finds its series.
-func (s *Store) ByIDs(ctx context.Context, ids []int64) map[int64]Series {
-	out := map[int64]Series{}
-	for chunk := range slices.Chunk(ids, 500) {
-		args := make([]any, len(chunk))
-		for i, id := range chunk {
-			args[i] = id
-		}
-		q := `SELECT ` + columns + `, r.id FROM series r JOIN series s ON s.id = COALESCE(r.merged_into, r.id)
-			WHERE r.id IN (?` + strings.Repeat(", ?", len(chunk)-1) + `) AND s.merged_into IS NULL`
-		for _, sr := range s.list(ctx, q, args...) {
-			asked, _ := strconv.ParseInt(sr.Relation, 10, 64)
-			sr.Relation = ""
-			out[asked] = sr
-		}
+// ByID follows merges, so an old id still finds its series.
+func (s *Store) ByID(ctx context.Context, id int64) (Series, bool) {
+	found := s.list(ctx, `SELECT `+columns+` FROM series s
+		WHERE s.id = (SELECT COALESCE(merged_into, id) FROM series WHERE id = ?) AND s.merged_into IS NULL`, id)
+	if len(found) == 0 {
+		return Series{}, false
 	}
-	return out
+	return found[0], true
 }
 
 // Related lists a series' relations, closest first and without parodies, and its recommendations, strongest first.

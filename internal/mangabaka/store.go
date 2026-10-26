@@ -22,17 +22,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const DumpBase = "https://api.mangabaka.org/v1/database/"
+const dumpBase = "https://api.mangabaka.org/v1/database/"
 
-// Trackers are the tracker names the dump carries ids for, as Kaodoku names them.
-var Trackers = []string{"anilist", "mal", "kitsu", "mangaupdates"}
+// trackers are the tracker names the dump carries ids for, as Kaodoku names them.
+var trackers = []string{"anilist", "mal", "kitsu", "mangaupdates"}
 
 // DumpURL is the JSON Lines dump for a variant; "full" adds MangaUpdates recommendations.
 func DumpURL(variant string) string {
 	if variant == "full" {
-		return DumpBase + "series.full.jsonl.tar.gz"
+		return dumpBase + "series.full.jsonl.tar.gz"
 	}
-	return DumpBase + "series.jsonl.tar.gz"
+	return dumpBase + "series.jsonl.tar.gz"
 }
 
 type Store struct {
@@ -192,7 +192,7 @@ CREATE TABLE series (
 	type TEXT, status TEXT, content_rating TEXT, year INTEGER, chapters INTEGER, volumes INTEGER,
 	title TEXT, english TEXT, native TEXT, romanized TEXT, titles TEXT, description TEXT, cover TEXT,
 	genres TEXT, tags TEXT, authors TEXT, rating REAL, popularity INTEGER, popularity_week INTEGER,
-	start_date TEXT, end_date TEXT, updated_at TEXT
+	start_date TEXT, updated_at TEXT
 );
 CREATE TABLE relations (series_id INTEGER, to_series_id INTEGER, type TEXT);
 CREATE TABLE mu_recs (series_id INTEGER, mu INTEGER, weight INTEGER);
@@ -250,7 +250,6 @@ type record struct {
 	} `json:"cover"`
 	Published struct {
 		StartDate string `json:"start_date"`
-		EndDate   string `json:"end_date"`
 	} `json:"published"`
 	Popularity struct {
 		Global struct {
@@ -367,7 +366,7 @@ func prepare(ctx context.Context, tx *sql.Tx) (*inserter, error) {
 		errs = append(errs, err)
 		return st
 	}
-	in.series = p(`INSERT INTO series VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	in.series = p(`INSERT INTO series VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	in.merged = p(`INSERT INTO series (id, merged_into) VALUES (?, ?)`)
 	in.relation = p(`INSERT INTO relations VALUES (?, ?, ?)`)
 	in.muRec = p(`INSERT INTO mu_recs VALUES (?, ?, ?)`)
@@ -418,7 +417,7 @@ func (in *inserter) add(ctx context.Context, r record) error {
 		r.Title, english, r.NativeTitle, r.RomanizedTitle, jsonList(titles), r.Description, r.Cover.Raw.URL,
 		jsonList(r.Genres), jsonList(r.Tags), jsonList(r.Authors), r.Rating,
 		orNull(int64(r.Popularity.Global.Current)), orNull(r.Popularity.Global.History.Week),
-		r.Published.StartDate, r.Published.EndDate, r.LastUpdatedAt); err != nil {
+		r.Published.StartDate, r.LastUpdatedAt); err != nil {
 		return err
 	}
 	for _, t := range titles {

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -473,7 +472,6 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	if err != nil {
 		return err
 	}
-	enabled, byID, owners, localFav := v.enabled, v.titles, v.owners, v.localFav
 	states, saved := map[int64][3]string{}, map[int64]syncedRow{}
 	if a.Source == SourceKaodoku {
 		saved = s.syncedRows(ctx, user.ID, p.Name(), 0)
@@ -516,7 +514,7 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	switch {
 	case canFav && lookup:
 		for pid, titleID := range tracked {
-			remoteFav[pid] = localFav[pid]
+			remoteFav[pid] = v.localFav[pid]
 			if saved[titleID].parts[favouritePart] != states[titleID][favouritePart] {
 				on, err := fav.IsFavourite(actx, pid)
 				if canFav = err == nil; !canFav {
@@ -544,13 +542,13 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	for pid, titleID := range tracked {
 		n++
 		handle.Update(n, len(tracked), 0)
-		on, t := enabled(titleID), byID[titleID]
+		on, t := v.enabled(titleID), v.titles[titleID]
 		push, pull, rating := on && a.Source == SourceKaodoku, on && a.Source == SourceTracker, a.ratingFor(on)
 		if !on && rating == "" || !ContentAllowed(user, t.IsAdult, t.ContentTags) {
 			continue
 		}
 		switch {
-		case !canFav || localFav[pid] == remoteFav[pid]:
+		case !canFav || v.localFav[pid] == remoteFav[pid]:
 		case push:
 			if err := fav.ToggleFavourite(actx, pid); err != nil {
 				errs, failed[titleID] = append(errs, fmt.Errorf("favourite %s: %w", pid, err)), true
@@ -577,7 +575,7 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 		}
 		score := s.syncRating(ctx, user.ID, titleID, p.Name(), rating, e.Score)
 		if !listed && score == 0 {
-			if _, status, err := s.localTrackerState(ctx, user.ID, titleID); !push || err == nil && status == "PLANNING" && !ownsTitle(user.ID, owners[titleID]) {
+			if _, status, err := s.localTrackerState(ctx, user.ID, titleID); !push || err == nil && status == "PLANNING" && !ownsTitle(user.ID, v.owners[titleID]) {
 				continue
 			}
 		}
@@ -1531,11 +1529,11 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string, f
 			continue
 		}
 		if sr, ok := s.mb.ByProvider(ctx, provider, id); ok {
-			rels, recs := s.mbRelated(ctx, strconv.FormatInt(sr.ID, 10), 24)
-			lists = append(lists, recs, rels)
+			rels, recs := s.mb.Related(ctx, sr.ID, 24)
+			lists = append(lists, s.mbMangas(ctx, recs), s.mbMangas(ctx, rels))
 		}
 		_, recs, _, fetched := s.relatedStored(ctx, provider, id)
-		fetchable = fetchable || recommends(provider) && time.Since(fetched) >= relatedTTL
+		fetchable = fetchable || recommends(provider) && relatedStale(fetched)
 		lists = append(lists, s.mbUnify(ctx, recs))
 	}
 	items = s.fillFromStore(ctx, provider, mergeManga(lists, exclude, 0))

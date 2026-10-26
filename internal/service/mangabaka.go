@@ -242,10 +242,12 @@ func (s *JobService) linkLibrary(ctx context.Context) error {
 		if s.mbRefresh(ctx, &m) {
 			_, _ = s.catalog.repo.UpsertManga(ctx, m)
 		}
-		if n, _ := strconv.ParseInt(m.ProviderID, 10, 64); m.Provider == catalog.MangaBakaProvider {
-			if sr, ok := s.mb.ByIDs(ctx, []int64{n})[n]; ok && sr.ID != n {
-				_, _ = s.db.ExecContext(ctx, `UPDATE catalog_manga SET provider_id = ? WHERE id = ?`, strconv.FormatInt(sr.ID, 10), m.ID)
-			}
+		if m.Provider != catalog.MangaBakaProvider {
+			continue
+		}
+		n, _ := strconv.ParseInt(m.ProviderID, 10, 64)
+		if sr, ok := s.mb.ByID(ctx, n); ok && sr.ID != n {
+			_, _ = s.db.ExecContext(ctx, `UPDATE catalog_manga SET provider_id = ? WHERE id = ?`, strconv.FormatInt(sr.ID, 10), m.ID)
 		}
 	}
 	return ctx.Err()
@@ -377,12 +379,6 @@ func (s *JobService) mbMangas(ctx context.Context, list []mangabaka.Series) []ca
 		}
 	}
 	return out
-}
-
-func (s *JobService) mbRelated(ctx context.Context, seriesID string, limit int) (relations, recommendations []catalog.Manga) {
-	id, _ := strconv.ParseInt(seriesID, 10, 64)
-	rels, recs := s.mb.Related(ctx, id, limit)
-	return s.mbMangas(ctx, rels), s.mbMangas(ctx, recs)
 }
 
 func (s *JobService) mbTrending(ctx context.Context, limit int) []catalog.Manga {

@@ -346,8 +346,6 @@ CREATE TABLE IF NOT EXISTS tracker_ratings (
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
-DROP TABLE IF EXISTS tracker_pushed;
-
 CREATE TABLE IF NOT EXISTS tracker_synced (
 	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
@@ -355,6 +353,7 @@ CREATE TABLE IF NOT EXISTS tracker_synced (
 	progress TEXT NOT NULL DEFAULT '',
 	rating TEXT NOT NULL DEFAULT '',
 	favourite TEXT NOT NULL DEFAULT '',
+	remote TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
@@ -526,7 +525,6 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"tracker_accounts", "source", "TEXT NOT NULL DEFAULT 'kaodoku'"},
 		{"tracker_accounts", "position", "INTEGER NOT NULL DEFAULT 0"},
 		{"tracker_accounts", "exclusive", "INTEGER NOT NULL DEFAULT 0"},
-		{"tracker_synced", "remote", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_ratings", "choice", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_json", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_fetched_at", "TEXT NOT NULL DEFAULT ''"},

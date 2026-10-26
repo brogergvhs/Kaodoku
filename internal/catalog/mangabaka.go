@@ -17,6 +17,13 @@ const MangaBakaProvider = "mangabaka"
 
 var mangaBakaStatus = map[string]string{"releasing": "RELEASING", "completed": "FINISHED", "cancelled": "CANCELLED", "hiatus": "HIATUS", "upcoming": "NOT_YET_RELEASED"}
 
+var mangaBakaRelations = map[string]string{"MAIN": "PARENT", "CHARACTER_FOCUS": "CHARACTER"}
+
+func mangaBakaRelation(r string) string {
+	r = strings.ToUpper(r)
+	return cmp.Or(mangaBakaRelations[r], r)
+}
+
 // FromMangaBaka builds a record of a MangaBaka series under one provider's id, carrying every id it is known by.
 func FromMangaBaka(sr mangabaka.Series, provider, id string) Manga {
 	m := Manga{
@@ -24,7 +31,7 @@ func FromMangaBaka(sr mangabaka.Series, provider, id string) Manga {
 		TitleRomaji: cmp.Or(sr.Romanized, sr.Title), TitleEnglish: sr.English, TitleNative: sr.Native,
 		Description: sr.Description, CoverImage: sr.CoverURL(350), Status: mangaBakaStatus[sr.Status], Format: "MANGA",
 		Synonyms: sr.Titles, Genres: sr.Genres, Tags: sr.Tags, Authors: sr.Authors, Year: sr.Year,
-		AverageScore: int(sr.Rating), IsAdult: sr.ContentRating == "pornographic",
+		AverageScore: int(sr.Rating), IsAdult: sr.ContentRating == "pornographic", RelationType: mangaBakaRelation(sr.Relation),
 		ExternalIDs: map[string]string{MangaBakaProvider: strconv.FormatInt(sr.ID, 10)}, Sources: []string{MangaBakaProvider},
 	}
 	if sr.Type == "novel" {
@@ -35,12 +42,6 @@ func FromMangaBaka(sr mangabaka.Series, provider, id string) Manga {
 	}
 	if sr.Volumes > 0 {
 		m.Volumes = &sr.Volumes
-	}
-	switch m.RelationType = strings.ToUpper(sr.Relation); m.RelationType {
-	case "MAIN":
-		m.RelationType = "PARENT"
-	case "CHARACTER_FOCUS":
-		m.RelationType = "CHARACTER"
 	}
 	maps.Copy(m.ExternalIDs, sr.IDs)
 	return m
@@ -81,14 +82,14 @@ func (c *MangaBakaClient) manga(list []mangabaka.Series) []Manga {
 
 func (c *MangaBakaClient) Get(ctx context.Context, id string) (Manga, []Relation, error) {
 	n, _ := strconv.ParseInt(id, 10, 64)
-	sr, ok := c.store.ByIDs(ctx, []int64{n})[n]
+	sr, ok := c.store.ByID(ctx, n)
 	if !ok {
 		return Manga{}, nil, ErrNotFound
 	}
 	rels, _ := c.store.Related(ctx, sr.ID, 50)
 	out := make([]Relation, len(rels))
-	for i, m := range c.manga(rels) {
-		out[i] = Relation{ProviderID: m.ProviderID, Type: m.RelationType}
+	for i, r := range rels {
+		out[i] = Relation{ProviderID: strconv.FormatInt(r.ID, 10), Type: mangaBakaRelation(r.Relation)}
 	}
 	return c.manga([]mangabaka.Series{sr})[0], out, nil
 }

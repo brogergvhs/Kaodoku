@@ -545,7 +545,6 @@ type mangaResults struct {
 	CanAdd        bool
 	ShowRelations bool
 	ShowProvider  bool
-	ShowOrigin    bool
 }
 
 type originView struct {
@@ -553,12 +552,14 @@ type originView struct {
 	APIs  []string // labels of the trackers whose APIs listed it
 }
 
-func (u *webUI) origin(origins []string) originView {
+// origin marks listings from the local MangaBaka copy, and the tracker APIs behind the others when MangaBaka is on or
+// several sources merged.
+func (u *webUI) origin(origins []string, mangaBaka bool) originView {
 	var o originView
 	for _, p := range origins {
 		if p == catalog.MangaBakaProvider {
 			o.Local = true
-		} else if u.svc != nil {
+		} else if mangaBaka || len(origins) > 1 {
 			o.APIs = append(o.APIs, u.svc.ProviderLabel(p))
 		}
 	}
@@ -591,11 +592,12 @@ func resultView(r *http.Request) string {
 func (u *webUI) mangaResultsView(ctx context.Context, heading, view string, items []catalog.Manga) mangaResults {
 	user := userFrom(ctx)
 	views := u.stripItems(ctx, items)
-	mixed := false
-	for _, v := range views {
+	mixed, mangaBaka := false, u.svc.MangaBakaEnabled(ctx)
+	for i, v := range views {
 		mixed = mixed || v.Provider != views[0].Provider
+		views[i].Origin = u.origin(v.Origins(), mangaBaka)
 	}
-	return mangaResults{Heading: heading, View: view, Items: views, CanAdd: user.Can(auth.PermLibraryAdd), ShowProvider: mixed, ShowOrigin: u.svc.MangaBakaEnabled(ctx)}
+	return mangaResults{Heading: heading, View: view, Items: views, CanAdd: user.Can(auth.PermLibraryAdd), ShowProvider: mixed}
 }
 
 func (u *webUI) stripItems(ctx context.Context, items []catalog.Manga) []searchResultView {
@@ -665,9 +667,9 @@ func (u *webUI) relatedManga(w http.ResponseWriter, r *http.Request) {
 		{TitleID: id, Kind: "recommendations", Heading: "Recommended manga", Results: u.mangaResultsView(r.Context(), "", "cards", recs), Fetch: u.providerOptions(fetch.Recommendations)},
 	}
 	sections[0].Results.ShowRelations = true
-	if kind := r.FormValue("kind"); r.Method == http.MethodPost {
+	if r.Method == http.MethodPost {
 		section := sections[0]
-		if kind == "recommendations" {
+		if r.FormValue("kind") == "recommendations" {
 			section = sections[1]
 		}
 		section.Open = true
@@ -3087,6 +3089,7 @@ func (u *webUI) serverPage(w http.ResponseWriter, r *http.Request) {
 type searchResultView struct {
 	catalog.Manga
 	TitleID int64 // set when the manga is already in the library
+	Origin  originView
 }
 
 func (v searchResultView) RelationLabel() string {
@@ -4662,7 +4665,6 @@ func (u *webUI) funcs() template.FuncMap {
 		"mangaURL":    mangaURL,
 		"coverURL":    coverURL,
 		"providerURL": catalog.MangaURL,
-		"origin":      u.origin,
 		"providerLabel": func(name string) string {
 			if u.svc == nil {
 				return name
@@ -4739,26 +4741,7 @@ func (u *webUI) funcs() template.FuncMap {
 		"pathEscape": url.PathEscape,
 		"humanBytes": util.Human,
 		"img":        u.svc.ImageURL,
-		"releaseStatus": func(s string) string {
-			return strings.ToLower(strings.ReplaceAll(s, "_", " "))
-		},
-		"pct": func(done, total int64) int64 { return percent(done, total) },
-		"missingTotal": func(ts []library.Title) int64 {
-			var n int64
-			for _, t := range ts {
-				n += t.MissingCount
-			}
-			return n
-		},
-		"healthyCount": func(ss []sources.Source) int {
-			n := 0
-			for _, s := range ss {
-				if s.Status == sources.StatusHealthy {
-					n++
-				}
-			}
-			return n
-		},
+		"pct":        func(done, total int64) int64 { return percent(done, total) },
 	}
 }
 

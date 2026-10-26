@@ -66,14 +66,14 @@ func TestRefreshImportsAndLooksUp(t *testing.T) {
 	if _, ok := s.ByProvider(ctx, "mangaupdates", "479890"); ok {
 		t.Fatal("an id shared by two series must not match")
 	}
-	if got := s.ByIDs(ctx, []int64{3}); got[3].ID != 1 {
+	if got, _ := s.ByID(ctx, 3); got.ID != 1 {
 		t.Fatalf("merged id = %+v", got)
 	}
-	rels, recs := s.Related(ctx, 1, 10)
+	rels, _ := s.Related(ctx, 1, 10)
 	if len(rels) != 1 || rels[0].ID != 2 || rels[0].Relation != "main" {
 		t.Fatalf("relations = %+v", rels)
 	}
-	if _, recs = s.Related(ctx, 2, 10); len(recs) != 1 || recs[0].ID != 1 {
+	if _, recs := s.Related(ctx, 2, 10); len(recs) != 1 || recs[0].ID != 1 {
 		t.Fatalf("recommendations = %+v", recs)
 	}
 	if found, _ := s.Search(ctx, "abyss anth", Filter{Limit: 5}); len(found) != 1 || found[0].ID != 1 {
