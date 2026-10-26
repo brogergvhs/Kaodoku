@@ -240,7 +240,7 @@ func (a *apiV1) titleActivity(w http.ResponseWriter, r *http.Request) {
 		v1err(w, http.StatusNotFound, "not_found", "title not found")
 		return
 	}
-	js, _ := a.svc.List(r.Context())
+	js, _ := a.svc.FindJobs(r.Context(), jobs.Filter{TitleIDs: []int64{title.ID}, Newest: true})
 	running, label, queued, failed, msg := titleActivityFrom(js, title)
 	if queued == nil {
 		queued = []string{}

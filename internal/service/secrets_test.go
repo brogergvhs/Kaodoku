@@ -52,25 +52,23 @@ func TestEncryptLegacyTokens(t *testing.T) {
 	}
 	defer closeDB()
 
-	if _, err := svc.db.ExecContext(ctx, `INSERT INTO user_anilist (user_id, access_token, anilist_user_id, anilist_name) VALUES (1, 'legacy-plain', 7, 'x')`); err != nil {
+	tagsSynced(svc)
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO tracker_accounts (user_id, provider, access_token, remote_user_id, remote_name) VALUES (1, 'anilist', 'legacy-plain', '7', 'x')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.encryptLegacyTokens(ctx); err != nil {
 		t.Fatal(err)
 	}
 	var stored string
-	if err := svc.db.QueryRowContext(ctx, `SELECT access_token FROM user_anilist WHERE user_id = 1`).Scan(&stored); err != nil {
+	if err := svc.db.QueryRowContext(ctx, `SELECT access_token FROM tracker_accounts WHERE user_id = 1`).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(stored, encPrefix) {
 		t.Fatalf("token not encrypted: %q", stored)
 	}
-	tctx, aid, ok := svc.aniListIdentity(ctx, 1)
-	if !ok || aid != 7 {
-		t.Fatalf("identity = (%d, %v)", aid, ok)
-	}
-	if tok := catalog.TokenFromContext(tctx); tok != "legacy-plain" {
-		t.Fatalf("decrypted token = %q", tok)
+	_, tctx, ok := svc.trackerSession(ctx, 1, catalog.AniListProvider)
+	if acct := catalog.AccountFrom(tctx); !ok || acct.UserID != "7" || acct.Token != "legacy-plain" {
+		t.Fatalf("session = (%+v, %v)", acct, ok)
 	}
 }
 
@@ -90,7 +88,7 @@ func TestRotateEncryptionKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `INSERT INTO user_anilist (user_id, access_token, anilist_user_id, anilist_name) VALUES (1, ?, 7, 'x')`, enc); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO tracker_accounts (user_id, provider, access_token, remote_user_id, remote_name) VALUES (1, 'anilist', ?, '7', 'x')`, enc); err != nil {
 		t.Fatal(err)
 	}
 	closeDB()
@@ -115,7 +113,7 @@ func TestRotateEncryptionKey(t *testing.T) {
 	}
 	defer closeDB2()
 	var stored string
-	if err := svc2.db.QueryRowContext(ctx, `SELECT access_token FROM user_anilist WHERE user_id = 1`).Scan(&stored); err != nil {
+	if err := svc2.db.QueryRowContext(ctx, `SELECT access_token FROM tracker_accounts WHERE user_id = 1`).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
 	if stored == enc {

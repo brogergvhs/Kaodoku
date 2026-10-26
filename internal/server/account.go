@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -75,4 +76,23 @@ func (u *webUI) accountTokenDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.frag(w, "accountCard", u.accountData(r, ""))
+}
+
+func (u *webUI) accountContent(w http.ResponseWriter, r *http.Request) {
+	user := userFrom(r.Context())
+	if !user.Can(auth.PermUsersManage) {
+		u.fail(w, fmt.Errorf("missing permission %s", auth.PermUsersManage))
+		return
+	}
+	me, err := u.svc.Auth().GetUser(r.Context(), user.ID)
+	if err != nil || me == nil {
+		u.fail(w, fmt.Errorf("user not found"))
+		return
+	}
+	if err := u.svc.Auth().UpdateUser(r.Context(), me.ID, me.RoleID, "", contentGuardsFromForm(r)); err != nil {
+		u.fail(w, err)
+		return
+	}
+	flushBasicCreds()
+	u.frag(w, "toast", toastView{OK: true, Msg: "Saved ✓"})
 }

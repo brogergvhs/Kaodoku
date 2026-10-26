@@ -18,10 +18,8 @@ import (
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
-	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/service"
-	"github.com/brogergvhs/kaodoku/internal/util"
 )
 
 const maxPageBytes = 64 << 20 // per-image download cap
@@ -60,6 +58,7 @@ func registerAPIV1(mux *http.ServeMux, svc *service.JobService, runJobs func(con
 	mux.HandleFunc("GET /api/v1/library", a.libraryList)
 	mux.HandleFunc("GET /api/v1/library/{id}", a.libraryGet)
 	mux.HandleFunc("GET /api/v1/covers/{id}", a.titleCover)
+	mux.HandleFunc("GET /api/v1/banners/{id}", a.titleBanner)
 	mux.HandleFunc("GET /api/v1/volumes/{id}/cover", func(w http.ResponseWriter, r *http.Request) { serveVolumeCover(w, r, svc) })
 
 	mux.HandleFunc("GET /api/v1/reader/titles/{id}", a.readerTitle)
@@ -80,6 +79,8 @@ func registerAPIV1(mux *http.ServeMux, svc *service.JobService, runJobs func(con
 	mux.HandleFunc("POST /api/v1/reader/titles/{id}/volumes/read-range", a.volumesReadRange)
 
 	mux.HandleFunc("PUT /api/v1/library/{id}/favourite", a.setFavourite(true))
+	mux.HandleFunc("PUT /api/v1/library/{id}/rating", a.setRating)
+	mux.HandleFunc("POST /api/v1/library/{id}/rating/missing", a.answerMissingRating)
 	mux.HandleFunc("DELETE /api/v1/library/{id}/favourite", a.setFavourite(false))
 	mux.HandleFunc("PATCH /api/v1/library/{id}", a.patchTitle)
 	mux.HandleFunc("DELETE /api/v1/library/{id}", a.deleteTitle)
@@ -102,9 +103,13 @@ func registerAPIV1(mux *http.ServeMux, svc *service.JobService, runJobs func(con
 
 	mux.HandleFunc("GET /api/v1/me/settings", a.meSettingsGet)
 	mux.HandleFunc("PUT /api/v1/me/settings", a.meSettingsPut)
-	mux.HandleFunc("GET /api/v1/anilist", a.anilistStatus)
-	mux.HandleFunc("POST /api/v1/anilist/sync", a.anilistSync)
-	mux.HandleFunc("DELETE /api/v1/anilist", a.anilistDisconnect)
+	mux.HandleFunc("POST /api/v1/trackers/sync", a.syncAllTrackers)
+	mux.HandleFunc("PUT /api/v1/trackers/order", a.trackerOrder)
+	mux.HandleFunc("PUT /api/v1/trackers/{provider}/settings", a.trackerSettings)
+	mux.HandleFunc("GET /api/v1/trackers", a.trackersList)
+	mux.HandleFunc("POST /api/v1/trackers/{provider}/login", a.trackerLogin)
+	mux.HandleFunc("POST /api/v1/trackers/{provider}/sync", a.trackerSync)
+	mux.HandleFunc("DELETE /api/v1/trackers/{provider}", a.trackerDisconnect)
 
 	mux.HandleFunc("GET /api/v1/wanted/search", a.wantedSearch)
 	mux.HandleFunc("GET /api/v1/tags", a.tagOptions)
@@ -157,9 +162,22 @@ type metaDTO struct {
 }
 
 type meDTO struct {
-	User        meUserDTO  `json:"user"`
-	Permissions []string   `json:"permissions"`
-	AniList     aniListDTO `json:"anilist"`
+	User        meUserDTO    `json:"user"`
+	Permissions []string     `json:"permissions"`
+	Trackers    []trackerDTO `json:"trackers"`
+}
+
+type trackerDTO struct {
+	Provider  string                `json:"provider"`
+	Label     string                `json:"label"`
+	Login     string                `json:"login,omitempty"`
+	Connected bool                  `json:"connected"`
+	Name      string                `json:"name,omitempty"`
+	ExpiresAt string                `json:"expires_at,omitempty"`
+	LastError string                `json:"last_error,omitempty"`
+	Outage    string                `json:"unavailable,omitempty"`
+	Settings  *service.TrackerPrefs `json:"settings,omitempty"`
+	Position  int                   `json:"position"`
 }
 
 type meUserDTO struct {
@@ -169,24 +187,18 @@ type meUserDTO struct {
 	AllowAdult bool   `json:"allow_adult"`
 }
 
-type aniListDTO struct {
-	Connected bool   `json:"connected"`
-	Name      string `json:"name"`
-	ExpiresAt string `json:"expires_at,omitempty"`
-}
-
-// meDTOFor builds the current-user payload (identity, permissions, AniList link).
+// meDTOFor builds the current-user payload (identity, permissions, tracker links).
 func (a *apiV1) meDTOFor(r *http.Request, user *auth.User) meDTO {
+	r = r.WithContext(auth.WithUser(r.Context(), user))
 	perms := make([]string, 0, len(user.Perms))
 	for p := range user.Perms {
 		perms = append(perms, p)
 	}
 	sort.Strings(perms)
-	conn := a.svc.AniListConnectionFor(r.Context(), user.ID)
 	return meDTO{
 		User:        meUserDTO{ID: user.ID, Username: user.Username, Role: user.RoleName, AllowAdult: user.AllowAdult},
 		Permissions: perms,
-		AniList:     aniListDTO{Connected: conn.Connected, Name: conn.Name, ExpiresAt: conn.ExpiresAt},
+		Trackers:    a.trackers(r),
 	}
 }
 
@@ -195,7 +207,7 @@ func (a *apiV1) meta(w http.ResponseWriter, _ *http.Request) {
 		ServerVersion: serverVersion(),
 		APIVersion:    1,
 		AuthRequired:  authEnabled(),
-		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "anilist"},
+		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "trackers", "ratings"},
 		ImageFormats:  []string{"jpg", "jpeg", "png", "webp", "gif", "avif"},
 		MaxPageBytes:  maxPageBytes,
 		InstanceID:    a.instanceID,
@@ -286,10 +298,6 @@ func (a *apiV1) revokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
-// coverClient fetches remote covers with the private-network guard so the proxy
-// can't be aimed at internal services.
-var coverClient, _ = util.NewHTTPClient(util.HTTPClientOptions{Timeout: 20 * time.Second, BlockPrivateNetworks: true})
 
 // serveChapterPage streams one page image from a downloaded chapter's CBZ.
 func serveChapterPage(w http.ResponseWriter, r *http.Request, svc *service.JobService) {
@@ -395,7 +403,7 @@ func serveVolumeCover(w http.ResponseWriter, r *http.Request, svc *service.JobSe
 }
 
 // titleCover proxies a title's remote cover so the app only ever talks to this
-// server. ponytail: no persistent cache; relies on the client + Cache-Control.
+// server.
 func (a *apiV1) titleCover(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -422,92 +430,84 @@ func serveTitleCover(w http.ResponseWriter, r *http.Request, svc *service.JobSer
 		_, _ = w.Write(blob)
 		return
 	}
-	if !strings.HasPrefix(t.CoverImage, "https://") {
-		http.NotFound(w, r)
-		return
-	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, t.CoverImage, nil)
+	proxyRemoteImage(w, r, svc, t.CoverImage, "Cover proxy")
+}
+
+func (a *apiV1) titleBanner(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	resp, err := coverClient.Do(req)
+	t, err := a.svc.GetTitle(r.Context(), id)
+	if err != nil || !contentAllowed(r.Context(), t.IsAdult, t.ContentTags) {
+		http.NotFound(w, r)
+		return
+	}
+	proxyRemoteImage(w, r, a.svc, t.BannerImage, "Banner proxy")
+}
+
+func proxyRemoteImage(w http.ResponseWriter, r *http.Request, svc *service.JobService, url, reason string) {
+	if !strings.HasPrefix(url, "https://") {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := svc.Image(r.Context(), url, reason)
 	if err != nil {
-		http.Error(w, "cover fetch failed", http.StatusBadGateway)
+		http.Error(w, "image unavailable", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "cover unavailable", http.StatusBadGateway)
-		return
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
+	w.Header().Set("Content-Type", http.DetectContentType(data))
 	w.Header().Set("Cache-Control", "private, max-age=604800")
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = w.Write(data)
 }
 
 func (a *apiV1) libraryList(w http.ResponseWriter, r *http.Request) {
 	now := serverTime()
-	titles, err := a.svc.ListTitles(r.Context())
-	if err != nil {
-		v1err(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	titles = filterRestrictedTitles(r.Context(), titles)
+	ctx := r.Context()
 	q := r.URL.Query()
 	since, ok := parseSince(r)
 	if !ok {
 		v1err(w, http.StatusBadRequest, "bad_request", "since must be RFC3339")
 		return
 	}
+	base, visible := visibleTitles(ctx)
+	tq := libraryControlsFromQuery(q).apply(base)
+	tq.Sort, tq.Dir = v1SortKey(q.Get("sort")), q.Get("dir")
 	var ids []int64
 	if since != "" {
-		ids = make([]int64, 0, len(titles))
-		kept := titles[:0]
-		for _, t := range titles {
-			ids = append(ids, t.ID)
-			if database.FormatTime(t.UpdatedAt) >= since {
-				kept = append(kept, t)
+		ids = []int64{}
+		if visible {
+			all, err := a.svc.TitleIDs(ctx, base)
+			if err != nil {
+				v1err(w, http.StatusInternalServerError, "internal", err.Error())
+				return
 			}
+			ids = append(ids, all...)
 		}
-		titles = kept
+		tq.UpdatedSince = since
 	}
 	if rawIDs := q.Get("ids"); rawIDs != "" {
-		want := map[int64]bool{}
-		for _, part := range strings.Split(rawIDs, ",") {
-			if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
-				want[id] = true
-			}
-		}
-		kept := titles[:0]
-		for _, t := range titles {
-			if want[t.ID] {
-				kept = append(kept, t)
-			}
-		}
-		titles = kept
+		tq.IDs = parseIDs(rawIDs)
 	}
-	titles = filterTitles(titles, libraryControlsFromQuery(q))
-	sortTitles(titles, v1SortKey(q.Get("sort")), q.Get("dir"))
-	total := len(titles)
 	limit := clampLimit(q.Get("limit"))
 	off, _ := strconv.Atoi(q.Get("cursor"))
-	if off < 0 {
-		off = 0
+	tq.Offset, tq.Limit = max(off, 0), limit
+	var titles []library.Title
+	total := 0
+	if visible {
+		var err error
+		if total, err = a.svc.CountTitles(ctx, tq); err == nil && tq.Offset < total {
+			titles, err = a.svc.PageTitles(ctx, tq)
+		}
+		if err != nil {
+			v1err(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
 	}
 	next := ""
-	if off < total {
-		end := off + limit
-		if end >= total {
-			end = total
-		} else {
-			next = strconv.Itoa(end)
-		}
-		titles = titles[off:end]
-	} else {
-		titles = nil
+	if end := tq.Offset + limit; end < total {
+		next = strconv.Itoa(end)
 	}
 	items := make([]titleDTO, 0, len(titles))
 	for _, t := range titles {
@@ -571,6 +571,8 @@ func (a *apiV1) readerTitle(w http.ResponseWriter, r *http.Request) {
 			dto.Manga = toMangaDetailDTO(m)
 		}
 	}
+	rating := a.svc.TitleRating(r.Context(), id)
+	dto.Rating = &rating
 	writeJSON(w, http.StatusOK, dto)
 }
 

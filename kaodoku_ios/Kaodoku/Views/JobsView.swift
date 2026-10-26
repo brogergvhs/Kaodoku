@@ -187,7 +187,7 @@ private let startableJobs: [(String, String)] = [
   ("scan_downloads", "Scan downloads"),
   ("download_missing", "Download missing"),
   ("catalog_refresh", "Catalog refresh"),
-  ("sync_anilist", "AniList sync"),
+  ("sync_trackers", "Tracker sync"),
   ("backup_user_data", "Back up user data"),
 ]
 
@@ -196,7 +196,7 @@ func jobLabel(_ type: String) -> String {
   case "refresh_title": "Refresh chapters"
   case "scan_downloads": "Scan downloads"
   case "download_missing": "Download missing"
-  case "sync_anilist": "AniList sync"
+  case "sync_trackers": "Tracker sync"
   case "catalog_refresh": "Catalog refresh"
   case "attach_volumes": "Attach volumes"
   case "verify_source": "Verify source"

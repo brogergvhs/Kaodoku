@@ -15,6 +15,7 @@ type Title struct {
 	SourceURL       string
 	DisplayTitle    string
 	CoverImage      string
+	BannerImage     string
 	CustomCover     bool
 	OutputPath      string
 	Monitored       bool
@@ -29,7 +30,7 @@ type Title struct {
 	Pages           int64
 	ReleaseStatus   string
 	IsAdult         bool
-	AverageScore    int64    // AniList community score 0-100, 0 = unknown
+	AverageScore    int64    // provider community score 0-100, 0 = unknown
 	ContentTags     []string // catalog tags+genres, for per-user content guards
 	Favourite       bool     // acting user's favourite mark
 	LanguageMode    string   // '' ask, 'preferred', 'all', 'off'
@@ -80,7 +81,7 @@ type ChapterReadStatus struct {
 	TotalPages      int
 	LastPage        int
 	Completed       bool
-	Manual          bool // completed via bulk/AniList mark, not page-by-page reading
+	Manual          bool // completed via bulk/tracker mark, not page-by-page reading
 	FirstUnreadPage int
 	LastReadAt      *time.Time
 	CompletedAt     *time.Time

@@ -113,7 +113,7 @@ func loadDBSources(ctx context.Context, dbPath string, builtins []sources.Profil
 		return nil, err
 	}
 	repo := sources.NewRepository(db)
-	if err := repo.Sync(ctx, builtins, sources.OriginBuiltin); err != nil {
+	if err := repo.Sync(ctx, builtins, sources.OriginBuiltin, true); err != nil {
 		return nil, err
 	}
 	return repo.List(ctx)

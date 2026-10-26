@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    paths-ignore: &ignore
+      - "kaodoku_ios/**"
+      - "browser-worker/**"
+      - "kotatsu-worker/**"
+      - "**.md"
+  pull_request:
+    paths-ignore: *ignore
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - run: go vet ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: go test -race ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build .

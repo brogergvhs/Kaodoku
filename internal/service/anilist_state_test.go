@@ -69,12 +69,12 @@ func TestLocalAniListState(t *testing.T) {
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			titleID := seed(t, fmt.Sprintf("k%d", i), tc.release, tc.numbers, tc.read)
-			progress, status, err := svc.localAniListState(ctx, 1, titleID)
+			progress, status, err := svc.localTrackerState(ctx, 1, titleID)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if progress != tc.wantProgress || status != tc.wantStatus {
-				t.Fatalf("localAniListState = (%d, %q), want (%d, %q)", progress, status, tc.wantProgress, tc.wantStatus)
+				t.Fatalf("localTrackerState = (%d, %q), want (%d, %q)", progress, status, tc.wantProgress, tc.wantStatus)
 			}
 		})
 	}

@@ -25,7 +25,7 @@ func TestRepositorySyncListAndUpdateCheck(t *testing.T) {
 		RequiresBrowserDownload: true,
 		Enabled:                 true,
 	}
-	if err := repo.Sync(ctx, []Profile{profile}, OriginLocal); err != nil {
+	if err := repo.Sync(ctx, []Profile{profile}, OriginLocal, false); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
 	if err := repo.UpdateCheck(ctx, "example", CheckResult{
@@ -91,10 +91,10 @@ func TestRepositoryLocalOverridesSyncedSources(t *testing.T) {
 		SampleMangaURL: "https://builtin.test/manga/demo/",
 		Enabled:        true,
 	}
-	if err := repo.Sync(ctx, []Profile{local}, OriginLocal); err != nil {
+	if err := repo.Sync(ctx, []Profile{local}, OriginLocal, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Sync(ctx, []Profile{builtin}, OriginBuiltin); err != nil {
+	if err := repo.Sync(ctx, []Profile{builtin}, OriginBuiltin, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,7 +188,7 @@ func TestTitleCounts(t *testing.T) {
 	if err := repo.Sync(ctx, []Profile{
 		{ID: "alpha", Name: "Alpha", BaseURL: "https://a.test/", SampleMangaURL: "https://a.test/m/1", Enabled: true},
 		{ID: "beta", Name: "Beta", BaseURL: "https://b.test/", SampleMangaURL: "https://b.test/m/1", Enabled: true},
-	}, OriginLocal); err != nil {
+	}, OriginLocal, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range []string{
@@ -216,5 +216,36 @@ func TestTitleCounts(t *testing.T) {
 	}
 	if _, ok := got[""]; ok {
 		t.Error("empty source id must not be counted")
+	}
+}
+
+func TestSyncPrunesRemovedSameOrigin(t *testing.T) {
+	t.Parallel()
+
+	ctx, repo, closeDB := testRepository(t)
+	defer closeDB()
+	p := func(id string) Profile {
+		return Profile{ID: id, Name: id, BaseURL: "https://" + id + ".test/", SampleMangaURL: "https://" + id + ".test/m/1", Enabled: true}
+	}
+	if err := repo.Sync(ctx, []Profile{p("alpha"), p("beta")}, OriginBuiltin, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Sync(ctx, []Profile{p("mine")}, OriginLocal, false); err != nil {
+		t.Fatal(err)
+	}
+	// Re-sync builtins without beta: beta is pruned, alpha stays, local untouched.
+	if err := repo.Sync(ctx, []Profile{p("alpha")}, OriginBuiltin, true); err != nil {
+		t.Fatal(err)
+	}
+	list, err := repo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, s := range list {
+		got[s.ID] = true
+	}
+	if !got["alpha"] || !got["mine"] || got["beta"] {
+		t.Fatalf("after prune got %v, want alpha+mine without beta", got)
 	}
 }

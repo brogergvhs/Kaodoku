@@ -14,7 +14,9 @@ func TestHasAnyTag(t *testing.T) {
 		{"empty want", []string{"Action"}, nil, false},
 		{"case-insensitive", []string{"Action", "Drama"}, []string{"action"}, true},
 		{"trimmed", []string{" Action "}, []string{"action "}, true},
+		{"punctuation", []string{"Sci Fi"}, []string{"sci-fi"}, true},
 		{"no match", []string{"Horror"}, []string{"Drama"}, false},
+		{"no partial match", []string{"Drama"}, []string{"Dramatic"}, false},
 		{"empty have", nil, []string{"x"}, false},
 	}
 	for _, tc := range cases {

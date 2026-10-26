@@ -35,12 +35,13 @@ func TestRepositoryStoresWantedMangaAndMatches(t *testing.T) {
 		TitleEnglish: "Demo Manga",
 		Chapters:     &chapters,
 		Synonyms:     []string{"Demo", "Demo"},
+		BannerImage:  "https://img.test/banner.jpg",
 		Wanted:       true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manga.Wanted || len(manga.Synonyms) != 1 {
+	if !manga.Wanted || len(manga.Synonyms) != 1 || manga.BannerImage != "https://img.test/banner.jpg" {
 		t.Fatalf("manga = %#v", manga)
 	}
 
@@ -92,5 +93,26 @@ func TestRecordMatchMissHiddenFromList(t *testing.T) {
 	}
 	if len(all) != 1 || all[0].ChaptersFound != 0 || all[0].SourceID != "manhuaus" {
 		t.Fatalf("ListMatches() = %#v, want one miss marker with 0 chapters", all)
+	}
+}
+
+func TestRepositoryMangaAuthors(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRepository(db)
+	m, err := repo.UpsertManga(ctx, Manga{Provider: AniListProvider, ProviderID: "1", Authors: []string{"Tsukushi Akihito"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.MangaAuthors(ctx, []int64{m.ID})
+	if err != nil || len(got[m.ID].Authors) != 1 || got[m.ID].ProviderID != "1" {
+		t.Fatalf("authors = %+v, %v", got, err)
 	}
 }

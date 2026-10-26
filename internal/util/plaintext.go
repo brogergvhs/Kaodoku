@@ -34,5 +34,5 @@ func PlainSnippet(s string, max int) string {
 	if i := strings.LastIndexByte(cut, ' '); i > 0 {
 		cut = cut[:i]
 	}
-	return cut + "…"
+	return cut + "..."
 }

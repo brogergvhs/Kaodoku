@@ -298,11 +298,15 @@ func (r *Repository) MarkVolumePageRead(ctx context.Context, volumeID int64, pag
 	if totalPages <= 0 {
 		totalPages = v.Pages
 	}
+	return v, upsertVolumePage(ctx, r.db.ExecContext, volumeID, page, totalPages)
+}
+
+func upsertVolumePage(ctx context.Context, exec func(context.Context, string, ...any) (sql.Result, error), volumeID int64, page, totalPages int) error {
 	completed := 0
 	if totalPages > 0 && page >= totalPages {
 		completed = 1
 	}
-	_, err = r.db.ExecContext(ctx, `
+	_, err := exec(ctx, `
 		INSERT INTO volume_read_progress (user_id, volume_id, completed, read_pages, total_pages, last_page)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, volume_id) DO UPDATE SET
@@ -312,7 +316,7 @@ func (r *Repository) MarkVolumePageRead(ctx context.Context, volumeID int64, pag
 			completed = MAX(completed, excluded.completed),
 			last_read_at = CURRENT_TIMESTAMP
 	`, auth.UserID(ctx), volumeID, completed, page, totalPages, page)
-	return v, err
+	return err
 }
 
 // VolumesReaderProgress shapes a title's volumes as reader chapters so the

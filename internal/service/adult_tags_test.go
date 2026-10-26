@@ -21,14 +21,16 @@ func TestAdultTagNamesFailsClosed(t *testing.T) {
 
 	// Populated vocabulary: adult names come from the store plus the seed;
 	// non-adult stays visible.
-	if err := svc.want.catalog.ReplaceContentTags(ctx, []string{"Action"}, []catalog.ContentTag{
+	if err := svc.catalog.repo.ReplaceContentTags(ctx, catalog.MangaUpdatesProvider, []catalog.ContentTag{
+		{Name: "Action", Kind: "genre"},
+		{Name: "Adult", Kind: "genre"},
 		{Name: "Guro", Kind: "tag", IsAdult: true},
 		{Name: "Kids", Kind: "tag"},
 	}); err != nil {
 		t.Fatalf("ReplaceContentTags() error = %v", err)
 	}
 	names := svc.AdultTagNames(ctx)
-	if !slices.Contains(names, "Guro") {
+	if !slices.Contains(names, "Guro") || !slices.Contains(names, "Adult") {
 		t.Error("stored adult tag missing from AdultTagNames")
 	}
 	if !slices.Contains(names, "Hentai") || !slices.Contains(names, "Netorare") {

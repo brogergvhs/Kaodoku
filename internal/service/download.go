@@ -150,6 +150,8 @@ func NewSourceDownloadService(
 	return newDownloadServiceWithScraper(cfg, log, progress, scraperName)
 }
 
+var cloudflareTransport = cloudflarebp.AddCloudFlareByPass(http.DefaultTransport)
+
 func newDownloadServiceWithScraper(
 	cfg *config.Config,
 	log ui.Log,
@@ -161,7 +163,7 @@ func newDownloadServiceWithScraper(
 		Timeout:              30 * time.Second,
 		UserAgent:            util.PickUserAgent(cfg.UserAgent),
 		Cookie:               cfg.Cookie,
-		Transport:            cloudflarebp.AddCloudFlareByPass(http.DefaultTransport),
+		Transport:            cloudflareTransport,
 		CookieFile:           cfg.CookieFile,
 		State:                browserState,
 		RateLimit:            hostRateLimit(cfg),

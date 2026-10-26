@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -15,6 +14,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/browserfetch"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/config"
+	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
@@ -37,7 +37,7 @@ type SourceVerifyResult struct {
 	Error           string               `json:"error,omitempty"`
 }
 
-func newSourceService(db *sql.DB) *sourceService {
+func newSourceService(db database.Handle) *sourceService {
 	return &sourceService{repo: sources.NewRepository(db)}
 }
 
@@ -107,7 +107,7 @@ func (s *sourceService) SyncBuiltIn(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.repo.Sync(ctx, profiles, sources.OriginBuiltin)
+	return s.repo.Sync(ctx, profiles, sources.OriginBuiltin, true)
 }
 
 func (s *sourceService) SyncRegistry(ctx context.Context, registryURL string) error {
@@ -115,7 +115,7 @@ func (s *sourceService) SyncRegistry(ctx context.Context, registryURL string) er
 	if err != nil {
 		return err
 	}
-	return s.repo.Sync(ctx, profiles, sources.OriginRegistry)
+	return s.repo.Sync(ctx, profiles, sources.OriginRegistry, true)
 }
 
 func (s *sourceService) ListSources(ctx context.Context) ([]sources.Source, error) {
@@ -127,7 +127,7 @@ func (s *sourceService) GetSource(ctx context.Context, id string) (sources.Sourc
 }
 
 func (s *sourceService) ImportLocal(ctx context.Context, profile sources.Profile) error {
-	return s.repo.Sync(ctx, []sources.Profile{profile}, sources.OriginLocal)
+	return s.repo.Sync(ctx, []sources.Profile{profile}, sources.OriginLocal, false)
 }
 
 // SetFetchMethods overrides a source's chapter/image fetch methods. Empty means

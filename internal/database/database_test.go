@@ -24,39 +24,14 @@ func TestOpenAndMigrate(t *testing.T) {
 		t.Fatalf("MaxOpenConnections = %d, want 1", maxOpen)
 	}
 
-	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 1`).Scan(&count); err != nil {
-		t.Fatalf("query schema_migrations error = %v", err)
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("second Migrate() error = %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("schema migration count = %d, want 1", count)
+	if _, err := db.ExecContext(ctx, `PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
 	}
-	ok, exists, err := tableHasColumn(ctx, db, "sources", "requires_browser_downloader")
-	if err != nil {
-		t.Fatalf("tableHasColumn() error = %v", err)
-	}
-	if !exists || !ok {
-		t.Fatalf("sources.requires_browser_downloader exists=%t ok=%t", exists, ok)
-	}
-	for _, tc := range []struct {
-		table  string
-		column string
-	}{
-		{"catalog_manga", "wanted"},
-		{"catalog_manga", "synonyms_json"},
-		{"sources", "search_url"},
-		{"title_source_matches", "chapters_found"},
-		{"title_source_matches", "updated_at"},
-		{"chapter_read_progress", "read_pages"},
-		{"chapter_read_pages", "read_at"},
-	} {
-		ok, exists, err := tableHasColumn(ctx, db, tc.table, tc.column)
-		if err != nil {
-			t.Fatalf("tableHasColumn(%s.%s) error = %v", tc.table, tc.column, err)
-		}
-		if !exists || !ok {
-			t.Fatalf("%s.%s exists=%t ok=%t", tc.table, tc.column, exists, ok)
-		}
+	if err := Migrate(ctx, db); err == nil {
+		t.Fatal("Migrate() accepted a database from another schema version")
 	}
 }
 
@@ -102,30 +77,3 @@ func TestOpenAppliesPragmasToEveryConnection(t *testing.T) {
 }
 
 // tableHasColumn reports whether table exists and whether it has column.
-func tableHasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, bool, error) {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
-	if err != nil {
-		return false, false, err
-	}
-	defer rows.Close()
-
-	var exists bool
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notNull int
-		var defaultValue any
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			return false, false, err
-		}
-		exists = true
-		if name == column {
-			return true, true, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, false, err
-	}
-	return false, exists, nil
-}

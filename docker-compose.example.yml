@@ -8,125 +8,80 @@ services:
       - --db
       - /data/kaodoku.db
     ports:
-      # Without KAODOKU_ADMIN_PASSWORD the app runs in single-user mode with
-      # no login;
       - "127.0.0.1:8080:8080"
+    env_file: .env
     environment:
       XDG_CONFIG_HOME: /config
       KAODOKU_DOWNLOAD_DIR: /downloads
-      # The environment admin: sign-in is enabled when the password is set.
-      # This account is immutable in-app and manages further users/roles.
-      # KAODOKU_ADMIN_USER: admin
-      # KAODOKU_ADMIN_PASSWORD: change-me
-      #
-      # OIDC single sign-on (requires the admin password above; that login
-      # stays available as break-glass). Register kaodoku at your identity
-      # provider with redirect URI https://<your-host>/auth/oidc/callback.
-      # KAODOKU_OIDC_ISSUER: https://auth.example.com
-      # KAODOKU_OIDC_CLIENT_ID: kaodoku
-      # KAODOKU_OIDC_CLIENT_SECRET: change-me
-      #
-      # Set explicitly when behind a reverse proxy:
-      # KAODOKU_OIDC_REDIRECT_URL: https://kaodoku.example.com/auth/oidc/callback
-      #
-      # Create accounts on first SSO login (else an admin links subjects on
-      # the Users page):
-      # KAODOKU_OIDC_AUTO_PROVISION: "true"
-      #
-      # Hold auto-provisioned accounts as "pending" until someone with the
-      # users.approve permission approves them on the Users page:
-      # KAODOKU_OIDC_REQUIRE_APPROVAL: "true"
-      # KAODOKU_OIDC_DEFAULT_ROLE: member
-      #
-      # Map IdP groups/roles to kaodoku roles, re-synced on every login.
-      # Keycloak realm roles use the nested path realm_access.roles.
-      # KAODOKU_OIDC_ROLE_CLAIM: groups
-      # KAODOKU_OIDC_ROLE_MAP: kaodoku-admins:admin,kaodoku-users:member
-      #
-      # Extra scopes when your IdP gates claims behind one ("openid" is
-      # always requested):
-      # KAODOKU_OIDC_SCOPES: profile email groups
-      #
-      # Claim used for provisioned usernames (falls back to email, then sub):
-      # KAODOKU_OIDC_USERNAME_CLAIM: preferred_username
-      KAODOKU_BROWSER_DOWNLOADER_ENABLED: "true"
-      KAODOKU_BROWSER_DOWNLOADER_ENDPOINT: http://browser-worker:8192
-      KAODOKU_BROWSER_DOWNLOADER_TIMEOUT_SECONDS: "180"
-      # Must match browser-worker's BROWSER_WORKER_KEY when that is set:
-      # KAODOKU_BROWSER_DOWNLOADER_API_KEY: change-me
-      KAODOKU_BROWSER_SOLVER_ENABLED: "true"
-      KAODOKU_BROWSER_SOLVER_ENDPOINT: http://flaresolverr:8191/v1
-      KAODOKU_BROWSER_SOLVER_TIMEOUT_SECONDS: "60"
-      #
-      # Optional: extra sources via the kotatsu-worker service below. The API
-      # key must match the worker's WORKER_KEY.
-      # KAODOKU_KOTATSU_WORKER_ENABLED: "true"
-      # KAODOKU_KOTATSU_WORKER_ENDPOINT: http://kotatsu-worker:8484
-      # KAODOKU_KOTATSU_WORKER_API_KEY: change-me
     volumes:
       - kaodoku-config:/config
       - kaodoku-data:/data
       - kaodoku-downloads:/downloads
-    depends_on:
-      browser-worker:
-        condition: service_healthy
-      flaresolverr:
-        condition: service_started
+    # Uncomment depends_on and the entry for each helper service you enable
+    # below, so Kaodoku starts after it.
+    # depends_on:
+    #   browser-worker:
+    #     condition: service_healthy
+    #   flaresolverr:
+    #     condition: service_started
 
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    environment:
-      LOG_LEVEL: info
-    ports:
-      - "127.0.0.1:8191:8191"
+  # Optional helper services. To turn one on, uncomment its
+  # block here and its variables in .env, then its depends_on entry above.
 
-  selenium:
-    image: selenium/standalone-chromium:latest
-    shm_size: 4gb
-    environment:
-      SE_NODE_MAX_SESSIONS: "4"
-      SE_NODE_OVERRIDE_MAX_SESSIONS: "true"
-    ports:
-      - "127.0.0.1:4444:4444"
+  # FlareSolverr clears Cloudflare challenges. In .env: KAODOKU_BROWSER_SOLVER_*.
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   environment:
+  #     LOG_LEVEL: info
+  #   ports:
+  #     - "127.0.0.1:8191:8191"
 
-  browser-worker:
-    build: ./browser-worker
-    environment:
-      SELENIUM_REMOTE_URL: http://selenium:4444/wd/hub
-      BROWSER_WORKER_ADDR: 0.0.0.0:8192
-      # When set, POST requests require a matching X-Worker-Key header; keep
-      # it in sync with the callers' keys below.
-      # BROWSER_WORKER_KEY: change-me
-    depends_on:
-      selenium:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8192/health').read()"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+  # selenium + browser-worker render JavaScript-heavy readers; enable both.
+  # In .env: KAODOKU_BROWSER_DOWNLOADER_*.
+  # selenium:
+  #   image: selenium/standalone-chromium:latest
+  #   shm_size: 4gb
+  #   environment:
+  #     SE_NODE_MAX_SESSIONS: "4"
+  #     SE_NODE_OVERRIDE_MAX_SESSIONS: "true"
+  #   ports:
+  #     - "127.0.0.1:4444:4444"
+  #
+  # browser-worker:
+  #   build: ./browser-worker
+  #   environment:
+  #     SELENIUM_REMOTE_URL: http://selenium:4444/wd/hub
+  #     BROWSER_WORKER_ADDR: 0.0.0.0:8192
+  #     BROWSER_WORKER_KEY: ${KAODOKU_BROWSER_DOWNLOADER_API_KEY:-}
+  #   depends_on:
+  #     selenium:
+  #       condition: service_started
+  #   healthcheck:
+  #     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8192/health').read()"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
 
-  # Optional: kotatsu-worker provides ~1300 extra manga sources via
-  # kotatsu-parsers. Point kaodoku's kotatsu_worker.endpoint at it.
-  kotatsu-worker:
-    build: ./kotatsu-worker
-    restart: unless-stopped
-    mem_limit: 384m
-    environment:
-      WORKER_KEY: change-me
-      # Optional: lets the worker clear Cloudflare challenges. 
-      # Must share the worker's egress IP, so run it next to this service.
-      FLARESOLVERR_URL: http://flaresolverr:8191
-      # Optional: lets parsers that need JavaScript run it in the Selenium
-      # browser-worker (same egress-IP caveat as FlareSolverr). The key must
-      # match browser-worker's BROWSER_WORKER_KEY when that is set.
-      BROWSER_WORKER_URL: http://browser-worker:8192
-      # BROWSER_WORKER_KEY: change-me
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8484/healthz"]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
+  # kotatsu-worker adds ~1300 sources via kotatsu-parsers (see
+  # kotatsu-worker/README.md). In .env: KAODOKU_KOTATSU_WORKER_*.
+  # kotatsu-worker:
+  #   build: ./kotatsu-worker
+  #   restart: unless-stopped
+  #   mem_limit: 384m
+  #   environment:
+  #     WORKER_KEY: ${KAODOKU_KOTATSU_WORKER_API_KEY}
+  #     # With flaresolverr enabled, lets the worker clear Cloudflare challenges.
+  #     # It must share the worker's egress IP, so run it next to this service.
+  #     # FLARESOLVERR_URL: http://flaresolverr:8191
+  #     # With browser-worker enabled, lets parsers that need JavaScript run it
+  #     # there (same egress-IP caveat).
+  #     # BROWSER_WORKER_URL: http://browser-worker:8192
+  #     # BROWSER_WORKER_KEY: ${KAODOKU_BROWSER_DOWNLOADER_API_KEY:-}
+  #   healthcheck:
+  #     test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8484/healthz"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     start_period: 30s
 
 # tools:
 #   image: alpine:latest

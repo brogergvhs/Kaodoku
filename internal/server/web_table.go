@@ -6,10 +6,8 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/util"
 )
@@ -167,46 +165,6 @@ func paginate[T any](items []T, page, perPage int) ([]T, int) {
 	return items[start:end], total
 }
 
-func sortTitles(ts []library.Title, key, dir string) {
-	var less func(a, b library.Title) bool
-	switch key {
-	case "title":
-		less = func(a, b library.Title) bool {
-			return strings.ToLower(a.DisplayTitle) < strings.ToLower(b.DisplayTitle)
-		}
-	case "missing":
-		less = func(a, b library.Title) bool { return a.MissingCount < b.MissingCount }
-	case "failed":
-		less = func(a, b library.Title) bool { return a.FailedCount < b.FailedCount }
-	case "chapters":
-		less = func(a, b library.Title) bool { return a.DiscoveredCount < b.DiscoveredCount }
-	case "volumes":
-		less = func(a, b library.Title) bool { return a.VolumeCount < b.VolumeCount }
-	case "size":
-		less = func(a, b library.Title) bool { return a.SizeBytes+a.VolumeBytes < b.SizeBytes+b.VolumeBytes }
-	case "size-chapters":
-		less = func(a, b library.Title) bool { return a.SizeBytes < b.SizeBytes }
-	case "size-volumes":
-		less = func(a, b library.Title) bool { return a.VolumeBytes < b.VolumeBytes }
-	case "rating":
-		less = func(a, b library.Title) bool { return a.AverageScore < b.AverageScore }
-	case "updated":
-		less = func(a, b library.Title) bool { return a.UpdatedAt.Before(b.UpdatedAt) }
-	case "added":
-		less = func(a, b library.Title) bool { return a.CreatedAt.Before(b.CreatedAt) }
-	case "status":
-		less = func(a, b library.Title) bool { return a.ReleaseStatus < b.ReleaseStatus }
-	default:
-		return
-	}
-	sort.SliceStable(ts, func(i, j int) bool {
-		if dir == "desc" {
-			return less(ts[j], ts[i])
-		}
-		return less(ts[i], ts[j])
-	})
-}
-
 func sortChapters(cs []library.ChapterStatus, key, dir string) {
 	var less func(a, b library.ChapterStatus) bool
 	switch key {
@@ -250,23 +208,5 @@ func sortChapters(cs []library.ChapterStatus, key, dir string) {
 			return less(cs[j], cs[i])
 		}
 		return less(cs[i], cs[j])
-	})
-}
-
-func sortJobs(js []jobs.Job, key, dir string) {
-	var less func(a, b jobs.Job) bool
-	switch key {
-	case "type":
-		less = func(a, b jobs.Job) bool { return a.Type < b.Type }
-	case "updated":
-		less = func(a, b jobs.Job) bool { return a.UpdatedAt.Before(b.UpdatedAt) }
-	default:
-		return
-	}
-	sort.SliceStable(js, func(i, j int) bool {
-		if dir == "desc" {
-			return less(js[j], js[i])
-		}
-		return less(js[i], js[j])
 	})
 }

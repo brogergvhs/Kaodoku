@@ -5,28 +5,40 @@ import "time"
 
 // Manga is canonical metadata for a wanted title.
 type Manga struct {
-	ID           int64     `json:"id"`
-	Provider     string    `json:"provider"`
-	ProviderID   string    `json:"provider_id"`
-	TitleRomaji  string    `json:"title_romaji"`
-	TitleEnglish string    `json:"title_english"`
-	TitleNative  string    `json:"title_native"`
-	Description  string    `json:"description"`
-	CoverImage   string    `json:"cover_image"`
-	Status       string    `json:"status"`
-	Format       string    `json:"format"`
-	Chapters     *int      `json:"chapters,omitempty"`
-	Volumes      *int      `json:"volumes,omitempty"`
-	Synonyms     []string  `json:"synonyms,omitempty"`
-	Genres       []string  `json:"genres,omitempty"`
-	Authors      []string  `json:"authors,omitempty"`
-	Year         int       `json:"year,omitempty"`
-	AverageScore int       `json:"average_score,omitempty"`
-	IsAdult      bool      `json:"is_adult"`
-	Tags         []string  `json:"tags,omitempty"`
-	Wanted       bool      `json:"wanted"`
-	RawJSON      string    `json:"-"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           int64             `json:"id"`
+	Provider     string            `json:"provider"`
+	ProviderID   string            `json:"provider_id"`
+	TitleRomaji  string            `json:"title_romaji"`
+	TitleEnglish string            `json:"title_english"`
+	TitleNative  string            `json:"title_native"`
+	Description  string            `json:"description"`
+	CoverImage   string            `json:"cover_image"`
+	BannerImage  string            `json:"banner_image,omitempty"`
+	Status       string            `json:"status"`
+	Format       string            `json:"format"`
+	Chapters     *int              `json:"chapters,omitempty"`
+	Volumes      *int              `json:"volumes,omitempty"`
+	Synonyms     []string          `json:"synonyms,omitempty"`
+	Genres       []string          `json:"genres,omitempty"`
+	Authors      []string          `json:"authors,omitempty"`
+	Year         int               `json:"year,omitempty"`
+	AverageScore int               `json:"average_score,omitempty"`
+	IsAdult      bool              `json:"is_adult"`
+	Tags         []string          `json:"tags,omitempty"`
+	Wanted       bool              `json:"wanted"`
+	RawJSON      string            `json:"-"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+	RelationType string            `json:"relation_type,omitempty"`
+	ExternalIDs  map[string]string `json:"external_ids,omitempty"`
+	Sources      []string          `json:"-"` // providers that listed it, once merged
+}
+
+// Origins names where a listing came from: "mangabaka" for the local MangaBaka copy, else the trackers whose APIs sent it.
+func (m Manga) Origins() []string {
+	if len(m.Sources) > 0 {
+		return m.Sources
+	}
+	return []string{m.Provider}
 }
 
 // Match is one possible source URL for a canonical manga.

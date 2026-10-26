@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -503,43 +504,36 @@ func seriesCounts(t library.Title) (books, read int) {
 }
 
 func (k *komga) seriesList(w http.ResponseWriter, r *http.Request) {
-	titles, err := k.svc.ListTitles(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	titles = filterRestrictedTitles(r.Context(), titles)
 	q := r.URL.Query()
-
-	if search := strings.TrimSpace(q.Get("search")); search != "" {
-		kept := titles[:0]
-		for _, t := range titles {
-			if strings.Contains(strings.ToLower(t.DisplayTitle), strings.ToLower(search)) {
-				kept = append(kept, t)
-			}
+	tq, _ := visibleTitles(r.Context())
+	tq.Name = strings.TrimSpace(q.Get("search"))
+	tq.Sort = "title"
+	if s := q.Get("sort"); s != "" {
+		parts := strings.SplitN(s, ",", 2)
+		switch parts[0] {
+		case "createdDate":
+			tq.Sort = "added"
+		case "lastModifiedDate":
+			tq.Sort = "updated"
 		}
-		titles = kept
+		if len(parts) == 2 && parts[1] == "desc" {
+			tq.Dir = "desc"
+		}
 	}
+	var keep []func(library.Title) bool
 	if statuses := q.Get("status"); statuses != "" {
 		want := map[string]bool{}
 		for _, s := range strings.Split(statuses, ",") {
 			want[s] = true
 		}
-		kept := titles[:0]
-		for _, t := range titles {
-			if want[komgaSeriesStatus(t.ReleaseStatus)] {
-				kept = append(kept, t)
-			}
-		}
-		titles = kept
+		keep = append(keep, func(t library.Title) bool { return want[komgaSeriesStatus(t.ReleaseStatus)] })
 	}
 	if reads := q["read_status"]; len(reads) > 0 {
 		want := map[string]bool{}
 		for _, s := range reads {
 			want[s] = true
 		}
-		kept := titles[:0]
-		for _, t := range titles {
+		keep = append(keep, func(t library.Title) bool {
 			books, read := seriesCounts(t)
 			state := "IN_PROGRESS"
 			switch {
@@ -548,113 +542,38 @@ func (k *komga) seriesList(w http.ResponseWriter, r *http.Request) {
 			case read >= books && books > 0:
 				state = "READ"
 			}
-			if want[state] {
-				kept = append(kept, t)
-			}
-		}
-		titles = kept
+			return want[state]
+		})
 	}
-
-	field, desc := "metadata.titleSort", false
-	if s := q.Get("sort"); s != "" {
-		parts := strings.SplitN(s, ",", 2)
-		field = parts[0]
-		desc = len(parts) == 2 && parts[1] == "desc"
-	}
-	sort.SliceStable(titles, func(i, j int) bool {
-		var less bool
-		switch field {
-		case "createdDate":
-			less = titles[i].CreatedAt.Before(titles[j].CreatedAt)
-		case "lastModifiedDate":
-			less = titles[i].UpdatedAt.Before(titles[j].UpdatedAt)
-		default:
-			less = strings.ToLower(titles[i].DisplayTitle) < strings.ToLower(titles[j].DisplayTitle)
-		}
-		if desc {
-			return !less
-		}
-		return less
-	})
-
-	page, _ := strconv.Atoi(q.Get("page"))
-	if page < 0 {
-		page = 0
-	}
-	size, _ := strconv.Atoi(q.Get("size"))
-	if size <= 0 {
-		size = 20
-	}
-	unpaged := q.Get("unpaged") == "true"
-	total := len(titles)
-	window := titles
-	if !unpaged {
-		lo := page * size
-		if lo > total {
-			lo = total
-		}
-		hi := lo + size
-		if hi > total {
-			hi = total
-		}
-		window = titles[lo:hi]
-	}
-	out := make([]komgaSeries, 0, len(window))
-	for _, t := range window {
-		books, read := seriesCounts(t)
-		out = append(out, k.toSeries(t, read, 0, books))
-	}
-	komgaWrite(w, komgaPageOf(out, total, page, size, unpaged))
+	k.writeSeriesPage(w, r, tq, keep...)
 }
 
 // seriesByTime serves the dashboard rows (latest/new/updated) as a sorted page.
 func (k *komga) seriesByTime(field string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		titles, err := k.svc.ListTitles(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+		tq, _ := visibleTitles(r.Context())
+		tq.Sort, tq.Dir = "updated", "desc"
+		if field == "created" {
+			tq.Sort = "added"
 		}
-		titles = filterRestrictedTitles(r.Context(), titles)
-		sort.SliceStable(titles, func(i, j int) bool {
-			if field == "created" {
-				return titles[i].CreatedAt.After(titles[j].CreatedAt)
-			}
-			return titles[i].UpdatedAt.After(titles[j].UpdatedAt)
-		})
-		k.writeSeriesPage(w, r, titles)
+		k.writeSeriesPage(w, r, tq)
 	}
 }
 
 // seriesListPost is Komga's newer browse endpoint; the condition tree is
 // ignored beyond full-text search.
 func (k *komga) seriesListPost(w http.ResponseWriter, r *http.Request) {
-	titles, err := k.svc.ListTitles(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	titles = filterRestrictedTitles(r.Context(), titles)
 	var body struct {
 		FullTextSearch string `json:"fullTextSearch"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if q := strings.TrimSpace(body.FullTextSearch); q != "" {
-		kept := titles[:0]
-		for _, t := range titles {
-			if strings.Contains(strings.ToLower(t.DisplayTitle), strings.ToLower(q)) {
-				kept = append(kept, t)
-			}
-		}
-		titles = kept
-	}
-	sort.SliceStable(titles, func(i, j int) bool {
-		return strings.ToLower(titles[i].DisplayTitle) < strings.ToLower(titles[j].DisplayTitle)
-	})
-	k.writeSeriesPage(w, r, titles)
+	tq, _ := visibleTitles(r.Context())
+	tq.Name, tq.Sort = strings.TrimSpace(body.FullTextSearch), "title"
+	k.writeSeriesPage(w, r, tq)
 }
 
-func (k *komga) writeSeriesPage(w http.ResponseWriter, r *http.Request, titles []library.Title) {
+func (k *komga) writeSeriesPage(w http.ResponseWriter, r *http.Request, tq library.TitleQuery, keep ...func(library.Title) bool) {
+	ctx := r.Context()
 	q := r.URL.Query()
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page < 0 {
@@ -665,18 +584,30 @@ func (k *komga) writeSeriesPage(w http.ResponseWriter, r *http.Request, titles [
 		size = 20
 	}
 	unpaged := q.Get("unpaged") == "true"
-	total := len(titles)
-	window := titles
-	if !unpaged {
-		lo := page * size
-		if lo > total {
-			lo = total
+	var window []library.Title
+	total := 0
+	if _, ok := visibleTitles(ctx); ok {
+		if len(keep) == 0 && !unpaged {
+			total, _ = k.svc.CountTitles(ctx, tq)
+			tq.Offset, tq.Limit = page*size, size
+			if tq.Offset < total {
+				window, _ = k.svc.PageTitles(ctx, tq)
+			}
+		} else {
+			all, _ := k.svc.PageTitles(ctx, tq)
+			kept := all[:0]
+			for _, t := range all {
+				if slices.IndexFunc(keep, func(f func(library.Title) bool) bool { return !f(t) }) < 0 {
+					kept = append(kept, t)
+				}
+			}
+			total = len(kept)
+			window = kept
+			if !unpaged {
+				lo := min(page*size, total)
+				window = kept[lo:min(lo+size, total)]
+			}
 		}
-		hi := lo + size
-		if hi > total {
-			hi = total
-		}
-		window = titles[lo:hi]
 	}
 	out := make([]komgaSeries, 0, len(window))
 	for _, t := range window {
@@ -687,12 +618,7 @@ func (k *komga) writeSeriesPage(w http.ResponseWriter, r *http.Request, titles [
 }
 
 func (k *komga) booksLatest(w http.ResponseWriter, r *http.Request) {
-	titles, err := k.svc.ListTitles(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	books := k.recentBooks(r, filterRestrictedTitles(r.Context(), titles))
+	books := k.recentBooks(r)
 	if books == nil {
 		books = []komgaBook{}
 	}
@@ -702,13 +628,17 @@ func (k *komga) booksLatest(w http.ResponseWriter, r *http.Request) {
 
 // booksOnDeck lists the next unread book of each started series.
 func (k *komga) booksOnDeck(w http.ResponseWriter, r *http.Request) {
-	titles, err := k.svc.ListTitles(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	titles = filterRestrictedTitles(r.Context(), titles)
 	books := []komgaBook{}
+	var titles []library.Title
+	if tq, ok := visibleTitles(r.Context()); ok {
+		ids, err := k.svc.ReadTitleIDs(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		tq.IDs = ids
+		titles, _ = k.svc.PageTitles(r.Context(), tq)
+	}
 	for _, t := range titles {
 		total, read := seriesCounts(t)
 		if read == 0 || read >= total {
@@ -777,7 +707,7 @@ func (k *komga) seriesReadProgress(read bool) http.HandlerFunc {
 			}
 		}
 		if read {
-			k.svc.PushAniListEntry(ctx, auth.UserID(ctx), t.ID)
+			k.svc.PushTrackers(ctx, auth.UserID(ctx), t.ID)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -785,16 +715,18 @@ func (k *komga) seriesReadProgress(read bool) http.HandlerFunc {
 
 // alphabeticalGroups backs the A-Z browse index.
 func (k *komga) alphabeticalGroups(w http.ResponseWriter, r *http.Request) {
-	titles, err := k.svc.ListTitles(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	var names []string
+	if tq, ok := visibleTitles(r.Context()); ok {
+		var err error
+		if names, err = k.svc.TitleNames(r.Context(), tq); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
-	titles = filterRestrictedTitles(r.Context(), titles)
 	counts := map[string]int{}
-	for _, t := range titles {
+	for _, name := range names {
 		group := "#"
-		for _, c := range t.DisplayTitle {
+		for _, c := range name {
 			if unicode.IsLetter(c) {
 				group = strings.ToUpper(string(c))
 			}
@@ -897,22 +829,22 @@ func (k *komga) booksListPost(w http.ResponseWriter, r *http.Request) {
 	cond := parseKomgaCondition(body.Condition)
 
 	ctx := r.Context()
-	titles, err := k.svc.ListTitles(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	titles = filterRestrictedTitles(ctx, titles)
-
 	var books []komgaBook
 	if len(cond.seriesIDs) > 0 {
-		for _, t := range titles {
-			if cond.seriesIDs[strconv.FormatInt(t.ID, 10)] {
+		if tq, ok := visibleTitles(ctx); ok {
+			tq.IDs = []int64{}
+			for id := range cond.seriesIDs {
+				if n, err := strconv.ParseInt(id, 10, 64); err == nil {
+					tq.IDs = append(tq.IDs, n)
+				}
+			}
+			titles, _ := k.svc.PageTitles(ctx, tq)
+			for _, t := range titles {
 				books = append(books, k.seriesBookList(r, t)...)
 			}
 		}
 	} else {
-		books = k.recentBooks(r, titles)
+		books = k.recentBooks(r)
 	}
 	if books == nil {
 		books = []komgaBook{}
@@ -1004,16 +936,16 @@ func parseKomgaCondition(raw json.RawMessage) komgaCondition {
 }
 
 // recentBooks approximates a library-wide book query from the most recently
-// updated titles. ponytail: caps at 30 titles to bound the per-request
-// queries; a chapters-table index query would be exact.
-func (k *komga) recentBooks(r *http.Request, titles []library.Title) []komgaBook {
-	sorted := append([]library.Title(nil), titles...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].UpdatedAt.After(sorted[j].UpdatedAt) })
-	if len(sorted) > 30 {
-		sorted = sorted[:30]
+// updated titles.
+func (k *komga) recentBooks(r *http.Request) []komgaBook {
+	tq, ok := visibleTitles(r.Context())
+	if !ok {
+		return nil
 	}
+	tq.Sort, tq.Dir, tq.Limit = "updated", "desc", 30
+	recent, _ := k.svc.PageTitles(r.Context(), tq)
 	var books []komgaBook
-	for _, t := range sorted {
+	for _, t := range recent {
 		books = append(books, k.seriesBookList(r, t)...)
 	}
 	return books
@@ -1391,7 +1323,7 @@ func (k *komga) bookReadProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if completed {
-		k.svc.PushAniListEntry(ctx, auth.UserID(ctx), ref.titleID)
+		k.svc.PushTrackers(ctx, auth.UserID(ctx), ref.titleID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1478,6 +1410,6 @@ func (k *komga) tachiyomiProgressPut(w http.ResponseWriter, r *http.Request) {
 			_, _ = k.svc.MarkChapterRead(ctx, id)
 		}
 	}
-	k.svc.PushAniListEntry(ctx, auth.UserID(ctx), t.ID)
+	k.svc.PushTrackers(ctx, auth.UserID(ctx), t.ID)
 	w.WriteHeader(http.StatusNoContent)
 }

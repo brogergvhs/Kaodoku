@@ -3,7 +3,7 @@ plugins {
     application
 }
 
-val parsersVersion = "b3c0000245"
+val parsersVersion = "dc223c3d8098415b29cf1acfedc401a88d01c9fe"
 
 repositories {
     mavenCentral()

@@ -26,7 +26,7 @@ type ImportCandidate struct {
 
 // ExploreDownloads lists direct subfolders of root that hold .cbz files and
 // are not already tracked.
-func (s *WantedService) ExploreDownloads(ctx context.Context, root string) ([]ImportCandidate, error) {
+func (s *CatalogService) ExploreDownloads(ctx context.Context, root string) ([]ImportCandidate, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve download dir: %w", err)
@@ -35,7 +35,7 @@ func (s *WantedService) ExploreDownloads(ctx context.Context, root string) ([]Im
 	if err != nil {
 		return nil, fmt.Errorf("read download dir: %w", err)
 	}
-	titles, err := s.library.ListTitles(ctx)
+	titles, err := s.library.TitleBasics(ctx, library.TitleQuery{})
 	if err != nil {
 		return nil, err
 	}
@@ -56,9 +56,9 @@ func (s *WantedService) ExploreDownloads(ctx context.Context, root string) ([]Im
 	return out, nil
 }
 
-// ImportFolder tracks an existing folder as a title linked to an AniList entry
+// ImportFolder tracks an existing folder as a title linked to a catalog entry
 // and records its .cbz files as completed downloads.
-func (s *WantedService) ImportFolder(ctx context.Context, root, folder string, anilistID int) (library.Title, error) {
+func (s *CatalogService) ImportFolder(ctx context.Context, root, folder string, p catalog.Provider, id string) (library.Title, error) {
 	if folder == "" || folder == "." || folder == ".." || strings.ContainsAny(folder, `/\`) {
 		return library.Title{}, fmt.Errorf("invalid folder %q", folder)
 	}
@@ -71,11 +71,7 @@ func (s *WantedService) ImportFolder(ctx context.Context, root, folder string, a
 		return library.Title{}, fmt.Errorf("folder %q not found", folder)
 	}
 
-	manga, err := s.anilist.Get(ctx, anilistID)
-	if err != nil {
-		return library.Title{}, err
-	}
-	manga, err = s.catalog.UpsertManga(ctx, manga)
+	manga, err := s.fetch(ctx, p, id)
 	if err != nil {
 		return library.Title{}, err
 	}
@@ -144,27 +140,10 @@ func (s *WantedService) ImportFolder(ctx context.Context, root, folder string, a
 	return s.library.GetTitle(ctx, title.ID)
 }
 
-// RefreshManga re-fetches a manga's metadata and its collection relations in
-// one AniList request and stores both.
-func (s *WantedService) RefreshManga(ctx context.Context, anilistID int) error {
-	m, rels, err := s.anilist.GetWithRelations(ctx, anilistID)
-	if err != nil {
-		return err
-	}
-	if _, err := s.catalog.UpsertManga(ctx, m); err != nil {
-		return err
-	}
-	return s.catalog.ReplaceRelations(ctx, strconv.Itoa(anilistID), rels)
-}
-
-// AddCatalogTitle adds an AniList manga to the library as a source-less title
+// AddCatalogTitle adds a catalog manga to the library as a source-less title
 // (deduped per manga) so its sources can be linked later.
-func (s *WantedService) AddCatalogTitle(ctx context.Context, anilistID int) (library.Title, error) {
-	manga, err := s.anilist.Get(ctx, anilistID)
-	if err != nil {
-		return library.Title{}, err
-	}
-	manga, err = s.catalog.UpsertManga(ctx, manga)
+func (s *CatalogService) AddCatalogTitle(ctx context.Context, p catalog.Provider, id string) (library.Title, error) {
+	manga, err := s.fetch(ctx, p, id)
 	if err != nil {
 		return library.Title{}, err
 	}
@@ -192,14 +171,14 @@ func defaultMonitored(manga catalog.Manga) bool {
 }
 
 // GetManga returns stored catalog metadata.
-func (s *WantedService) GetManga(ctx context.Context, catalogID int64) (catalog.Manga, error) {
-	return s.catalog.GetManga(ctx, catalogID)
+func (s *CatalogService) GetManga(ctx context.Context, catalogID int64) (catalog.Manga, error) {
+	return s.repo.GetManga(ctx, catalogID)
 }
 
 // LinkTitleSource points an imported title at a real source so future refreshes
 // and downloads work.
-func (s *WantedService) LinkTitleSource(ctx context.Context, titleID, matchID int64) (library.Title, error) {
-	match, err := s.catalog.GetMatch(ctx, matchID)
+func (s *CatalogService) LinkTitleSource(ctx context.Context, titleID, matchID int64) (library.Title, error) {
+	match, err := s.repo.GetMatch(ctx, matchID)
 	if err != nil {
 		return library.Title{}, err
 	}
@@ -211,7 +190,7 @@ func (s *WantedService) LinkTitleSource(ctx context.Context, titleID, matchID in
 
 // LinkTitleURL points a title at a specific chapter-list URL, for single-manga
 // or custom sites that have no searchable catalog.
-func (s *WantedService) LinkTitleURL(ctx context.Context, titleID int64, rawURL, sourceID string) (library.Title, error) {
+func (s *CatalogService) LinkTitleURL(ctx context.Context, titleID int64, rawURL, sourceID string) (library.Title, error) {
 	if err := s.library.LinkSource(ctx, titleID, rawURL, sourceID); err != nil {
 		return library.Title{}, err
 	}

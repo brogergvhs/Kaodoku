@@ -9,10 +9,12 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
@@ -24,6 +26,7 @@ import (
 	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/kotatsu"
 	"github.com/brogergvhs/kaodoku/internal/library"
+	"github.com/brogergvhs/kaodoku/internal/mangabaka"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 	"github.com/brogergvhs/kaodoku/internal/ui"
 	"github.com/brogergvhs/kaodoku/internal/util"
@@ -31,7 +34,7 @@ import (
 
 // JobService enqueues and runs jobs.
 type JobService struct {
-	db         *sql.DB
+	db         database.Handle
 	dbPath     string
 	secrets    *tokenCipher
 	jobTimeout time.Duration
@@ -40,40 +43,58 @@ type JobService struct {
 	jobs       *jobs.Repository
 	lib        *LibraryService
 	src        *sourceService
-	want       *WantedService
+	catalog    *CatalogService
 	running    sync.Map // job ID -> context.CancelCauseFunc for in-flight jobs
+	runMu      sync.Mutex
+	rerun      atomic.Bool
 	titleLocks sync.Map // title ID -> *sync.Mutex
 	auth       *auth.Service
 	recMu      sync.Mutex
 	recCache   map[int64]cachedRecs // user ID -> recommendation grid
+	sugCache   map[string]cachedRecs
+	listMu     sync.Mutex
+	listCache  map[string]cachedList
+	listLocks  sync.Map // "user:provider" -> *sync.Mutex held while downloading that list
+	pushMu     sync.Mutex
+	pushes     map[[2]int64]*pendingPush
+	pushLocks  sync.Map // [user, title] -> *sync.Mutex held while pushing that title
+	mb         *mangabaka.Store
+	mbProgress atomic.Pointer[MangaBakaProgress] // set while a MangaBaka refresh runs
 	adultMu    sync.Mutex
 	adultTags  []string // vocabulary names flagged adult, briefly cached
 	adultExp   time.Time
+	vocabReady sync.Map
 	kotMu      sync.Mutex
 	kotSources []kotatsu.Source
 	kotExp     time.Time
 }
 
-// cachedRecs is a user's recommendation pool, cached to spare AniList calls.
+// cachedRecs is a user's recommendation pool, cached to spare provider calls.
 type cachedRecs struct {
-	items   []catalog.Manga
-	expires time.Time
+	items     []catalog.Manga
+	fetchable bool
+	expires   time.Time
 }
 
-const recommendationTTL = 10 * time.Minute
+func (c cachedRecs) expiry() time.Time { return c.expires }
+
+const recommendationTTL = 6 * time.Hour
 
 // errJobCancelled aborts an in-flight job on explicit user cancellation.
 var errJobCancelled = errors.New("cancelled by user")
 
 // JobPayload is the common payload for background jobs.
 type JobPayload struct {
-	TitleID              int64  `json:"title_id,omitempty"`
-	SourceID             string `json:"source_id,omitempty"`
-	CatalogID            int64  `json:"catalog_id,omitempty"`
-	ResetFailed          bool   `json:"reset_failed,omitempty"`
-	UserID               int64  `json:"user_id,omitempty"`
-	DownloadAfterRefresh bool   `json:"download_after_refresh,omitempty"`
-	Folder               string `json:"folder,omitempty"`
+	TitleID              int64       `json:"title_id,omitempty"`
+	SourceID             string      `json:"source_id,omitempty"`
+	CatalogID            int64       `json:"catalog_id,omitempty"`
+	ResetFailed          bool        `json:"reset_failed,omitempty"`
+	UserID               int64       `json:"user_id,omitempty"`
+	DownloadAfterRefresh bool        `json:"download_after_refresh,omitempty"`
+	Folder               string      `json:"folder,omitempty"`
+	Provider             string      `json:"provider,omitempty"`
+	Import               *ListImport `json:"import,omitempty"`
+	Force                bool        `json:"force,omitempty"`
 }
 
 // RunSummary describes one queue drain.
@@ -102,11 +123,12 @@ const (
 	SettingJobsMaxAttempts      = "jobs.max_attempts"
 	SettingJobsTimeout          = "jobs.timeout"
 	SettingJobsWorkers          = "jobs.workers"
+	SettingJobsKeepHistory      = "jobs.keep_history"
 	SettingDownloadsMaxAttempts = "downloads.max_attempts"
 
 	SettingServicesHealthInterval = "services.health_interval"
 
-	SettingServeAniListSyncEvery = "sync.anilist_every"
+	SettingServeTrackerSyncEvery = "sync.trackers_every"
 	SettingServeCatalogEvery     = "catalog.refresh_every"
 	SettingRateLimitIntervalMS   = "ratelimit.interval_ms"
 	SettingRateLimitBurst        = "ratelimit.burst"
@@ -158,16 +180,36 @@ func SettingDefault(key string) string {
 		return "3"
 	case SettingJobsTimeout:
 		return "10m"
+	case SettingJobsKeepHistory:
+		return "720h"
 	case SettingJobsWorkers:
 		return "4"
 	case SettingServicesHealthInterval:
 		return "60s"
-	case SettingServeAniListSyncEvery:
+	case SettingServeTrackerSyncEvery:
 		return "" // disabled until a cadence is set
+	case SettingProvidersDefault:
+		return "anilist"
 	case SettingServeCatalogEvery:
-		return "168h" // stale release status would block AniList Completed pushes
+		return "168h" // stale release status would block Completed pushes
 	case SettingRateLimitIntervalMS:
 		return "200"
+	case SettingCacheImagesMB, SettingCacheSearches:
+		return "500"
+	case SettingCacheListsMB:
+		return "50"
+	case SettingCacheRelatedMB:
+		return "100"
+	case SettingCacheRecs:
+		return "200"
+	case SettingMangaBakaEnabled:
+		return "false"
+	case SettingMangaBakaEvery:
+		return "168h"
+	case SettingMangaBakaVariant:
+		return "full"
+	case SettingMangaBakaAggressive:
+		return "true"
 	case SettingRateLimitBurst:
 		return "2"
 	case SettingRateLimitDisabled:
@@ -229,15 +271,29 @@ func SettingKeys() []string {
 		SettingJobsMaxAttempts,
 		SettingJobsTimeout,
 		SettingJobsWorkers,
+		SettingJobsKeepHistory,
 		SettingDownloadsMaxAttempts,
 		SettingServicesHealthInterval,
-		SettingServeAniListSyncEvery,
+		SettingServeTrackerSyncEvery,
 		SettingServeCatalogEvery,
 		SettingRateLimitIntervalMS,
 		SettingRateLimitBurst,
 		SettingRateLimitDisabled,
+		SettingCacheImagesMB,
+		SettingCacheListsMB,
+		SettingCacheRelatedMB,
+		SettingCacheSearches,
+		SettingCacheRecs,
+		SettingMangaBakaEnabled,
+		SettingMangaBakaEvery,
+		SettingMangaBakaVariant,
+		SettingMangaBakaAggressive,
 		SettingAniListClientID,
 		SettingAniListClientSecret,
+		SettingMALClientID,
+		SettingMALClientSecret,
+		SettingProvidersDefault,
+		SettingProvidersDisabled,
 		SettingUITheme,
 		CustomColorKey("base-100"), CustomColorKey("base-200"), CustomColorKey("base-300"), CustomColorKey("base-content"),
 		CustomColorKey("primary"), CustomColorKey("primary-content"), CustomColorKey("secondary"), CustomColorKey("neutral"),
@@ -266,18 +322,26 @@ func ValidateSetting(key, value string) error {
 			}
 		}
 		return fmt.Errorf("unknown theme %q", value)
-	case SettingServeAniListSyncEvery, SettingServeCatalogEvery, SettingServeBackupEvery:
+	case SettingServeTrackerSyncEvery, SettingServeCatalogEvery, SettingServeBackupEvery, SettingJobsKeepHistory:
 		if value == "" {
 			return nil
 		}
 		return validateDurationSetting(key, value)
 	case SettingServeRefreshEvery, SettingServeScanEvery, SettingServeDownloadEvery, SettingServeSourceVerifyEvery, SettingServeRunEvery, SettingServicesHealthInterval:
 		return validateDurationSetting(key, value)
-	case SettingBrowserSolverEnabled, SettingBrowserDownloaderEnabled, SettingRateLimitDisabled:
+	case SettingMangaBakaEvery:
+		if d, err := time.ParseDuration(value); err != nil || d != 0 && d < 24*time.Hour {
+			return fmt.Errorf("%s must be 0 or at least 24h", key)
+		}
+	case SettingMangaBakaVariant:
+		if value != "full" && value != "default" {
+			return fmt.Errorf("%s must be full or default", key)
+		}
+	case SettingBrowserSolverEnabled, SettingBrowserDownloaderEnabled, SettingRateLimitDisabled, SettingMangaBakaEnabled, SettingMangaBakaAggressive:
 		if _, err := strconv.ParseBool(value); err != nil {
 			return fmt.Errorf("invalid bool for %s", key)
 		}
-	case SettingRateLimitIntervalMS, SettingRateLimitBurst:
+	case SettingRateLimitIntervalMS, SettingRateLimitBurst, SettingCacheImagesMB, SettingCacheListsMB, SettingCacheRelatedMB, SettingCacheSearches, SettingCacheRecs:
 		if n, err := strconv.Atoi(value); err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative number", key)
 		}
@@ -311,6 +375,8 @@ func ValidateSetting(key, value string) error {
 		if d, err := time.ParseDuration(value); err != nil || d <= 0 {
 			return fmt.Errorf("invalid positive duration for %s", key)
 		}
+	case SettingProvidersDefault, SettingProvidersDisabled:
+		return validProviderList(value)
 	}
 	return nil
 }
@@ -340,17 +406,24 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 	if dbPath == "" {
 		dbPath = database.DefaultPath()
 	}
-	db, err := database.Open(ctx, dbPath)
+	w, err := database.Open(ctx, dbPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := database.Migrate(ctx, db); err != nil {
-		_ = db.Close()
+	if err := database.Migrate(ctx, w); err != nil {
+		_ = w.Close()
+		return nil, nil, err
+	}
+	db, err := database.WithReaders(ctx, w, dbPath)
+	if err != nil {
+		_ = w.Close()
 		return nil, nil, err
 	}
 
 	svc := newJobService(db)
 	svc.dbPath = dbPath
+	svc.setMangaBaka(mangabaka.Open(filepath.Join(filepath.Dir(dbPath), "mangabaka.db")))
+	svc.catalog.searchLimit = func(ctx context.Context) int { return svc.cacheLimit(ctx, SettingCacheSearches) }
 	if svc.secrets, err = newTokenCipher(dbPath); err != nil {
 		_ = db.Close()
 		return nil, nil, err
@@ -386,17 +459,10 @@ func OpenJobs(ctx context.Context, dbPath string) (*JobService, func(), error) {
 			log.Printf("startup download stats scan failed: %v", err)
 		}
 	}()
-	go func() {
-		if tags, err := svc.want.catalog.ContentTags(ctx); err == nil && !hasAdultTag(tags) {
-			if err := svc.refreshTagVocabulary(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("startup tag vocabulary refresh failed: %v", err)
-			}
-		}
-	}()
-	return svc, func() { _ = db.Close() }, nil
+	return svc, func() { _ = svc.mb.Close(); _ = db.Close() }, nil
 }
 
-func newJobService(db *sql.DB) *JobService {
+func newJobService(db database.Handle) *JobService {
 	svc := &JobService{
 		db:         db,
 		dbPath:     database.DefaultPath(),
@@ -405,12 +471,13 @@ func newJobService(db *sql.DB) *JobService {
 		runtime: func() (*config.Config, ui.Log, error) {
 			return config.DefaultConfig(), ui.NewLogger(false), nil
 		},
-		jobs: jobs.NewRepository(db),
-		lib:  newLibraryService(db),
-		src:  newSourceService(db),
-		want: newWantedService(db),
+		jobs:    jobs.NewRepository(db),
+		lib:     newLibraryService(db),
+		src:     newSourceService(db),
+		catalog: newCatalogService(db),
 	}
-	svc.lib.SetMangaLookup(svc.want.GetManga)
+	svc.setMangaBaka(&mangabaka.Store{})
+	svc.lib.SetMangaLookup(svc.catalog.GetManga)
 	return svc
 }
 
@@ -595,31 +662,32 @@ func (s *JobService) ApplySettings(ctx context.Context, cfg *config.Config) {
 	}
 }
 
-// BrowserSolverHealth checks the configured browser solver endpoint.
-func (s *JobService) BrowserSolverHealth(ctx context.Context) (bool, error) {
-	enabled, _ := strconv.ParseBool(s.Setting(ctx, SettingBrowserSolverEnabled, SettingDefault(SettingBrowserSolverEnabled)))
-	if !enabled {
-		return false, nil
-	}
-	if provider := s.Setting(ctx, SettingBrowserSolverProvider, SettingDefault(SettingBrowserSolverProvider)); provider != browserfetch.ProviderFlareSolverr {
-		return false, fmt.Errorf("unsupported browser solver provider %q", provider)
-	}
-
-	timeoutSeconds, _ := strconv.Atoi(s.Setting(ctx, SettingBrowserSolverTimeoutSeconds, SettingDefault(SettingBrowserSolverTimeoutSeconds)))
-	client := browserfetch.NewFlareSolverr(
-		s.Setting(ctx, SettingBrowserSolverEndpoint, SettingDefault(SettingBrowserSolverEndpoint)),
-		time.Duration(timeoutSeconds)*time.Second,
-		nil,
-	)
-	if err := client.Health(ctx); err != nil {
-		return false, err
-	}
-	return true, nil
+func (s *JobService) PageTitles(ctx context.Context, q library.TitleQuery) ([]library.Title, error) {
+	return s.lib.repo.PageTitles(ctx, q)
 }
 
-// ListTitles returns tracked titles.
-func (s *JobService) ListTitles(ctx context.Context) ([]library.Title, error) {
-	return s.lib.ListTitles(ctx)
+func (s *JobService) CountTitles(ctx context.Context, q library.TitleQuery) (int, error) {
+	return s.lib.repo.CountTitles(ctx, q)
+}
+
+func (s *JobService) TitleIDs(ctx context.Context, q library.TitleQuery) ([]int64, error) {
+	return s.lib.repo.TitleIDs(ctx, q)
+}
+
+func (s *JobService) TitleBasics(ctx context.Context, q library.TitleQuery) ([]library.Title, error) {
+	return s.lib.repo.TitleBasics(ctx, q)
+}
+
+func (s *JobService) TitleNames(ctx context.Context, q library.TitleQuery) ([]string, error) {
+	return s.lib.repo.TitleNames(ctx, q)
+}
+
+func (s *JobService) ReadTitleIDs(ctx context.Context) ([]int64, error) {
+	return s.lib.repo.ReadTitleIDs(ctx)
+}
+
+func (s *JobService) FailingTitles(ctx context.Context, sourceID string) ([]library.Title, error) {
+	return s.lib.repo.FailingTitles(ctx, sourceID)
 }
 
 // GetTitle returns one tracked title.
@@ -729,26 +797,9 @@ func (s *JobService) ListTitleSources(ctx context.Context, id int64) ([]library.
 	return s.lib.ListTitleSources(ctx, id)
 }
 
-func (s *JobService) SourceTitleIDs(ctx context.Context, sourceID string) (map[int64]bool, error) {
-	return s.lib.TitleIDsForSource(ctx, sourceID)
-}
-
 // UnlinkTitleSource removes a linked source from a title.
 func (s *JobService) UnlinkTitleSource(ctx context.Context, id int64, url string) error {
 	return s.lib.UnlinkSource(ctx, id, url)
-}
-
-// AddCatalogTitle adds an AniList manga to the library as a source-less title.
-func (s *JobService) AddCatalogTitle(ctx context.Context, anilistID int) (library.Title, error) {
-	title, err := s.want.AddCatalogTitle(ctx, anilistID)
-	if err != nil {
-		return library.Title{}, err
-	}
-	s.PushAniListEntry(ctx, auth.UserID(ctx), title.ID)
-	if err := s.enqueueSourceSearchForTitle(ctx, title); err != nil {
-		return title, err
-	}
-	return title, nil
 }
 
 // TitlesByProvider maps a catalog provider's manga IDs to tracked title IDs.
@@ -756,240 +807,8 @@ func (s *JobService) TitlesByProvider(ctx context.Context, provider string) (map
 	return s.lib.TitlesByProvider(ctx, provider)
 }
 
-// GetManga returns stored catalog metadata for a manga.
-
-// AniListConnection describes a user's linked AniList account.
-type AniListConnection struct {
-	Connected    bool
-	Name         string
-	ExpiresAt    string
-	ExpiringSoon bool // less than 30 days of token validity left
-}
-
-// AniListConnectionFor returns the user's AniList link state.
-func (s *JobService) AniListConnectionFor(ctx context.Context, userID int64) AniListConnection {
-	var name, expires string
-	err := s.db.QueryRowContext(ctx, `SELECT anilist_name, expires_at FROM user_anilist WHERE user_id = ?`, userID).Scan(&name, &expires)
-	if err != nil {
-		return AniListConnection{}
-	}
-	conn := AniListConnection{Connected: true, Name: name, ExpiresAt: expires}
-	if t, err := database.ParseTime(expires); err == nil && expires != "" {
-		conn.ExpiringSoon = time.Until(t) < 30*24*time.Hour
-	}
-	return conn
-}
-
-// ConnectAniList exchanges an OAuth code and stores the user's token.
-func (s *JobService) ConnectAniList(ctx context.Context, userID int64, redirectURI, code string) error {
-	clientID := s.Setting(ctx, SettingAniListClientID, "")
-	secret := s.Setting(ctx, SettingAniListClientSecret, "")
-	if clientID == "" || secret == "" {
-		return fmt.Errorf("the AniList application is not configured (client id/secret in settings)")
-	}
-	token, expiresIn, err := catalog.AniListExchangeCode(ctx, clientID, secret, redirectURI, code)
-	if err != nil {
-		return err
-	}
-	aid, name, err := catalog.AniListViewer(ctx, token)
-	if err != nil {
-		return err
-	}
-	expires := ""
-	if expiresIn > 0 {
-		expires = database.FormatTime(time.Now().Add(time.Duration(expiresIn) * time.Second))
-	}
-	token, err = s.secrets.Encrypt(token)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO user_anilist (user_id, access_token, anilist_user_id, anilist_name, expires_at)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(user_id) DO UPDATE SET
-			access_token = excluded.access_token,
-			anilist_user_id = excluded.anilist_user_id,
-			anilist_name = excluded.anilist_name,
-			expires_at = excluded.expires_at
-	`, userID, token, aid, name, expires)
-	if err != nil {
-		return err
-	}
-	s.invalidateRecs(userID)
-	return nil
-}
-
-// DisconnectAniList removes the user's stored token.
-func (s *JobService) DisconnectAniList(ctx context.Context, userID int64) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_anilist WHERE user_id = ?`, userID); err != nil {
-		return err
-	}
-	s.invalidateRecs(userID)
-	return nil
-}
-
-// expandAniListSync spawns one child sync job per connected user.
-func (s *JobService) expandAniListSync(ctx context.Context, parentID int64) error {
-	// Collect-then-enqueue: an open rows cursor holds SQLite's only connection.
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id FROM user_anilist`)
-	if err != nil {
-		return err
-	}
-	var userIDs []int64
-	for rows.Next() {
-		var uid int64
-		if rows.Scan(&uid) == nil {
-			userIDs = append(userIDs, uid)
-		}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	var errs []error
-	for _, uid := range userIDs {
-		_, err := s.enqueueChild(ctx, jobs.TypeSyncAniList, JobPayload{UserID: uid}, time.Now(), parentID)
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
-}
-
-// runAniListSync reconciles the whole library with AniList for one user:
-// remote > local pulls read marks down; local > remote pushes up; tracked
-// titles missing from the remote list are added with their computed status.
-func (s *JobService) runAniListSync(ctx context.Context, userID int64, progress ProgressManager) error {
-	user, err := s.auth.GetUser(ctx, userID)
-	if err != nil || user == nil {
-		user = &auth.User{ID: userID}
-	}
-	ctx = auth.WithUser(ctx, user)
-	actx, aid, ok := s.aniListIdentity(ctx, userID)
-	if !ok {
-		return nil // disconnected since the sweep expanded
-	}
-	entries, err := s.want.AniList().UserList(actx, aid)
-	if err != nil {
-		return s.aniListAuthError(ctx, userID, err)
-	}
-	remote := make(map[string]catalog.AniListEntry, len(entries))
-	for _, e := range entries {
-		remote[e.Manga.ProviderID] = e
-	}
-	tracked, err := s.lib.TitlesByProvider(ctx, catalog.AniListProvider)
-	if err != nil {
-		return err
-	}
-	titles, err := s.lib.ListTitles(ctx)
-	if err != nil {
-		return err
-	}
-	byID := make(map[int64]library.Title, len(titles))
-	for _, t := range titles {
-		byID[t.ID] = t
-	}
-	owners, err := s.lib.TitleOwners(ctx)
-	if err != nil {
-		return err
-	}
-	remoteFav := map[string]bool{}
-	favFetched := false
-	if ids, err := s.want.AniList().FavouriteManga(actx, aid); err == nil {
-		favFetched = true
-		for _, id := range ids {
-			remoteFav[strconv.Itoa(id)] = true
-		}
-	}
-	localFav, err := s.localFavouriteIDs(ctx, userID)
-	if err != nil {
-		return err
-	}
-	// Rate-limit pacing makes a large first sync slow; report each title so
-	// the stall watchdog sees a working job, not a stuck one.
-	handle := progress.Register("anilist sync")
-	handle.SetTotal(len(tracked))
-	defer handle.MarkDone()
-	var errs []error
-	n := 0
-	for pid, titleID := range tracked {
-		n++
-		handle.Update(n, len(tracked), 0)
-		mediaID, err := strconv.Atoi(pid)
-		if err != nil {
-			continue
-		}
-		t := byID[titleID]
-		if !contentAllowedFor(user, t.IsAdult, t.ContentTags) {
-			continue
-		}
-		if remoteFav[pid] && !localFav[pid] {
-			if err := s.lib.SetFavourite(ctx, userID, titleID); err != nil {
-				errs = append(errs, err)
-			}
-		} else if favFetched && localFav[pid] && !remoteFav[pid] {
-			if err := s.want.AniList().ToggleFavourite(actx, mediaID); err != nil {
-				errs = append(errs, fmt.Errorf("favourite %s: %w", pid, err))
-			}
-		}
-		e, listed := remote[pid]
-		if listed && e.Progress > 0 {
-			local, _, err := s.localAniListState(ctx, userID, titleID)
-			if err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			if e.Progress > local {
-				if _, err := s.lib.MarkChaptersReadThrough(ctx, titleID, e.Progress); err != nil {
-					errs = append(errs, fmt.Errorf("pull %s: %w", pid, err))
-					continue
-				}
-			}
-		}
-		local, status, err := s.localAniListState(ctx, userID, titleID)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if !listed {
-			if status == "PLANNING" && !ownsTitle(userID, owners[titleID]) {
-				continue
-			}
-			if err := s.want.AniList().SaveEntry(actx, mediaID, local, status); err != nil {
-				errs = append(errs, fmt.Errorf("add %s: %w", pid, err))
-			}
-			continue
-		}
-		progress := -1
-		if local > e.Progress {
-			progress = local
-		}
-		push := ""
-		if aniListStatusRank(status) > aniListStatusRank(e.Status) {
-			push = status
-		}
-		if progress >= 0 || push != "" {
-			if err := s.want.AniList().SaveEntry(actx, mediaID, progress, push); err != nil {
-				errs = append(errs, fmt.Errorf("push %s: %w", pid, err))
-			}
-		}
-	}
-	s.invalidateRecs(userID)
-	return s.aniListAuthError(ctx, userID, errs2err(errs))
-}
-
-func (s *JobService) aniListAuthError(ctx context.Context, userID int64, err error) error {
-	if !catalog.IsUnauthorized(err) {
-		return err
-	}
-	if derr := s.DisconnectAniList(ctx, userID); derr != nil {
-		return errors.Join(fmt.Errorf("anilist authorization expired; reconnect AniList in settings"), derr)
-	}
-	return fmt.Errorf("anilist authorization expired; reconnect AniList in settings")
-}
-
-// contentAllowedFor mirrors the server's per-user content guard so AniList
-// sync never surfaces a title the user cannot view in the app.
-func contentAllowedFor(u *auth.User, isAdult bool, tags []string) bool {
+// ContentAllowed is the per-user content guard: adult access and blocked or required tags.
+func ContentAllowed(u *auth.User, isAdult bool, tags []string) bool {
 	if u == nil {
 		return false
 	}
@@ -1008,12 +827,12 @@ func ownsTitle(userID, addedBy int64) bool {
 	return addedBy == userID || (addedBy == 0 && userID == auth.EnvAdminID)
 }
 
-// localAniListState computes the user's progress and list status for a title:
-// nothing read → PLANNING; everything read AND the series finished releasing
-// → COMPLETED (a caught-up ongoing series stays CURRENT); otherwise CURRENT.
+// localTrackerState computes the user's progress and list status for a title:
+// nothing read -> PLANNING; everything read AND the series finished releasing
+// -> COMPLETED (a caught-up ongoing series stays CURRENT); otherwise CURRENT.
 // Status keys off the read count, not the numeric progress: sub-chapters like
-// 0.1–0.3 carry progress 0 on AniList but still mean the user is reading.
-func (s *JobService) localAniListState(ctx context.Context, userID, titleID int64) (int, string, error) {
+// 0.1–0.3 carry progress 0 on trackers but still mean the user is reading.
+func (s *JobService) localTrackerState(ctx context.Context, userID, titleID int64) (int, string, error) {
 	var progress, read, total int
 	var release string
 	if err := s.db.QueryRowContext(ctx, `
@@ -1047,10 +866,10 @@ func releaseFinished(status string) bool {
 	}
 }
 
-// aniListStatusRank orders statuses so pushes only ever upgrade. DROPPED is
+// statusRank orders statuses so pushes only ever upgrade. DROPPED is
 // overridable (a re-added title is no longer dropped); PAUSED and REPEATING
 // are manual reading states the sync must not touch.
-func aniListStatusRank(status string) int {
+func statusRank(status string) int {
 	switch status {
 	case "", "DROPPED":
 		return 0
@@ -1067,116 +886,74 @@ func aniListStatusRank(status string) int {
 
 func errs2err(errs []error) error { return errors.Join(errs...) }
 
-// aniListIdentity returns the acting user's connection (token ctx + anilist id).
-func (s *JobService) aniListIdentity(ctx context.Context, userID int64) (context.Context, int, bool) {
-	var token string
-	var aid int
-	if err := s.db.QueryRowContext(ctx, `SELECT access_token, anilist_user_id FROM user_anilist WHERE user_id = ?`, userID).Scan(&token, &aid); err != nil || token == "" {
-		return ctx, 0, false
-	}
-	token, err := s.secrets.Decrypt(token)
-	if err != nil {
-		log.Printf("anilist token decrypt failed for user %d: %v", userID, err)
-		return ctx, 0, false
-	}
-	if token == "" {
-		return ctx, 0, false
-	}
-	return catalog.WithToken(ctx, token), aid, true
-}
-
-// aniListConnected reports whether a token row exists at all, separating "not
-// connected" from "connected but the token can't be decrypted".
-func (s *JobService) aniListConnected(ctx context.Context, userID int64) bool {
-	var one int
-	return s.db.QueryRowContext(ctx,
-		`SELECT 1 FROM user_anilist WHERE user_id = ? AND access_token != ''`, userID).Scan(&one) == nil
-}
-
-// aniListError explains why aniListIdentity failed, for user-facing messages.
-func (s *JobService) aniListError(ctx context.Context, userID int64) error {
-	if s.aniListConnected(ctx, userID) {
-		return fmt.Errorf("AniList token couldn't be read — reconnect AniList (the server's encryption key changed)")
-	}
-	return fmt.Errorf("no AniList account connected")
-}
-
-// runCatalogRefresh re-fetches AniList metadata for every catalog entry a
-// tracked title links to: descriptions, tags, adult flags and — importantly —
-// the release status that gates the AniList Completed push all go stale
-// otherwise. Paced by the AniList client's rate limiter.
-func (s *JobService) runCatalogRefresh(ctx context.Context, progress ProgressManager) error {
-	var errs []error
-	if err := s.refreshTagVocabulary(ctx); err != nil {
-		errs = append(errs, err)
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT cm.provider_id
-		FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id
-		WHERE cm.provider = ?`, catalog.AniListProvider)
-	if err != nil {
-		return err
-	}
-	var pids []string
-	for rows.Next() {
-		var pid string
-		if rows.Scan(&pid) == nil && pid != "" {
-			pids = append(pids, pid)
-		}
-	}
-	rows.Close()
-	handle := progress.Register("catalog refresh")
-	handle.SetTotal(len(pids))
-	defer handle.MarkDone()
-	for i, pid := range pids {
-		handle.Update(i+1, len(pids), 0)
-		mediaID, err := strconv.Atoi(pid)
-		if err != nil {
-			continue
-		}
-		if err := s.want.RefreshManga(ctx, mediaID); err != nil && !catalog.IsNotFound(err) {
-			errs = append(errs, fmt.Errorf("refresh %s: %w", pid, err))
-		}
-	}
-	return errs2err(errs)
-}
-
-func hasAdultTag(tags []catalog.ContentTag) bool {
-	for _, t := range tags {
-		if t.IsAdult {
-			return true
-		}
-	}
-	return false
-}
-
-// refreshTagVocabulary re-fetches AniList's global genre/tag lists.
+// refreshTagVocabulary re-fetches every configured provider's genre and tag lists.
 func (s *JobService) refreshTagVocabulary(ctx context.Context) error {
-	genres, tags, err := s.want.AniList().TagVocabulary(ctx)
+	var errs []error
+	for _, name := range providerOrder {
+		if s.providerConfigured(ctx, name) {
+			errs = append(errs, s.syncVocabulary(ctx, name))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// SyncPendingVocabularies fetches the tag lists of configured providers that have none yet; they stay unavailable until then.
+func (s *JobService) SyncPendingVocabularies(ctx context.Context) {
+	ctx = catalog.WithReason(ctx, "Tag lists")
+	for _, name := range providerOrder {
+		if s.providerConfigured(ctx, name) && s.vocabPending(name) && s.healthOutage(name) == "" {
+			if err := s.syncVocabulary(ctx, name); err != nil && ctx.Err() == nil {
+				log.Printf("%s tag sync failed: %v", name, err)
+			}
+		}
+	}
+}
+
+func (s *JobService) syncVocabulary(ctx context.Context, name string) error {
+	vocab, ok := s.catalog.providers[name].(catalog.Vocabulary)
+	if !ok {
+		return nil
+	}
+	tags, err := vocab.TagVocabulary(ctx)
 	if err != nil {
-		return fmt.Errorf("tag vocabulary: %w", err)
+		return fmt.Errorf("%s tag vocabulary: %w", name, err)
 	}
-	if len(genres) == 0 && len(tags) == 0 {
-		return fmt.Errorf("tag vocabulary: anilist returned nothing; keeping the stored one")
+	if len(tags) == 0 {
+		return fmt.Errorf("%s tag vocabulary: provider returned nothing; keeping the stored one", name)
 	}
-	if err := s.want.catalog.ReplaceContentTags(ctx, genres, tags); err != nil {
+	if err := s.catalog.repo.ReplaceContentTags(ctx, name, tags); err != nil {
 		return err
 	}
+	s.vocabReady.Store(name, true)
 	s.adultMu.Lock()
 	s.adultExp = time.Time{}
 	s.adultMu.Unlock()
 	return nil
 }
 
-// StoredContentTags returns the stored vocabulary without remote fetching.
-func (s *JobService) StoredContentTags(ctx context.Context) ([]catalog.ContentTag, error) {
-	return s.want.catalog.ContentTags(ctx)
+func (s *JobService) vocabPending(name string) bool {
+	if _, ok := s.catalog.providers[name].(catalog.Vocabulary); !ok {
+		return false
+	}
+	if _, ok := s.vocabReady.Load(name); ok {
+		return false
+	}
+	if s.catalog.repo.HasProviderTags(context.Background(), name) {
+		s.vocabReady.Store(name, true)
+		return false
+	}
+	return true
 }
 
-// seedAdultTags guards non-adult users before the live vocabulary loads or when
-// AniList is unreachable; mirrors MediaTagCollection.isAdult.
+// ProviderTags is one provider's genre and tag vocabulary, for its search filters.
+func (s *JobService) ProviderTags(ctx context.Context, provider string) ([]catalog.ContentTag, error) {
+	return s.catalog.repo.ProviderTags(ctx, provider)
+}
+
+// seedAdultTags guards non-adult users before provider vocabularies load: AniList's
+// isAdult tags plus the explicit genres of MyAnimeList, Kitsu and MangaUpdates.
 var seedAdultTags = []string{
-	"Hentai",
+	"Hentai", "Adult", "Smut", "Erotica", "Lolicon", "Shotacon",
 	"Ahegao", "Amputation", "Anal Sex", "Armpits", "Ashikoki", "Asphyxiation",
 	"Bondage", "Boobjob", "Cervix Penetration", "Cheating", "Cumflation",
 	"Cunnilingus", "DILF", "Deepthroat", "Defloration", "Double Penetration",
@@ -1191,8 +968,8 @@ var seedAdultTags = []string{
 	"Threesome", "Virginity", "Vore", "Voyeur", "Watersports", "Zoophilia",
 }
 
-// AdultTagNames returns the seed plus any stored adult names, fetching the
-// vocabulary when empty; it never returns nil, so the guard fails closed.
+// AdultTagNames returns the seed plus every provider's stored adult names; it
+// never returns nil, so the guard fails closed.
 func (s *JobService) AdultTagNames(ctx context.Context) []string {
 	s.adultMu.Lock()
 	if time.Now().Before(s.adultExp) && s.adultTags != nil {
@@ -1201,12 +978,7 @@ func (s *JobService) AdultTagNames(ctx context.Context) []string {
 	}
 	s.adultMu.Unlock()
 
-	tags, err := s.want.catalog.ContentTags(ctx)
-	if (err != nil || len(tags) == 0) && ctx.Err() == nil {
-		if refreshErr := s.refreshTagVocabulary(ctx); refreshErr == nil {
-			tags, err = s.want.catalog.ContentTags(ctx)
-		}
-	}
+	tags, err := s.catalog.repo.ContentTags(ctx)
 
 	names := make(map[string]bool, len(seedAdultTags)+len(tags))
 	for _, n := range seedAdultTags {
@@ -1233,304 +1005,24 @@ func (s *JobService) AdultTagNames(ctx context.Context) []string {
 	return out
 }
 
-// ContentTagOptions returns the stored tag/genre vocabulary for pickers,
-// fetching it once from AniList when nothing is stored yet.
+// ContentTagOptions returns every provider's merged vocabulary for pickers; WatchProviders keeps it filled.
 func (s *JobService) ContentTagOptions(ctx context.Context) ([]catalog.ContentTag, error) {
-	tags, err := s.want.catalog.ContentTags(ctx)
-	if err != nil || len(tags) > 0 {
-		return tags, err
-	}
-	if err := s.refreshTagVocabulary(ctx); err != nil {
-		return nil, err
-	}
-	return s.want.catalog.ContentTags(ctx)
-}
-
-// encryptLegacyTokens re-encrypts plaintext AniList tokens left over from
-// before at-rest encryption existed.
-func (s *JobService) encryptLegacyTokens(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id, access_token FROM user_anilist`)
-	if err != nil {
-		return err
-	}
-	type row struct {
-		id    int64
-		token string
-	}
-	var legacy []row
-	for rows.Next() {
-		var r row
-		if rows.Scan(&r.id, &r.token) == nil && r.token != "" && !strings.HasPrefix(r.token, encPrefix) {
-			legacy = append(legacy, r)
-		}
-	}
-	rows.Close()
-	for _, r := range legacy {
-		enc, err := s.secrets.Encrypt(r.token)
-		if err != nil {
-			return err
-		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE user_anilist SET access_token = ? WHERE user_id = ?`, enc, r.id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// EnqueueAniListSync queues a progress sync for one user right now.
-func (s *JobService) EnqueueAniListSync(ctx context.Context, userID int64) error {
-	if _, _, ok := s.aniListIdentity(ctx, userID); !ok {
-		return s.aniListError(ctx, userID)
-	}
-	_, err := s.enqueueExact(ctx, jobs.TypeSyncAniList, JobPayload{UserID: userID}, time.Now())
-	return err
-}
-
-// AniListLibrary returns the connected user's AniList manga list.
-func (s *JobService) AniListLibrary(ctx context.Context) ([]catalog.AniListEntry, error) {
-	ctx, aid, ok := s.aniListIdentity(ctx, auth.UserID(ctx))
-	if !ok {
-		return nil, fmt.Errorf("no AniList account connected")
-	}
-	return s.want.AniList().UserList(ctx, aid)
-}
-
-// PushAniListEntry pushes the user's local progress and list status for a
-// title to AniList in the background, creating the entry if it doesn't exist.
-// Never downgrades remote progress or manual states. Failures are logged only.
-func (s *JobService) PushAniListEntry(ctx context.Context, userID, titleID int64) {
-	s.pushAniListEntry(ctx, userID, titleID, false)
-}
-
-// PushAniListEntryExact pushes local progress as authoritative, lowering the
-// remote entry when the user has explicitly unread chapters, so a later sync
-// does not pull the stale higher progress back in.
-func (s *JobService) PushAniListEntryExact(ctx context.Context, userID, titleID int64) {
-	s.pushAniListEntry(ctx, userID, titleID, true)
-}
-
-func (s *JobService) pushAniListEntry(ctx context.Context, userID, titleID int64, exact bool) {
-	ctx = context.WithoutCancel(ctx)
-	ctx, _, ok := s.aniListIdentity(ctx, userID)
-	if !ok {
-		return
-	}
-	mediaID, ok := s.aniListMediaID(ctx, titleID)
-	if !ok {
-		return
-	}
-	local, status, err := s.localAniListState(ctx, userID, titleID)
-	if err != nil {
-		return
-	}
-	go func() {
-		pctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		defer cancel()
-		if err := s.reconcileAniListEntry(pctx, mediaID, local, status, exact); err != nil {
-			log.Printf("anilist entry push (media %d): %v", mediaID, err)
-			return
-		}
-		s.invalidateRecs(userID)
-	}()
-}
-
-// reconcileAniListEntry raises the remote entry to at least the local
-// progress/status, creating it when absent. When exact is set, progress is
-// pushed even when it is lower than remote (an explicit unread). Manual list
-// statuses are never downgraded.
-func (s *JobService) reconcileAniListEntry(ctx context.Context, mediaID, local int, desired string, exact bool) error {
-	remote, rstatus, found, err := s.want.AniList().MediaEntry(ctx, mediaID)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return s.want.AniList().SaveEntry(ctx, mediaID, local, desired)
-	}
-	progress := -1
-	if (exact && local != remote) || local > remote {
-		progress = local
-	}
-	status := ""
-	if aniListStatusRank(desired) > aniListStatusRank(rstatus) {
-		status = desired
-	}
-	if progress < 0 && status == "" {
-		return nil
-	}
-	return s.want.AniList().SaveEntry(ctx, mediaID, progress, status)
-}
-
-// aniListMediaID resolves a tracked title to its AniList media id.
-func (s *JobService) aniListMediaID(ctx context.Context, titleID int64) (int, bool) {
-	title, err := s.lib.GetTitle(ctx, titleID)
-	if err != nil || title.CatalogMangaID == nil {
-		return 0, false
-	}
-	m, err := s.want.GetManga(ctx, *title.CatalogMangaID)
-	if err != nil {
-		return 0, false
-	}
-	mediaID, err := strconv.Atoi(m.ProviderID)
-	if err != nil {
-		return 0, false
-	}
-	return mediaID, true
-}
-
-// markAniListDropped sets a removed title to DROPPED on the acting user's
-// AniList list, in the background and only on explicit request.
-func (s *JobService) markAniListDropped(ctx context.Context, userID int64, mediaID int) {
-	ctx = context.WithoutCancel(ctx)
-	actx, _, ok := s.aniListIdentity(ctx, userID)
-	if !ok {
-		return
-	}
-	go func() {
-		pctx, cancel := context.WithTimeout(actx, 3*time.Minute)
-		defer cancel()
-		if err := s.want.AniList().SaveEntry(pctx, mediaID, -1, "DROPPED"); err != nil {
-			log.Printf("anilist drop (media %d): %v", mediaID, err)
-			return
-		}
-		s.invalidateRecs(userID)
-	}()
-}
-
-// deleteAniListEntry removes a title from the acting user's AniList list
-// entirely, in the background.
-func (s *JobService) deleteAniListEntry(ctx context.Context, userID int64, mediaID int) {
-	ctx = context.WithoutCancel(ctx)
-	actx, aid, ok := s.aniListIdentity(ctx, userID)
-	if !ok {
-		return
-	}
-	go func() {
-		pctx, cancel := context.WithTimeout(actx, 3*time.Minute)
-		defer cancel()
-		if err := s.want.AniList().DeleteEntry(pctx, aid, mediaID); err != nil {
-			log.Printf("anilist delete (media %d): %v", mediaID, err)
-			return
-		}
-		s.invalidateRecs(userID)
-	}()
+	return s.catalog.repo.ContentTags(ctx)
 }
 
 // ToggleFavourite flips the acting user's favourite and mirrors it to their
-// AniList account in the background.
+// connected trackers in the background.
 func (s *JobService) ToggleFavourite(ctx context.Context, titleID int64) (bool, error) {
 	fav, err := s.lib.ToggleFavourite(ctx, titleID)
 	if err != nil {
 		return false, err
 	}
-	s.pushAniListFavourite(ctx, auth.UserID(ctx), titleID, fav)
+	s.pushFavourite(ctx, auth.UserID(ctx), titleID, fav)
 	return fav, nil
 }
 
-// pushAniListFavourite reconciles the remote favourite state to want. AniList
-// only offers a toggle, so the current state is read first.
-func (s *JobService) pushAniListFavourite(ctx context.Context, userID, titleID int64, want bool) {
-	ctx = context.WithoutCancel(ctx)
-	actx, _, ok := s.aniListIdentity(ctx, userID)
-	if !ok {
-		return
-	}
-	mediaID, ok := s.aniListMediaID(ctx, titleID)
-	if !ok {
-		return
-	}
-	go func() {
-		pctx, cancel := context.WithTimeout(actx, 3*time.Minute)
-		defer cancel()
-		remote, err := s.want.AniList().IsFavourite(pctx, mediaID)
-		if err != nil {
-			log.Printf("anilist favourite read (media %d): %v", mediaID, err)
-			return
-		}
-		if remote != want {
-			if err := s.want.AniList().ToggleFavourite(pctx, mediaID); err != nil {
-				log.Printf("anilist favourite toggle (media %d): %v", mediaID, err)
-			}
-		}
-	}()
-}
-
-// localFavouriteIDs maps AniList provider ids of the user's favourites.
-func (s *JobService) localFavouriteIDs(ctx context.Context, userID int64) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT cm.provider_id
-		FROM user_favourites uf
-		JOIN titles t ON t.id = uf.title_id
-		JOIN catalog_manga cm ON cm.id = t.catalog_manga_id
-		WHERE uf.user_id = ? AND cm.provider = ?`, userID, catalog.AniListProvider)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var pid string
-		if rows.Scan(&pid) == nil {
-			out[pid] = true
-		}
-	}
-	return out, rows.Err()
-}
-
-// SyncAniListTitle reconciles a single title with the acting user's AniList
-// list right now: pulls remote progress down, then pushes progress/status up.
-func (s *JobService) SyncAniListTitle(ctx context.Context, titleID int64) error {
-	userID := auth.UserID(ctx)
-	actx, _, ok := s.aniListIdentity(ctx, userID)
-	if !ok {
-		return fmt.Errorf("no AniList account connected")
-	}
-	mediaID, ok := s.aniListMediaID(ctx, titleID)
-	if !ok {
-		return fmt.Errorf("title has no AniList link")
-	}
-	remote, _, found, err := s.want.AniList().MediaEntry(actx, mediaID)
-	if err != nil {
-		return err
-	}
-	if found && remote > 0 {
-		local, _, err := s.localAniListState(ctx, userID, titleID)
-		if err != nil {
-			return err
-		}
-		if remote > local {
-			if _, err := s.lib.MarkChaptersReadThrough(ctx, titleID, remote); err != nil {
-				return err
-			}
-		}
-	}
-	local, status, err := s.localAniListState(ctx, userID, titleID)
-	if err != nil {
-		return err
-	}
-	return s.reconcileAniListEntry(actx, mediaID, local, status, false)
-}
-
-// RelatedManga returns AniList relations/recommendations for a catalog entry.
-func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) ([]catalog.Manga, error) {
-	// Unauthenticated: see SearchAniList.
-	m, err := s.want.GetManga(ctx, catalogID)
-	if err != nil {
-		return nil, err
-	}
-	id, err := strconv.Atoi(m.ProviderID)
-	if err != nil {
-		return nil, fmt.Errorf("catalog entry %d has no AniList id", catalogID)
-	}
-	return s.want.AniList().Related(ctx, id, limit)
-}
-
-// TrendingManga returns currently trending AniList manga.
-func (s *JobService) TrendingManga(ctx context.Context, limit int) ([]catalog.Manga, error) {
-	return s.want.AniList().Trending(ctx, limit) // unauthenticated: see SearchAniList
-}
-
-// RecommendedManga returns AniList recommendations seeded from the acting
-// user's list, falling back to global trending without a connected account.
+// RecommendedManga returns recommendations seeded from the acting user's
+// recent reading, falling back to trending with nothing read yet.
 func (s *JobService) RecommendedManga(ctx context.Context, limit int) ([]catalog.Manga, error) {
 	uid := auth.UserID(ctx)
 	items, ok := s.recsFromCache(uid)
@@ -1543,7 +1035,7 @@ func (s *JobService) RecommendedManga(ctx context.Context, limit int) ([]catalog
 		}
 		// Fallbacks stay uncached so a fresh connect shows up immediately.
 		if personalized {
-			s.cacheRecs(uid, items)
+			s.cacheRecs(ctx, uid, items)
 		}
 	}
 	if len(items) > limit {
@@ -1562,158 +1054,94 @@ func (s *JobService) recsFromCache(uid int64) ([]catalog.Manga, bool) {
 	return append([]catalog.Manga(nil), c.items...), true
 }
 
-func (s *JobService) cacheRecs(uid int64, items []catalog.Manga) {
+func (s *JobService) cacheRecs(ctx context.Context, uid int64, items []catalog.Manga) {
 	s.recMu.Lock()
 	defer s.recMu.Unlock()
 	if s.recCache == nil {
 		s.recCache = map[int64]cachedRecs{}
 	}
 	s.recCache[uid] = cachedRecs{items: append([]catalog.Manga(nil), items...), expires: time.Now().Add(recommendationTTL)}
+	trimOldest(s.recCache, s.cacheLimit(ctx, SettingCacheRecs), cachedRecs.expiry)
 }
 
-// invalidateRecs drops a user's cached recommendations on AniList changes.
+// invalidateRecs drops a user's cached recommendations and suggestions on tracker changes.
 func (s *JobService) invalidateRecs(userID int64) {
+	prefix := fmt.Sprintf("%d:", userID)
 	s.recMu.Lock()
+	defer s.recMu.Unlock()
 	delete(s.recCache, userID)
-	s.recMu.Unlock()
-}
-
-func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog.Manga, bool, error) {
-	actx, aid, ok := s.aniListIdentity(ctx, auth.UserID(ctx))
-	if !ok {
-		items, err := s.TrendingManga(ctx, limit)
-		return items, false, err
-	}
-	entries, err := s.want.AniList().UserList(actx, aid)
-	if err != nil || len(entries) == 0 {
-		items, err := s.TrendingManga(ctx, limit)
-		return items, false, err
-	}
-	onList := make(map[string]bool, len(entries))
-	var seeds []catalog.AniListEntry
-	for _, e := range entries {
-		onList[e.Manga.ProviderID] = true
-		if e.Status == "CURRENT" || e.Status == "COMPLETED" {
-			seeds = append(seeds, e)
+	for key := range s.sugCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.sugCache, key)
 		}
 	}
-	if len(seeds) == 0 {
-		seeds = entries
-	}
-	const maxSeeds = 4
-	if len(seeds) > maxSeeds {
-		// Spread seeds across the list so recommendations vary between titles
-		// rather than always deriving from the same first entries.
-		spread := make([]catalog.AniListEntry, 0, maxSeeds)
-		for i := 0; i < maxSeeds; i++ {
-			spread = append(spread, seeds[i*len(seeds)/maxSeeds])
-		}
-		seeds = spread
-	}
-	var out []catalog.Manga
-	seen := map[string]bool{}
-	for _, seed := range seeds {
-		mediaID, err := strconv.Atoi(seed.Manga.ProviderID)
-		if err != nil {
-			continue
-		}
-		items, err := s.want.AniList().Related(ctx, mediaID, limit) // unauthenticated: see SearchAniList
-		if err != nil {
-			continue // one bad seed shouldn't empty the grid
-		}
-		for _, m := range items {
-			if onList[m.ProviderID] || seen[m.ProviderID] {
-				continue
-			}
-			seen[m.ProviderID] = true
-			out = append(out, m)
-		}
-	}
-	if len(out) == 0 {
-		items, err := s.TrendingManga(ctx, limit)
-		return items, false, err
-	}
-	return out, true, nil
 }
 
 // MangaByIDs returns catalog manga keyed by ID in one query.
 func (s *JobService) MangaByIDs(ctx context.Context, ids []int64) (map[int64]catalog.Manga, error) {
-	return s.want.catalog.MangaByIDs(ctx, ids)
+	return s.catalog.repo.MangaByIDs(ctx, ids)
+}
+
+func (s *JobService) MangaAuthors(ctx context.Context, ids []int64) (map[int64]catalog.Manga, error) {
+	return s.catalog.repo.MangaAuthors(ctx, ids)
 }
 
 // CollectionEdges returns the stored relation graph as (from, to) provider-id pairs.
 func (s *JobService) CollectionEdges(ctx context.Context) ([][2]string, error) {
-	return s.want.catalog.CollectionEdges(ctx)
+	return s.catalog.repo.CollectionEdges(ctx)
 }
 
 // CustomCollections lists the acting user's manually curated collections.
 func (s *JobService) CustomCollections(ctx context.Context) ([]library.Collection, error) {
-	return s.want.library.Collections(ctx)
+	return s.catalog.library.Collections(ctx)
 }
 
 // CollectionMembers maps custom collection id -> member title ids.
 func (s *JobService) CollectionMembers(ctx context.Context) (map[int64][]int64, error) {
-	return s.want.library.CollectionMembers(ctx)
+	return s.catalog.library.CollectionMembers(ctx)
 }
 
 // SmartPins maps smart-collection key -> pinned title ids.
 func (s *JobService) SmartPins(ctx context.Context) (map[string][]int64, error) {
-	return s.want.library.SmartPins(ctx)
+	return s.catalog.library.SmartPins(ctx)
 }
 
 func (s *JobService) CreateCollection(ctx context.Context, name string) (int64, error) {
-	return s.want.library.CreateCollection(ctx, name)
+	return s.catalog.library.CreateCollection(ctx, name)
 }
 
 func (s *JobService) RenameCollection(ctx context.Context, id int64, name string) error {
-	return s.want.library.RenameCollection(ctx, id, name)
+	return s.catalog.library.RenameCollection(ctx, id, name)
 }
 
 func (s *JobService) DeleteCollection(ctx context.Context, id int64) error {
-	return s.want.library.DeleteCollection(ctx, id)
+	return s.catalog.library.DeleteCollection(ctx, id)
 }
 
 func (s *JobService) AddToCollection(ctx context.Context, collectionID, titleID int64) error {
-	return s.want.library.AddCollectionMember(ctx, collectionID, titleID)
+	return s.catalog.library.AddCollectionMember(ctx, collectionID, titleID)
 }
 
 func (s *JobService) RemoveFromCollection(ctx context.Context, collectionID, titleID int64) error {
-	return s.want.library.RemoveCollectionMember(ctx, collectionID, titleID)
+	return s.catalog.library.RemoveCollectionMember(ctx, collectionID, titleID)
 }
 
 func (s *JobService) PinToSmart(ctx context.Context, smartKey string, titleID int64) error {
-	return s.want.library.AddSmartPin(ctx, smartKey, titleID)
+	return s.catalog.library.AddSmartPin(ctx, smartKey, titleID)
 }
 
 func (s *JobService) RemoveSmartPin(ctx context.Context, smartKey string, titleID int64) error {
-	return s.want.library.RemoveSmartPin(ctx, smartKey, titleID)
+	return s.catalog.library.RemoveSmartPin(ctx, smartKey, titleID)
 }
 
 func (s *JobService) GetManga(ctx context.Context, catalogID int64) (catalog.Manga, error) {
-	return s.want.GetManga(ctx, catalogID)
-}
-
-// CatalogMangaByAniList returns catalog metadata for an AniList id, fetching and
-// caching it from AniList when it is not yet in the local catalog. Lets users
-// view a manga's detail page before it is added to the library.
-func (s *JobService) CatalogMangaByAniList(ctx context.Context, anilistID int) (catalog.Manga, error) {
-	pid := strconv.Itoa(anilistID)
-	if m, ok, err := s.want.catalog.MangaByProvider(ctx, catalog.AniListProvider, pid); err != nil {
-		return catalog.Manga{}, err
-	} else if ok {
-		return m, nil
-	}
-	m, err := s.want.AniList().Get(ctx, anilistID)
-	if err != nil {
-		return catalog.Manga{}, err
-	}
-	return s.want.catalog.UpsertManga(ctx, m)
+	return s.catalog.GetManga(ctx, catalogID)
 }
 
 // RemoveTitleFiles removes a title and, when deleteFiles is set, its
 // downloaded folder on disk. Without deletion the folder reappears on the
 // Import page as an untracked candidate.
-func (s *JobService) RemoveTitleFiles(ctx context.Context, id int64, deleteFiles, deleteAniList bool) (library.Title, error) {
+func (s *JobService) RemoveTitleFiles(ctx context.Context, id int64, deleteFiles, deleteRemote bool) (library.Title, error) {
 	title, err := s.lib.GetTitle(ctx, id)
 	if err != nil {
 		return library.Title{}, err
@@ -1729,20 +1157,16 @@ func (s *JobService) RemoveTitleFiles(ctx context.Context, id int64, deleteFiles
 			return library.Title{}, err
 		}
 	}
-	// Resolve the AniList link before the rows disappear.
-	mediaID, hasAniList := s.aniListMediaID(ctx, id)
+	work, hasWork := s.titleWork(ctx, id)
+	syncing := s.progressiveTrackers(ctx, auth.UserID(ctx), id)
 	if err := s.cancelTitleJobs(ctx, id); err != nil {
 		return library.Title{}, err
 	}
 	if _, err := s.lib.RemoveTitle(ctx, id); err != nil {
 		return library.Title{}, err
 	}
-	if hasAniList {
-		if deleteAniList {
-			s.deleteAniListEntry(ctx, auth.UserID(ctx), mediaID)
-		} else {
-			s.markAniListDropped(ctx, auth.UserID(ctx), mediaID)
-		}
+	if hasWork {
+		s.dropFromTrackers(ctx, auth.UserID(ctx), syncing, work, deleteRemote)
 	}
 	if filesDir != "" {
 		if _, statErr := os.Stat(filesDir); os.IsNotExist(statErr) {
@@ -1779,27 +1203,14 @@ func (s *JobService) SetMonitored(ctx context.Context, id int64, monitored bool)
 	return s.lib.SetMonitored(ctx, id, monitored)
 }
 
-// SearchAniList searches AniList and stores returned metadata locally.
-func (s *JobService) SearchAniList(ctx context.Context, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {
-	// Unauthenticated: a token makes AniList pre-filter adult entries by the
-	// account's own 18+ setting, bypassing kaodoku's per-user content guard.
-	return s.want.SearchAniList(ctx, query, limit, filter)
-}
-
-// AddAniListWanted adds an AniList title to wanted; a non-nil allowed guard is
-// checked before anything is persisted.
-func (s *JobService) AddAniListWanted(ctx context.Context, anilistID int, allowed func(catalog.Manga) bool) (catalog.Manga, error) {
-	return s.want.AddAniListWanted(ctx, anilistID, allowed)
-}
-
 // GetMatch returns one source match.
 func (s *JobService) GetMatch(ctx context.Context, id int64) (catalog.Match, error) {
-	return s.want.catalog.GetMatch(ctx, id)
+	return s.catalog.repo.GetMatch(ctx, id)
 }
 
 // ListWanted returns wanted canonical titles.
 func (s *JobService) ListWanted(ctx context.Context) ([]catalog.Manga, error) {
-	return s.want.ListWanted(ctx)
+	return s.catalog.ListWanted(ctx)
 }
 
 // ExploreDownloads lists untracked folders in the download directory.
@@ -1808,20 +1219,25 @@ func (s *JobService) ExploreDownloads(ctx context.Context) ([]ImportCandidate, e
 	if err != nil {
 		return nil, err
 	}
-	return s.want.ExploreDownloads(ctx, cfg.DownloadDir)
+	return s.catalog.ExploreDownloads(ctx, cfg.DownloadDir)
 }
 
-// ImportFolder tracks an existing download folder against an AniList entry.
-func (s *JobService) ImportFolder(ctx context.Context, folder string, anilistID int) (library.Title, error) {
+// ImportFolder tracks an existing download folder against a catalog entry.
+func (s *JobService) ImportFolder(ctx context.Context, folder, provider, id string) (library.Title, error) {
+	ctx = catalog.WithReason(ctx, "Import")
+	p, err := s.Provider(ctx, provider)
+	if err != nil {
+		return library.Title{}, err
+	}
 	cfg, _, err := s.RuntimeConfig(ctx)
 	if err != nil {
 		return library.Title{}, err
 	}
-	title, err := s.want.ImportFolder(ctx, cfg.DownloadDir, folder, anilistID)
+	title, err := s.catalog.ImportFolder(ctx, cfg.DownloadDir, folder, p, id)
 	if err != nil {
 		return library.Title{}, err
 	}
-	s.PushAniListEntry(ctx, auth.UserID(ctx), title.ID)
+	s.titleAdded(ctx, auth.UserID(ctx), title.ID)
 	if err := s.enqueueSourceSearchForTitle(ctx, title); err != nil {
 		return title, err
 	}
@@ -1836,9 +1252,8 @@ func (s *JobService) GetVolume(ctx context.Context, id int64) (library.Volume, e
 	return s.lib.GetVolume(ctx, id)
 }
 
-// MarkPageReadAt marks a page read at an explicit time (offline replay).
-func (s *JobService) MarkPageReadAt(ctx context.Context, chapterID int64, page, totalPages int, readAt string) (library.ChapterReadStatus, error) {
-	return s.lib.MarkPageReadAt(ctx, chapterID, page, totalPages, readAt)
+func (s *JobService) ApplyReadMarks(ctx context.Context, marks []library.ReadMark) error {
+	return s.lib.ApplyReadMarks(ctx, marks)
 }
 
 // ProgressSince returns chapter and volume progress touched after since.
@@ -1880,12 +1295,16 @@ func (s *JobService) DeleteScreen(ctx context.Context, id int64) error {
 	return s.lib.DeleteScreen(ctx, id)
 }
 
-func (s *JobService) LastReadAt(ctx context.Context) (map[int64]time.Time, error) {
-	return s.lib.LastReadAt(ctx)
+func (s *JobService) LastReadAt(ctx context.Context, k int) (map[int64]time.Time, bool, error) {
+	return s.lib.repo.LastReadAt(ctx, k)
 }
 
-func (s *JobService) LatestArrivals(ctx context.Context) (map[int64]library.Arrival, error) {
-	return s.lib.LatestArrivals(ctx)
+func (s *JobService) LatestArrivals(ctx context.Context, k int) (map[int64]library.Arrival, bool, error) {
+	return s.lib.repo.LatestArrivals(ctx, k)
+}
+
+func (s *JobService) TopGenre(ctx context.Context, q library.TitleQuery) (string, error) {
+	return s.lib.repo.TopGenre(ctx, q)
 }
 
 func (s *JobService) MarkVolumePageRead(ctx context.Context, volumeID int64, page, totalPages int) (library.Volume, error) {
@@ -1922,16 +1341,21 @@ func (s *JobService) SetVolumeCover(ctx context.Context, id int64, blob []byte, 
 
 // ImportVolumesFolder tracks a folder of volume files as a new title.
 // Volumes are disk-only: no source search is enqueued.
-func (s *JobService) ImportVolumesFolder(ctx context.Context, folder string, anilistID int) (library.Title, error) {
+func (s *JobService) ImportVolumesFolder(ctx context.Context, folder, provider, id string) (library.Title, error) {
+	ctx = catalog.WithReason(ctx, "Import")
+	p, err := s.Provider(ctx, provider)
+	if err != nil {
+		return library.Title{}, err
+	}
 	cfg, _, err := s.RuntimeConfig(ctx)
 	if err != nil {
 		return library.Title{}, err
 	}
-	title, err := s.want.ImportVolumesFolder(ctx, cfg.DownloadDir, folder, anilistID)
+	title, err := s.catalog.ImportVolumesFolder(ctx, cfg.DownloadDir, folder, p, id)
 	if err != nil {
 		return library.Title{}, err
 	}
-	s.PushAniListEntry(ctx, auth.UserID(ctx), title.ID)
+	s.titleAdded(ctx, auth.UserID(ctx), title.ID)
 	return title, nil
 }
 
@@ -1968,7 +1392,7 @@ func (s *JobService) LinkTitleSource(ctx context.Context, titleID, matchID int64
 	if err := s.sourceAllowed(ctx, match.SourceID); err != nil {
 		return library.Title{}, err
 	}
-	title, err := s.want.LinkTitleSource(ctx, titleID, matchID)
+	title, err := s.catalog.LinkTitleSource(ctx, titleID, matchID)
 	if err != nil {
 		return library.Title{}, err
 	}
@@ -1980,7 +1404,7 @@ func (s *JobService) LinkTitleSource(ctx context.Context, titleID, matchID int64
 
 // ClearMatches drops cached source decisions for a manga.
 func (s *JobService) ClearMatches(ctx context.Context, catalogID int64) error {
-	return s.want.catalog.DeleteMatches(ctx, catalogID)
+	return s.catalog.repo.DeleteMatches(ctx, catalogID)
 }
 
 // MatchSources finds source matches for one canonical title.
@@ -1989,38 +1413,25 @@ func (s *JobService) MatchSources(ctx context.Context, catalogID int64) ([]catal
 	if err != nil {
 		return nil, err
 	}
-	return s.want.MatchSources(ctx, cfg, logSvc, catalogID)
+	return s.catalog.MatchSources(ctx, cfg, logSvc, catalogID)
 }
 
 // ListMatches returns persisted source matches.
 func (s *JobService) ListMatches(ctx context.Context, catalogID int64) ([]catalog.Match, error) {
-	return s.want.ListMatches(ctx, catalogID)
+	return s.catalog.ListMatches(ctx, catalogID)
 }
 
 // TrackMatch adds a selected match to the tracked library.
 func (s *JobService) TrackMatch(ctx context.Context, matchID int64, output string, monitored bool, refreshInterval string) (library.Title, error) {
-	title, err := s.want.TrackMatch(ctx, matchID, output, monitored, refreshInterval)
+	title, err := s.catalog.TrackMatch(ctx, matchID, output, monitored, refreshInterval)
 	if err != nil {
 		return library.Title{}, err
 	}
-	s.PushAniListEntry(ctx, auth.UserID(ctx), title.ID)
+	s.titleAdded(ctx, auth.UserID(ctx), title.ID)
 	if err := s.enqueueRefreshForTitle(ctx, title); err != nil {
 		return title, err
 	}
 	return title, nil
-}
-
-// TrackMatchDefault adds a selected match using catalog status for monitoring.
-func (s *JobService) TrackMatchDefault(ctx context.Context, matchID int64, output string, refreshInterval string) (library.Title, error) {
-	match, err := s.want.catalog.GetMatch(ctx, matchID)
-	if err != nil {
-		return library.Title{}, err
-	}
-	manga, err := s.want.catalog.GetManga(ctx, match.CatalogMangaID)
-	if err != nil {
-		return library.Title{}, err
-	}
-	return s.TrackMatch(ctx, matchID, output, defaultMonitored(manga), refreshInterval)
 }
 
 // SyncSources stores bundled profiles and, when set, a remote registry.
@@ -2041,6 +1452,10 @@ func (s *JobService) ListSources(ctx context.Context) ([]sources.Source, error) 
 
 func (s *JobService) SourceTitleCounts(ctx context.Context) (map[string]int, error) {
 	return s.src.repo.TitleCounts(ctx)
+}
+
+func (s *JobService) SourcesInUse(ctx context.Context) (map[string]int, error) {
+	return s.src.repo.SourcesInUse(ctx)
 }
 
 // SourceFetchFailureCounts counts titles per source whose last chapter
@@ -2081,7 +1496,7 @@ func (s *JobService) ExportSource(ctx context.Context, sourceID string) ([]byte,
 func (s *JobService) VerifySource(ctx context.Context, cfg *config.Config, logSvc ui.Log, sourceID string) (SourceVerifyResult, error) {
 	result, err := s.src.VerifySource(ctx, cfg, logSvc, sourceID)
 	if err == nil {
-		if cerr := s.want.catalog.ClearMissesForSource(ctx, result.SourceID); cerr != nil {
+		if cerr := s.catalog.repo.ClearMissesForSource(ctx, result.SourceID); cerr != nil {
 			logSvc.Warnf("Clearing match misses for %s failed: %v\n", result.SourceID, cerr)
 		}
 	}
@@ -2116,7 +1531,7 @@ func (s *JobService) LinkTitleSourceURL(ctx context.Context, titleID int64, sour
 	if err := s.sourceAllowed(ctx, src.ID); err != nil {
 		return library.Title{}, err
 	}
-	title, err := s.want.LinkTitleURL(ctx, titleID, strings.TrimSpace(rawURL), src.ID)
+	title, err := s.catalog.LinkTitleURL(ctx, titleID, strings.TrimSpace(rawURL), src.ID)
 	if err != nil {
 		return library.Title{}, err
 	}
@@ -2155,7 +1570,7 @@ func (s *JobService) LinkTitleToSource(ctx context.Context, titleID int64, sourc
 	if _, err := url.ParseRequestURI(src.SampleMangaURL); err != nil {
 		return library.Title{}, fmt.Errorf("source %q has no manga URL to link", src.Name)
 	}
-	title, err := s.want.LinkTitleURL(ctx, titleID, src.SampleMangaURL, src.ID)
+	title, err := s.catalog.LinkTitleURL(ctx, titleID, src.SampleMangaURL, src.ID)
 	if err != nil {
 		return library.Title{}, err
 	}
@@ -2216,6 +1631,14 @@ func (s *JobService) ServicesHealth(ctx context.Context) []ServiceHealth {
 				return h.Version, err
 			})
 		},
+	}
+	for _, name := range providerOrder {
+		if s.providerConfigured(ctx, name) {
+			outage := s.ProviderOutage(name)
+			probes = append(probes, func() ServiceHealth {
+				return ServiceHealth{Name: s.ProviderLabel(name) + " (tracker)", Enabled: true, Healthy: outage == "", Error: outage}
+			})
+		}
 	}
 	out := make([]ServiceHealth, len(probes))
 	var wg sync.WaitGroup
@@ -2350,16 +1773,15 @@ func (s *JobService) enqueueRefreshForSource(ctx context.Context, sourceID strin
 	if sourceID == "" {
 		return nil
 	}
-	titles, err := s.lib.ListTitles(ctx)
+	titles, err := s.lib.repo.TitleBasics(ctx, library.TitleQuery{Monitored: "on", Sources: []string{"linked"}})
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, title := range titles {
-		if title.SourceID != sourceID || !title.Monitored {
-			continue
+		if title.SourceID == sourceID {
+			errs = append(errs, s.enqueueRefreshForTitle(ctx, title))
 		}
-		errs = append(errs, s.enqueueRefreshForTitle(ctx, title))
 	}
 	return errors.Join(errs...)
 }
@@ -2488,6 +1910,32 @@ func (s *JobService) GetJob(ctx context.Context, id int64) (jobs.Job, error) {
 	return s.jobs.Get(ctx, id)
 }
 
+// Maintain prunes job history older than keep_history (0 or empty keeps it) and refreshes SQLite planner statistics.
+func (s *JobService) Maintain(ctx context.Context) error {
+	var pruned int64
+	var err error
+	if keep, perr := time.ParseDuration(s.Setting(ctx, SettingJobsKeepHistory, SettingDefault(SettingJobsKeepHistory))); perr == nil && keep > 0 {
+		pruned, err = s.jobs.Prune(ctx, time.Now().Add(-keep))
+	}
+	if pruned > 0 {
+		fmt.Printf("Pruned %d finished jobs\n", pruned)
+	}
+	for _, stmt := range []string{`PRAGMA analysis_limit = 1000`, `PRAGMA optimize = 0x10002`} {
+		if _, e := s.db.ExecContext(ctx, stmt); e != nil {
+			err = errors.Join(err, fmt.Errorf("optimize database: %w", e))
+		}
+	}
+	s.trimImages(int64(s.cacheLimit(ctx, SettingCacheImagesMB)) << 20)
+	s.trimLists(ctx)
+	s.trimRelated(ctx)
+	if pruned > 10000 {
+		if _, e := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); e != nil {
+			err = errors.Join(err, fmt.Errorf("checkpoint database: %w", e))
+		}
+	}
+	return err
+}
+
 // CancelJob aborts a job: a running job's context is cancelled; a queued or
 // awaiting-retry job is marked cancelled so it never runs.
 func (s *JobService) CancelJob(ctx context.Context, id int64) error {
@@ -2510,7 +1958,7 @@ func (s *JobService) CancelJob(ctx context.Context, id int64) error {
 }
 
 func (s *JobService) cancelTitleJobs(ctx context.Context, titleID int64) error {
-	js, err := s.jobs.List(ctx)
+	js, err := s.jobs.Find(ctx, jobs.Filter{TitleIDs: []int64{titleID}})
 	if err != nil {
 		return err
 	}
@@ -2533,8 +1981,41 @@ func (s *JobService) List(ctx context.Context) ([]jobs.Job, error) {
 	return s.jobs.List(ctx)
 }
 
-// RunDue claims and runs due jobs until the queue is empty.
+func (s *JobService) FindJobs(ctx context.Context, f jobs.Filter) ([]jobs.Job, error) {
+	return s.jobs.Find(ctx, f)
+}
+
+func (s *JobService) TopLevelJobs(ctx context.Context, sort, dir string, offset, limit int) ([]jobs.Job, int, error) {
+	return s.jobs.TopLevel(ctx, sort, dir, offset, limit)
+}
+
+func (s *JobService) JobChildren(ctx context.Context, parentIDs []int64, newest int) (map[int64]*jobs.ChildSummary, error) {
+	return s.jobs.Children(ctx, parentIDs, newest)
+}
+
+// RunDue drains due jobs; a call that overlaps a running drain hands its work to it and returns.
 func (s *JobService) RunDue(ctx context.Context, cfg *config.Config, logSvc ui.Log) (RunSummary, error) {
+	var total RunSummary
+	s.rerun.Store(true)
+	for s.rerun.Load() && ctx.Err() == nil {
+		if !s.runMu.TryLock() {
+			return total, nil
+		}
+		for s.rerun.Swap(false) {
+			summary, err := s.drainQueue(ctx, cfg, logSvc)
+			total.Done += summary.Done
+			total.Failed += summary.Failed
+			if err != nil {
+				s.runMu.Unlock()
+				return total, err
+			}
+		}
+		s.runMu.Unlock()
+	}
+	return total, nil
+}
+
+func (s *JobService) drainQueue(ctx context.Context, cfg *config.Config, logSvc ui.Log) (RunSummary, error) {
 	var summary RunSummary
 	var summaryMu sync.Mutex
 	var firstErr error
@@ -2703,11 +2184,11 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 			return s.detectCrops(ctx, payload.TitleID, logSvc)
 		}
 		return s.expandDetectCrops(ctx, job.ID)
-	case jobs.TypeSyncAniList:
+	case jobs.TypeSyncTrackers:
 		if payload.UserID > 0 {
-			return s.runAniListSync(ctx, payload.UserID, progress)
+			return s.runTrackerSync(ctx, payload.UserID, payload.Provider, payload.Force, progress)
 		}
-		return s.expandAniListSync(ctx, job.ID)
+		return s.expandTrackerSync(ctx, job.ID)
 	case jobs.TypeCatalogRefresh:
 		return s.runCatalogRefresh(ctx, progress)
 	case jobs.TypeBackupUserData:
@@ -2723,22 +2204,36 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 		_, err := s.VerifySource(ctx, cfg, logSvc, payload.SourceID)
 		return err
 	case jobs.TypeMatchSources:
-		_, err := s.want.MatchSources(ctx, cfg, logSvc, payload.CatalogID)
+		_, err := s.catalog.MatchSources(ctx, cfg, logSvc, payload.CatalogID)
 		return err
+	case jobs.TypeImportList:
+		return s.runListImport(ctx, payload.UserID, payload.Import, progress)
+	case jobs.TypeMangaBakaRefresh:
+		return s.runMangaBakaRefresh(ctx, payload.Force, progress)
 	default:
 		return fmt.Errorf("unknown job type %q", job.Type)
 	}
 }
 
 func (s *JobService) expandTitleJob(ctx context.Context, typ string, parentID int64) error {
-	titles, err := s.lib.ListTitles(ctx)
+	q := library.TitleQuery{Monitored: "on", Sources: []string{"linked"}}
+	switch typ {
+	case jobs.TypeRefreshTitle:
+	case jobs.TypeDownloadMissing:
+		q.Progress = "needs-download"
+	case jobs.TypeScanDownloads:
+		q = library.TitleQuery{Downloaded: true}
+	default:
+		return nil
+	}
+	titles, err := s.lib.repo.TitleBasics(ctx, q)
 	if err != nil {
 		return err
 	}
 	now := time.Now()
 	var errs []error
 	for _, title := range titles {
-		if !globalTitleJobApplies(typ, title, now) {
+		if typ == jobs.TypeRefreshTitle && !titleRefreshDue(title, now) {
 			continue
 		}
 		_, err := s.enqueueChild(ctx, typ, JobPayload{TitleID: title.ID}, time.Now(), parentID)
@@ -2780,13 +2275,13 @@ func (s *JobService) detectCrops(ctx context.Context, titleID int64, logSvc ui.L
 // expandDetectCrops fans the global job out per title with downloads,
 // skipping titles that are most likely read in strip mode.
 func (s *JobService) expandDetectCrops(ctx context.Context, parentID int64) error {
-	titles, err := s.lib.ListTitles(ctx)
+	titles, err := s.lib.repo.TitleBasics(ctx, library.TitleQuery{Downloaded: true})
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, title := range titles {
-		if title.CompletedCount == 0 || s.stripLikely(ctx, title) {
+		if s.stripLikely(ctx, title) {
 			continue
 		}
 		_, err := s.enqueueChild(ctx, jobs.TypeDetectCrops, JobPayload{TitleID: title.ID}, time.Now(), parentID)
@@ -2799,14 +2294,14 @@ func (s *JobService) stripLikely(ctx context.Context, title library.Title) bool 
 	if title.CatalogMangaID == nil {
 		return false
 	}
-	manga, err := s.want.GetManga(ctx, *title.CatalogMangaID)
+	manga, err := s.catalog.GetManga(ctx, *title.CatalogMangaID)
 	if err != nil {
 		return false
 	}
 	return mangaStripLikely(manga)
 }
 
-// mangaStripLikely: KR/CN/TW origin (webtoon/manhua, from the raw AniList
+// mangaStripLikely: KR/CN/TW origin (webtoon/manhua, from the raw provider
 // record) or the Full Color tag.
 func mangaStripLikely(m catalog.Manga) bool {
 	for _, t := range m.Tags {
@@ -2852,27 +2347,13 @@ func titleRefreshDue(title library.Title, now time.Time) bool {
 	return now.Sub(*title.LastRefreshedAt) >= d
 }
 
-func globalTitleJobApplies(typ string, title library.Title, now time.Time) bool {
-	switch typ {
-	case jobs.TypeRefreshTitle:
-		// pending:/local: titles have nothing to refresh from
-		return title.Monitored && strings.HasPrefix(title.SourceURL, "http") && titleRefreshDue(title, now)
-	case jobs.TypeDownloadMissing:
-		return title.Monitored && strings.HasPrefix(title.SourceURL, "http") && (title.MissingCount > 0 || title.DiscoveredCount == 0)
-	case jobs.TypeScanDownloads:
-		return title.CompletedCount > 0
-	default:
-		return false
-	}
-}
-
 func validateJob(typ string, payload JobPayload) error {
 	switch typ {
 	case jobs.TypeRefreshTitle, jobs.TypeScanDownloads, jobs.TypeDownloadMissing, jobs.TypeDetectCrops:
 		if payload.TitleID < 0 {
 			return fmt.Errorf("invalid title id %d", payload.TitleID)
 		}
-	case jobs.TypeSyncAniList, jobs.TypeCatalogRefresh, jobs.TypeBackupUserData:
+	case jobs.TypeSyncTrackers, jobs.TypeCatalogRefresh, jobs.TypeBackupUserData, jobs.TypeMangaBakaRefresh:
 	case jobs.TypeAttachVolumes:
 		if payload.TitleID <= 0 || strings.TrimSpace(payload.Folder) == "" {
 			return fmt.Errorf("title id and folder are required")
@@ -2884,6 +2365,10 @@ func validateJob(typ string, payload JobPayload) error {
 	case jobs.TypeMatchSources:
 		if payload.CatalogID <= 0 {
 			return fmt.Errorf("catalog id is required")
+		}
+	case jobs.TypeImportList:
+		if payload.UserID <= 0 || payload.Import == nil {
+			return fmt.Errorf("user and entries are required")
 		}
 	default:
 		return fmt.Errorf("unknown job type %q", typ)

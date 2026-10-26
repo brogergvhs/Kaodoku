@@ -21,6 +21,7 @@ type titleDTO struct {
 	SourceURL       string     `json:"source_url"`
 	DisplayTitle    string     `json:"display_title"`
 	CoverImage      string     `json:"cover_image"`
+	BannerImage     string     `json:"banner_image,omitempty"`
 	Monitored       bool       `json:"monitored"`
 	RefreshInterval string     `json:"refresh_interval"`
 	ReleaseStatus   string     `json:"release_status"`
@@ -60,9 +61,13 @@ func toTitleDTO(t library.Title) titleDTO {
 	if tags == nil {
 		tags = []string{}
 	}
+	banner := ""
+	if t.BannerImage != "" {
+		banner = fmt.Sprintf("/api/v1/banners/%d", t.ID)
+	}
 	return titleDTO{
 		ID: t.ID, SourceID: t.SourceID, CatalogMangaID: t.CatalogMangaID, SourceURL: t.SourceURL,
-		DisplayTitle: t.DisplayTitle, CoverImage: titleCoverPath(t),
+		DisplayTitle: t.DisplayTitle, CoverImage: titleCoverPath(t), BannerImage: banner,
 		Monitored: t.Monitored, RefreshInterval: t.RefreshInterval, ReleaseStatus: t.ReleaseStatus,
 		IsAdult: t.IsAdult, AverageScore: t.AverageScore, ContentTags: tags, Favourite: t.Favourite,
 		LanguageMode: t.LanguageMode, LanguageGap: t.LanguageGap, DiscoveredCount: t.DiscoveredCount,
@@ -130,6 +135,7 @@ func toMangaDetailDTO(m catalog.Manga) *mangaDetailDTO {
 
 type titleReadProgressDTO struct {
 	Title         titleDTO             `json:"title"`
+	Rating        *service.TitleRating `json:"rating,omitempty"`
 	Manga         *mangaDetailDTO      `json:"manga,omitempty"`
 	Chapters      []chapterProgressDTO `json:"chapters"`
 	ReadChapters  int                  `json:"read_chapters"`

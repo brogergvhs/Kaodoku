@@ -21,7 +21,7 @@ import (
 
 // Repository persists tracked titles and chapters.
 type Repository struct {
-	db *sql.DB
+	db database.Handle
 	// MaxDownloadAttempts caps failed retries before a chapter stops
 	// counting as missing.
 	MaxDownloadAttempts int
@@ -33,10 +33,13 @@ type CompletedDownload struct {
 	TitleID    int64
 	Label      string
 	OutputFile string
+	Status     string
+	Bytes      int64
+	Pages      int
 }
 
 // NewRepository creates a library repository.
-func NewRepository(db *sql.DB) *Repository {
+func NewRepository(db database.Handle) *Repository {
 	return &Repository{db: db, MaxDownloadAttempts: DefaultDownloadAttempts}
 }
 
@@ -97,40 +100,19 @@ func (r *Repository) AddTitle(ctx context.Context, params AddTitleParams) (Title
 
 // GetTitle returns a tracked title by ID.
 func (r *Repository) GetTitle(ctx context.Context, id int64) (Title, error) {
-	row := r.db.QueryRowContext(ctx, r.titleSelectQuery()+` WHERE t.id = ?`, auth.UserID(ctx), auth.UserID(ctx), auth.UserID(ctx), id)
-
-	title, err := scanTitle(row)
+	titles, err := r.titlesIn(ctx, `SELECT ?`, "", id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Title{}, fmt.Errorf("title %d not found", id)
-		}
 		return Title{}, fmt.Errorf("get title %d: %w", id, err)
 	}
-
-	return title, nil
+	if len(titles) == 0 {
+		return Title{}, fmt.Errorf("title %d not found", id)
+	}
+	return titles[0], nil
 }
 
 // ListTitles returns all tracked titles with chapter counts.
 func (r *Repository) ListTitles(ctx context.Context) ([]Title, error) {
-	rows, err := r.db.QueryContext(ctx, r.titleSelectQuery()+` ORDER BY t.display_title COLLATE NOCASE, t.id`, auth.UserID(ctx), auth.UserID(ctx), auth.UserID(ctx))
-	if err != nil {
-		return nil, fmt.Errorf("list titles: %w", err)
-	}
-	defer rows.Close()
-
-	var out []Title
-	for rows.Next() {
-		title, err := scanTitle(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan title: %w", err)
-		}
-		out = append(out, title)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate titles: %w", err)
-	}
-
-	return out, nil
+	return r.titlesIn(ctx, `SELECT id FROM titles`, ` ORDER BY t.display_title COLLATE NOCASE, t.id`)
 }
 
 // RemoveTitle deletes a tracked title and its dependent chapters/downloads.
@@ -206,24 +188,6 @@ func (r *Repository) ListTitleSources(ctx context.Context, titleID int64) ([]Lin
 			return nil, fmt.Errorf("scan title source: %w", err)
 		}
 		out = append(out, ls)
-	}
-	return out, rows.Err()
-}
-
-// TitleIDsForSource returns ids of titles linked to a source via title_sources.
-func (r *Repository) TitleIDsForSource(ctx context.Context, sourceID string) (map[int64]bool, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT title_id FROM title_sources WHERE source_id = ?`, sourceID)
-	if err != nil {
-		return nil, fmt.Errorf("list source titles: %w", err)
-	}
-	defer rows.Close()
-	out := map[int64]bool{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan source title: %w", err)
-		}
-		out[id] = true
 	}
 	return out, rows.Err()
 }
@@ -398,9 +362,13 @@ func (r *Repository) ToggleFavourite(ctx context.Context, titleID int64) (bool, 
 	return true, err
 }
 
-// SetFavourite marks a title favourite without toggling (AniList pull merge).
-func (r *Repository) SetFavourite(ctx context.Context, userID, titleID int64) error {
-	_, err := r.db.ExecContext(ctx, `INSERT OR IGNORE INTO user_favourites (user_id, title_id) VALUES (?, ?)`, userID, titleID)
+// SetFavourite sets a user's favourite mark without toggling (tracker pull merge).
+func (r *Repository) SetFavourite(ctx context.Context, userID, titleID int64, on bool) error {
+	query := `DELETE FROM user_favourites WHERE user_id = ? AND title_id = ?`
+	if on {
+		query = `INSERT OR IGNORE INTO user_favourites (user_id, title_id) VALUES (?, ?)`
+	}
+	_, err := r.db.ExecContext(ctx, query, userID, titleID)
 	return err
 }
 
@@ -880,21 +848,15 @@ func (r *Repository) TitleReadStatuses(ctx context.Context, titleID int64) ([]Ch
 
 // MarkPageRead records one completed page and updates the chapter read summary.
 func (r *Repository) MarkPageRead(ctx context.Context, chapterID int64, page, totalPages int) (ChapterReadStatus, error) {
-	return r.MarkPageReadAt(ctx, chapterID, page, totalPages, "")
-}
-
-// MarkPageReadAt marks a page read with an explicit read_at ("" = now) so
-// offline reads replay with their original timestamps.
-func (r *Repository) MarkPageReadAt(ctx context.Context, chapterID int64, page, totalPages int, readAt string) (ChapterReadStatus, error) {
 	if page <= 0 {
 		return ChapterReadStatus{}, fmt.Errorf("page must be positive")
 	}
 	return retryBusy(ctx, func() (ChapterReadStatus, error) {
-		return r.markPageRead(ctx, chapterID, page, totalPages, readAt)
+		return r.markPageRead(ctx, chapterID, page, totalPages)
 	})
 }
 
-func (r *Repository) markPageRead(ctx context.Context, chapterID int64, page, totalPages int, readAt string) (ChapterReadStatus, error) {
+func (r *Repository) markPageRead(ctx context.Context, chapterID int64, page, totalPages int) (ChapterReadStatus, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ChapterReadStatus{}, fmt.Errorf("begin read progress: %w", err)
@@ -904,18 +866,27 @@ func (r *Repository) markPageRead(ctx context.Context, chapterID int64, page, to
 			_ = tx.Rollback()
 		}
 	}()
+	if err = r.markPageTx(ctx, tx, chapterID, page, totalPages, ""); err != nil {
+		return ChapterReadStatus{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return ChapterReadStatus{}, fmt.Errorf("commit read progress: %w", err)
+	}
+	return r.GetChapterReadStatus(ctx, chapterID)
+}
 
+func (r *Repository) markPageTx(ctx context.Context, tx *sql.Tx, chapterID int64, page, totalPages int, readAt string) error {
 	var downloadPages int
-	if err = tx.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 		SELECT COALESCE(d.pages, 0)
 		FROM chapters c
 		LEFT JOIN downloads d ON d.chapter_id = c.id
 		WHERE c.id = ?
 	`, chapterID).Scan(&downloadPages); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ChapterReadStatus{}, fmt.Errorf("chapter %d not found", chapterID)
+			return fmt.Errorf("chapter %d not found", chapterID)
 		}
-		return ChapterReadStatus{}, fmt.Errorf("load chapter page count: %w", err)
+		return fmt.Errorf("load chapter page count: %w", err)
 	}
 	totalPagesProvided := totalPages > 0
 	if !totalPagesProvided {
@@ -930,16 +901,48 @@ func (r *Repository) markPageRead(ctx context.Context, chapterID int64, page, to
 		VALUES (?, ?, ?, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP))
 	`, auth.UserID(ctx), chapterID, page, readAt)
 	if err != nil {
-		return ChapterReadStatus{}, fmt.Errorf("mark page read: %w", err)
+		return fmt.Errorf("mark page read: %w", err)
 	}
 	inserted, _ := res.RowsAffected()
-	if err = r.updateReadProgress(ctx, tx, chapterID, totalPages, false, inserted == 0); err != nil {
-		return ChapterReadStatus{}, err
+	return r.updateReadProgress(ctx, tx, chapterID, totalPages, false, inserted == 0)
+}
+
+type ReadMark struct {
+	ChapterID  int64
+	VolumeID   int64
+	Page       int
+	TotalPages int
+	ReadAt     string
+}
+
+func (r *Repository) ApplyReadMarks(ctx context.Context, marks []ReadMark) error {
+	_, err := retryBusy(ctx, func() (struct{}, error) {
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return struct{}{}, fmt.Errorf("begin read marks: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		for _, m := range marks {
+			if err := r.applyReadMark(ctx, tx, m); err != nil {
+				return struct{}{}, err
+			}
+		}
+		return struct{}{}, tx.Commit()
+	})
+	return err
+}
+
+func (r *Repository) applyReadMark(ctx context.Context, tx *sql.Tx, m ReadMark) error {
+	if m.ChapterID > 0 {
+		return r.markPageTx(ctx, tx, m.ChapterID, m.Page, m.TotalPages, m.ReadAt)
 	}
-	if err = tx.Commit(); err != nil {
-		return ChapterReadStatus{}, fmt.Errorf("commit read progress: %w", err)
+	total := m.TotalPages
+	if total <= 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT pages FROM volumes WHERE id = ?`, m.VolumeID).Scan(&total); err != nil {
+			return err
+		}
 	}
-	return r.GetChapterReadStatus(ctx, chapterID)
+	return upsertVolumePage(ctx, tx.ExecContext, m.VolumeID, m.Page, total)
 }
 
 // MarkChapterRead marks every known page in a chapter and completes it.
@@ -1073,7 +1076,7 @@ func (r *Repository) MarkChapterRangeRead(ctx context.Context, titleID int64, fr
 }
 
 // MarkChaptersReadThrough marks every chapter with number <= maxNumber as
-// read for the acting user, in one transaction (AniList pull-merge).
+// read for the acting user, in one transaction (tracker pull-merge).
 func (r *Repository) MarkChaptersReadThrough(ctx context.Context, titleID int64, maxNumber int) (int, error) {
 	chapters, err := r.ListChapters(ctx, titleID)
 	if err != nil {
@@ -1165,14 +1168,18 @@ func (r *Repository) GetChapterReadStatus(ctx context.Context, chapterID int64) 
 	return chapters[0], nil
 }
 
-// TitlesByProvider maps a catalog provider's manga IDs to tracked title IDs,
-// for marking search results that are already in the library.
+// TitlesByProvider maps a provider's manga IDs (native or confirmed mapping)
+// to tracked title IDs, for marking search results already in the library.
 func (r *Repository) TitlesByProvider(ctx context.Context, provider string) (map[string]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT m.provider_id, t.id FROM titles t
 		JOIN catalog_manga m ON m.id = t.catalog_manga_id
 		WHERE m.provider = ?
-	`, provider)
+		UNION ALL
+		SELECT e.provider_id, t.id FROM titles t
+		JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id
+		WHERE e.provider = ? AND e.confirmed = 1 AND e.provider_id != ''
+	`, provider, provider)
 	if err != nil {
 		return nil, fmt.Errorf("list titles by provider: %w", err)
 	}
@@ -1184,22 +1191,28 @@ func (r *Repository) TitlesByProvider(ctx context.Context, provider string) (map
 		if err := rows.Scan(&providerID, &titleID); err != nil {
 			return nil, fmt.Errorf("scan provider title: %w", err)
 		}
-		out[providerID] = titleID
+		if _, ok := out[providerID]; !ok {
+			out[providerID] = titleID
+		}
 	}
 	return out, rows.Err()
 }
 
+func (r *Repository) SetTitleCatalog(ctx context.Context, titleID, catalogID int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE titles SET catalog_manga_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, catalogID, titleID)
+	return err
+}
+
 // FindByCatalog returns the tracked title for a catalog manga, if any.
 func (r *Repository) FindByCatalog(ctx context.Context, catalogID int64) (Title, bool, error) {
-	row := r.db.QueryRowContext(ctx, r.titleSelectQuery()+` WHERE t.catalog_manga_id = ? LIMIT 1`, auth.UserID(ctx), auth.UserID(ctx), auth.UserID(ctx), catalogID)
-	title, err := scanTitle(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Title{}, false, nil
-	}
+	titles, err := r.titlesIn(ctx, `SELECT id FROM titles WHERE catalog_manga_id = ? LIMIT 1`, "", catalogID)
 	if err != nil {
 		return Title{}, false, fmt.Errorf("find title by catalog %d: %w", catalogID, err)
 	}
-	return title, true, nil
+	if len(titles) == 0 {
+		return Title{}, false, nil
+	}
+	return titles[0], true, nil
 }
 
 // GetChapterByLabel returns one discovered chapter by title and label.
@@ -1268,7 +1281,7 @@ func (r *Repository) ListScannableDownloads(ctx context.Context, titleID int64) 
 
 func (r *Repository) listDownloadsByStatus(ctx context.Context, titleID int64, where string) ([]CompletedDownload, error) {
 	q := `
-		SELECT c.id, c.title_id, c.label, d.output_file
+		SELECT c.id, c.title_id, c.label, d.output_file, d.status, d.bytes, d.pages
 		FROM downloads d
 		JOIN chapters c ON c.id = d.chapter_id
 		WHERE ` + where + `
@@ -1289,7 +1302,7 @@ func (r *Repository) listDownloadsByStatus(ctx context.Context, titleID int64, w
 	var out []CompletedDownload
 	for rows.Next() {
 		var d CompletedDownload
-		if err := rows.Scan(&d.ChapterID, &d.TitleID, &d.Label, &d.OutputFile); err != nil {
+		if err := rows.Scan(&d.ChapterID, &d.TitleID, &d.Label, &d.OutputFile, &d.Status, &d.Bytes, &d.Pages); err != nil {
 			return nil, fmt.Errorf("scan completed download: %w", err)
 		}
 		out = append(out, d)
@@ -1536,7 +1549,22 @@ func chapterSelectQuery() string {
 	`
 }
 
-func (r *Repository) titleSelectQuery() string {
+// titlesIn loads full titles whose id is in scope, aggregating only their chapters and volumes.
+func (r *Repository) titlesIn(ctx context.Context, scope, order string, scopeArgs ...any) ([]Title, error) {
+	uid := auth.UserID(ctx)
+	args := []any{uid, uid}
+	args = append(args, scopeArgs...)
+	args = append(args, uid)
+	args = append(args, scopeArgs...)
+	args = append(args, scopeArgs...)
+	out, err := database.Collect(ctx, r.db, scanTitle, r.titleSelectQuery(scope)+` WHERE t.id IN (`+scope+`)`+order, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list titles: %w", err)
+	}
+	return out, nil
+}
+
+func (r *Repository) titleSelectQuery(scope string) string {
 	// Per-title aggregates are grouped once in a subquery (downloads and
 	// read-progress are 1:1 per chapter, so no DISTINCT is needed) — far
 	// cheaper than aggregating over the fanned-out join on large libraries.
@@ -1567,6 +1595,7 @@ func (r *Repository) titleSelectQuery() string {
 			t.created_at,
 			t.updated_at,
 			COALESCE(m.cover_image, ''),
+			COALESCE(m.banner_image, ''),
 			COALESCE(m.status, ''),
 			COALESCE(m.is_adult, 0),
 			COALESCE(m.tags_json, '[]'),
@@ -1588,6 +1617,7 @@ func (r *Repository) titleSelectQuery() string {
 				SUM(v.pages) AS pages
 			FROM volumes v
 			LEFT JOIN volume_read_progress vr ON vr.volume_id = v.id AND vr.user_id = ?
+			WHERE v.title_id IN (%[2]s)
 			GROUP BY v.title_id
 		) vagg ON vagg.title_id = t.id
 		LEFT JOIN (
@@ -1596,18 +1626,19 @@ func (r *Repository) titleSelectQuery() string {
 				COUNT(*) AS discovered,
 				COUNT(CASE WHEN d.status = 'completed' THEN 1 END) AS completed,
 				COUNT(CASE WHEN d.id IS NULL
-					OR (d.status != 'completed' AND NOT (d.status = 'failed' AND d.attempts >= %d)) THEN 1 END) AS missing,
-				COUNT(CASE WHEN d.status = 'failed' AND d.attempts >= %d THEN 1 END) AS failed,
+					OR (d.status != 'completed' AND NOT (d.status = 'failed' AND d.attempts >= %[1]d)) THEN 1 END) AS missing,
+				COUNT(CASE WHEN d.status = 'failed' AND d.attempts >= %[1]d THEN 1 END) AS failed,
 				COUNT(CASE WHEN rp.completed = 1 THEN 1 END) AS read,
 				SUM(CASE WHEN d.status = 'completed' THEN d.bytes ELSE 0 END) AS bytes,
 				SUM(CASE WHEN d.status = 'completed' THEN d.pages ELSE 0 END) AS pages
 			FROM chapters c
 			LEFT JOIN downloads d ON d.chapter_id = c.id
 			LEFT JOIN chapter_read_progress rp ON rp.chapter_id = c.id AND rp.user_id = ?
+			WHERE c.title_id IN (%[2]s)
 			GROUP BY c.title_id
 		) agg ON agg.title_id = t.id
 		LEFT JOIN catalog_manga m ON m.id = t.catalog_manga_id
-	`, r.MaxDownloadAttempts, r.MaxDownloadAttempts)
+	`, r.MaxDownloadAttempts, scope)
 }
 
 func scanTitle(row database.Scanner) (Title, error) {
@@ -1644,6 +1675,7 @@ func scanTitle(row database.Scanner) (Title, error) {
 		&createdAt,
 		&updatedAt,
 		&title.CoverImage,
+		&title.BannerImage,
 		&title.ReleaseStatus,
 		&isAdult,
 		&tagsJSON,

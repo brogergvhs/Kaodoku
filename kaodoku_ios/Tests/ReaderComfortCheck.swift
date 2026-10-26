@@ -38,7 +38,7 @@ func whiteOnlyPreservesColor() {
   #expect(white.r > 240)
   #expect(white.g < 240)
   #expect(white.b < white.g)
-  // Blue is not white (min channel 0) → untouched.
+  // Blue is not white (min channel 0) -> untouched.
   #expect(blue.r < 15)
   #expect(blue.g < 15)
   #expect(blue.b > 235)

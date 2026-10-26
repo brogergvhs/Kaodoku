@@ -80,7 +80,7 @@
 
   <div class="rounded-xl bg-base-100 p-4 mb-4">
     <h3 class="text-sm font-semibold text-base-content/70 mb-1">Reading time</h3>
-    <p class="text-xs text-base-content/50 mb-3">Only page-by-page reading in the app is timed; bulk/AniList-marked chapters are excluded. Time per page differs between book-paged manga and long-strip webtoons, so dwell is reported per cohort and the headline is per chapter.</p>
+    <p class="text-xs text-base-content/50 mb-3">Only page-by-page reading in the app is timed; bulk- and tracker-marked chapters are excluded. Time per page differs between book-paged manga and long-strip webtoons, so dwell is reported per cohort and the headline is per chapter.</p>
     <div class="grid gap-4 sm:grid-cols-3 text-sm">
       <div><div class="text-2xl font-bold">≈{{f1 .P.M.ReadingTime.MinutesPerChapter}}<span class="text-base-content/40 text-base"> min</span></div><div class="text-base-content/60">per chapter (all formats)</div></div>
       <div><div class="text-2xl font-bold">≈{{f1 .P.M.ReadingTime.PagedSecPerPage}}<span class="text-base-content/40 text-base"> s</span></div><div class="text-base-content/60">per book page · {{.P.M.ReadingTime.PagedChapters}} chapters</div></div>
@@ -140,7 +140,7 @@
 <div class="mb-4 flex items-center gap-2">
   <label class="text-sm text-base-content/70">User</label>
   <select class="select select-sm w-56" name="user" hx-get="/ui/metrics?tab=users" hx-target="#metrics-body" hx-swap="outerHTML">
-    <option value="0">Select a user…</option>
+    <option value="0">Select a user...</option>
     {{range .Users}}<option value="{{.ID}}" {{if eq .ID $.SelectedUser}}selected{{end}}>{{.Username}}</option>{{end}}
   </select>
 </div>
@@ -150,6 +150,29 @@
   <p class="text-base-content/60">Pick a user to view their reading metrics.</p>
 {{end}}
 {{end}}
+
+{{define "trackerCalls"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">Tracker API calls</h3>
+    <p class="text-sm text-base-content/60">Every request to a tracker by why it was sent and what it asked for.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="min-h-0 flex-1 overflow-auto">
+  {{if .}}<table class="table table-sm table-pin-rows">
+    <thead><tr><th>Reason</th><th>Call</th><th class="text-right">Today</th><th class="text-right">30 days</th><th class="text-right">All time</th></tr></thead>
+    {{range .}}<tbody>
+      <tr><th colspan="5" class="pt-4 text-sm text-base-content">{{.Label}}</th></tr>
+      {{range .Calls}}<tr><td class="whitespace-nowrap">{{.Reason}}</td><td class="whitespace-nowrap">{{.Kind}}</td>{{template "requestCounts" .RequestCounts}}</tr>{{end}}
+      <tr class="font-semibold"><td colspan="2">Total</td>{{template "requestCounts" .Total}}</tr>
+    </tbody>{{end}}
+  </table>
+  {{else}}<p class="py-2 text-sm text-base-content/60">No tracker calls recorded yet.</p>{{end}}
+</div>
+{{end}}
+
+{{define "requestCounts"}}<td class="text-right tabular-nums">{{.Today}}</td><td class="text-right tabular-nums">{{.Month}}</td><td class="text-right tabular-nums">{{.Total}}</td>{{end}}
 
 {{define "metricsOverview"}}
 <div class="stats bg-base-100 w-full mb-4">
@@ -208,6 +231,29 @@
     {{template "barList" .O.Jobs}}
   </div>
 </div>
+
+{{with .O.TrackerRequests}}
+<div class="rounded-xl bg-base-100 p-4 mb-4">
+  <h3 class="text-sm font-semibold text-base-content/70 mb-3 flex items-center justify-between"><span>Tracker API requests</span><button type="button" class="btn btn-ghost btn-xs" hx-get="/ui/metrics/tracker-calls" hx-target="#tracker-calls-body" onclick="openLoading('tracker_calls_modal')">Details</button></h3>
+  <div class="overflow-x-auto">
+    <table class="table table-sm">
+      <thead>
+        <tr><th></th><th class="text-center" colspan="3">API</th><th class="text-center" colspan="3">Images</th></tr>
+        <tr><th>Tracker</th><th class="text-right">Today</th><th class="text-right">30 days</th><th class="text-right">All time</th><th class="text-right">Today</th><th class="text-right">30 days</th><th class="text-right">All time</th></tr>
+      </thead>
+      <tbody>
+        {{range .}}<tr{{if .All}} class="font-semibold"{{end}}><td>{{.Label}}</td>{{template "requestCounts" .API}}{{template "requestCounts" .Images}}</tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+  <dialog id="tracker_calls_modal" class="modal">
+    <div class="modal-box flex max-h-[85vh] w-[min(56rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
+      <div id="tracker-calls-body" class="contents" data-loading></div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
+</div>
+{{end}}
 
 <div class="rounded-xl bg-base-100 p-4">
   <h3 class="text-sm font-semibold text-base-content/70 mb-3">System</h3>

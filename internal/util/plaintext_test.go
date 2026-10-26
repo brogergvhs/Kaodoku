@@ -10,7 +10,7 @@ func TestPlainSnippet(t *testing.T) {
 	}{
 		{"<b>Bold</b> tale<br>of &amp; things", 100, "Bold tale of & things"},
 		{"one  two\n\nthree", 100, "one two three"},
-		{"alpha beta gamma", 10, "alpha…"},
+		{"alpha beta gamma", 10, "alpha..."},
 		{"", 10, ""},
 	} {
 		if got := PlainSnippet(tc.in, tc.max); got != tc.want {

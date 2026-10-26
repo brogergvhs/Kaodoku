@@ -30,7 +30,7 @@ func TestSourceForTitleDisabledSourceStopsRefresh(t *testing.T) {
 		ID: "kotatsu:testsrc", Name: "Test", BaseURL: "https://t.test/",
 		SampleMangaURL: "https://t.test/m/1", Scraper: "kotatsu:TESTSRC", Enabled: true,
 	}
-	if err := repo.Sync(ctx, []sources.Profile{profile}, sources.OriginLocal); err != nil {
+	if err := repo.Sync(ctx, []sources.Profile{profile}, sources.OriginLocal, false); err != nil {
 		t.Fatal(err)
 	}
 	title := library.Title{SourceID: "kotatsu:testsrc", SourceURL: "https://t.test/m/1"}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -70,6 +71,37 @@ func (a *apiV1) setFavourite(want bool) http.HandlerFunc {
 	}
 }
 
+func (a *apiV1) setRating(w http.ResponseWriter, r *http.Request) {
+	id, ok := a.guardedTitleID(w, r)
+	var body struct {
+		Rating int `json:"rating"`
+	}
+	if !ok || !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.SetTitleRating(r.Context(), id, body.Rating); err != nil {
+		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, a.svc.TitleRating(r.Context(), id))
+}
+
+func (a *apiV1) answerMissingRating(w http.ResponseWriter, r *http.Request) {
+	id, ok := a.guardedTitleID(w, r)
+	var body struct {
+		Provider string `json:"provider"`
+		Action   string `json:"action"`
+	}
+	if !ok || !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.AnswerMissingRating(r.Context(), id, body.Provider, body.Action == "send"); err != nil {
+		v1err(w, http.StatusBadGateway, "unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, a.svc.TitleRating(r.Context(), id))
+}
+
 func (a *apiV1) patchTitle(w http.ResponseWriter, r *http.Request) {
 	id, ok := a.guardedTitleID(w, r)
 	if !ok {
@@ -114,9 +146,8 @@ func (a *apiV1) deleteTitle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	deleteFiles := r.URL.Query().Get("delete_files") == "1"
-	deleteAniList := r.URL.Query().Get("delete_anilist") == "1"
-	if _, err := a.svc.RemoveTitleFiles(r.Context(), id, deleteFiles, deleteAniList); err != nil {
+	q := r.URL.Query()
+	if _, err := a.svc.RemoveTitleFiles(r.Context(), id, q.Get("delete_files") == "1", q.Get("delete_remote") == "1"); err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
@@ -187,7 +218,7 @@ func (a *apiV1) collectionsList(w http.ResponseWriter, r *http.Request) {
 	pins, _ := a.svc.SmartPins(r.Context())
 	group := func(cols []collection) []collectionDTO {
 		out := make([]collectionDTO, 0, len(cols))
-		for _, c := range cols {
+		for _, c := range withMemberStats(r.Context(), a.svc, cols) {
 			out = append(out, toCollectionDTO(c, pins))
 		}
 		return out
@@ -225,7 +256,7 @@ func (a *apiV1) collectionGet(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range custom {
 		if c.CustomID == id {
-			writeJSON(w, http.StatusOK, toCollectionDTO(c, nil))
+			writeJSON(w, http.StatusOK, toCollectionDTO(withMemberStats(r.Context(), a.svc, []collection{c})[0], nil))
 			return
 		}
 	}
@@ -467,12 +498,79 @@ func (a *apiV1) meSettingsPut(w http.ResponseWriter, r *http.Request) {
 	a.meSettingsGet(w, r)
 }
 
-func (a *apiV1) anilistStatus(w http.ResponseWriter, r *http.Request) {
-	conn := a.svc.AniListConnectionFor(r.Context(), userFrom(r.Context()).ID)
-	writeJSON(w, http.StatusOK, aniListDTO{Connected: conn.Connected, Name: conn.Name, ExpiresAt: conn.ExpiresAt})
+func (a *apiV1) trackers(r *http.Request) []trackerDTO {
+	var out []trackerDTO
+	for _, c := range (&webUI{svc: a.svc}).trackerCards(r).Cards {
+		d := trackerDTO{Provider: c.Provider, Label: c.Label, Login: c.Login, Outage: c.Outage}
+		if c.Account != nil {
+			d.Connected, d.Name, d.ExpiresAt, d.LastError = true, c.Account.Name, c.Account.ExpiresAt, c.Account.LastError
+			d.Settings, d.Position = &c.Account.TrackerPrefs, c.Account.Position
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
-func (a *apiV1) anilistSync(w http.ResponseWriter, r *http.Request) {
+func (a *apiV1) trackersList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": a.trackers(r), "default": a.svc.DefaultProvider(r.Context())})
+}
+
+func (a *apiV1) trackerLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.LoginTracker(r.Context(), userFrom(r.Context()).ID, r.PathValue("provider"), body.Username, body.Password); err != nil {
+		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (a *apiV1) syncAllTrackers(w http.ResponseWriter, r *http.Request) {
+	a.syncTrackers(w, r, "")
+}
+
+// trackerSettings applies the settings sent over the current ones, so a client that doesn't know a newer setting keeps it.
+func (a *apiV1) trackerSettings(w http.ResponseWriter, r *http.Request) {
+	var body service.TrackerPrefs
+	for _, acc := range a.svc.TrackerAccounts(r.Context(), userFrom(r.Context()).ID) {
+		if acc.Provider == r.PathValue("provider") {
+			body = acc.TrackerPrefs
+		}
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.SetTrackerPrefs(r.Context(), r.PathValue("provider"), body); err != nil {
+		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	a.trackersList(w, r)
+}
+
+func (a *apiV1) trackerOrder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Providers []string `json:"providers"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := a.svc.ReorderTrackers(r.Context(), body.Providers); err != nil {
+		v1err(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	a.trackersList(w, r)
+}
+
+func (a *apiV1) trackerSync(w http.ResponseWriter, r *http.Request) {
+	a.syncTrackers(w, r, r.PathValue("provider"))
+}
+
+func (a *apiV1) syncTrackers(w http.ResponseWriter, r *http.Request, provider string) {
 	var body struct {
 		TitleID int64 `json:"title_id"`
 	}
@@ -485,9 +583,9 @@ func (a *apiV1) anilistSync(w http.ResponseWriter, r *http.Request) {
 			v1err(w, http.StatusNotFound, "not_found", "title not found")
 			return
 		}
-		err = a.svc.SyncAniListTitle(r.Context(), body.TitleID)
+		err = a.svc.SyncTrackersTitle(r.Context(), body.TitleID, provider)
 	} else {
-		err = a.svc.EnqueueAniListSync(r.Context(), userFrom(r.Context()).ID)
+		err = a.svc.EnqueueTrackerSync(r.Context(), userFrom(r.Context()).ID, provider)
 	}
 	if err != nil {
 		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -496,24 +594,25 @@ func (a *apiV1) anilistSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (a *apiV1) anilistDisconnect(w http.ResponseWriter, r *http.Request) {
-	if err := a.svc.DisconnectAniList(r.Context(), userFrom(r.Context()).ID); err != nil {
+func (a *apiV1) trackerDisconnect(w http.ResponseWriter, r *http.Request) {
+	if err := a.svc.DisconnectTracker(r.Context(), userFrom(r.Context()).ID, r.PathValue("provider")); err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// searchItemDTO is a manga plus its library title id when already tracked.
+// searchItemDTO is a manga plus its library title id when already tracked, and where it was listed from.
 type searchItemDTO struct {
 	catalog.Manga
-	TitleID int64 `json:"title_id,omitempty"`
+	TitleID int64    `json:"title_id,omitempty"`
+	Sources []string `json:"sources"`
 }
 
 func toSearchItems(views []searchResultView) []searchItemDTO {
 	out := make([]searchItemDTO, 0, len(views))
 	for _, v := range views {
-		out = append(out, searchItemDTO{Manga: v.Manga, TitleID: v.TitleID})
+		out = append(out, searchItemDTO{Manga: v.Manga, TitleID: v.TitleID, Sources: v.Origins()})
 	}
 	return out
 }
@@ -524,17 +623,9 @@ func toSearchItems(views []searchResultView) []searchItemDTO {
 func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	term := strings.TrimSpace(q.Get("q"))
-	include, exclude := splitCSV(q.Get("include_tags")), splitCSV(q.Get("exclude_tags"))
-	filter := catalog.SearchFilter{Sort: anilistSort(q.Get("sort"), q.Get("dir"))}
-	if term == "" && filter.Sort == "" {
-		filter.Sort = "POPULARITY_DESC"
-	}
-	if len(include) > 0 || len(exclude) > 0 {
-		if options, err := a.svc.ContentTagOptions(r.Context()); err == nil && len(options) > 0 {
-			filter.GenreIn, filter.TagIn = splitByKind(include, options)
-			filter.GenreNotIn, filter.TagNotIn = splitByKind(exclude, options)
-		}
-	}
+	picked := searchControls{IncludeTags: splitCSV(q.Get("include_tags")), ExcludeTags: splitCSV(q.Get("exclude_tags"))}
+	options, _ := a.svc.ProviderTags(r.Context(), cmp.Or(q.Get("provider"), a.svc.DefaultProvider(r.Context())))
+	filter := searchFilter(r.Context(), options, term, q.Get("sort"), q.Get("dir"), picked.IncludeTags, picked.ExcludeTags)
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page < 1 {
 		page = 1
@@ -544,12 +635,12 @@ func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 	for scan := 0; scan < 3; scan++ {
 		last = page + scan
 		filter.Page = last
-		fetched, m, err := a.svc.SearchAniList(r.Context(), term, searchPerPage, filter)
+		fetched, m, err := a.svc.SearchManga(catalog.WithReason(r.Context(), "App search"), q.Get("provider"), term, searchPerPage, filter)
 		if err != nil {
 			v1err(w, http.StatusBadGateway, "unavailable", err.Error())
 			return
 		}
-		views, more = stripItems(r.Context(), a.svc, fetched), m
+		views, more = stripItems(r.Context(), a.svc, filterManga(fetched, picked)), m
 		if len(views) > 0 || !more {
 			break
 		}
@@ -560,7 +651,7 @@ func (a *apiV1) wantedSearch(w http.ResponseWriter, r *http.Request) {
 // wantedTrending mirrors the web: personalized recommendations, falling back to
 // a guarded popularity browse so the grid is never empty.
 func (a *apiV1) wantedTrending(w http.ResponseWriter, r *http.Request) {
-	items, err := a.svc.RecommendedManga(r.Context(), 18)
+	items, err := a.svc.RecommendedManga(catalog.WithReason(r.Context(), "App recommendations"), 18)
 	if err != nil {
 		items = nil
 	}
@@ -569,7 +660,7 @@ func (a *apiV1) wantedTrending(w http.ResponseWriter, r *http.Request) {
 		views = views[:18]
 	}
 	if len(views) == 0 {
-		views = stripItems(r.Context(), a.svc, guardedBrowseManga(r.Context(), a.svc, "", ""))
+		views = stripItems(r.Context(), a.svc, guardedBrowseManga(r.Context(), a.svc, "", "", ""))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": toSearchItems(views)})
 }
@@ -578,12 +669,13 @@ func (a *apiV1) wantedTrending(w http.ResponseWriter, r *http.Request) {
 // job runner so matching/downloading starts immediately.
 func (a *apiV1) libraryAdd(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ProviderID int `json:"provider_id"`
+		Provider   string      `json:"provider"`
+		ProviderID json.Number `json:"provider_id"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	title, err := a.svc.AddCatalogTitle(r.Context(), body.ProviderID)
+	title, err := a.svc.AddCatalogTitle(r.Context(), body.Provider, body.ProviderID.String())
 	if err != nil {
 		v1err(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
@@ -598,20 +690,29 @@ func (a *apiV1) libraryAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toTitleDTO(title))
 }
 
-// tagOptions lists the genre/tag vocabulary for search filter pickers.
+// tagOptions lists the genre/tag vocabulary for filter pickers: one provider's with ?provider=, else all merged.
 func (a *apiV1) tagOptions(w http.ResponseWriter, r *http.Request) {
 	options, err := a.svc.ContentTagOptions(r.Context())
+	if p := r.URL.Query().Get("provider"); p != "" {
+		options, err = a.svc.ProviderTags(r.Context(), p)
+	}
 	if err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
 	type tagDTO struct {
-		Name string `json:"name"`
-		Kind string `json:"kind"`
+		Name  string `json:"name"`
+		Kind  string `json:"kind"`
+		Group string `json:"group"`
 	}
+	options = visibleTagOptions(r.Context(), options)
 	items := make([]tagDTO, 0, len(options))
 	for _, o := range options {
-		items = append(items, tagDTO{Name: o.Name, Kind: o.Kind})
+		group := "Genres"
+		if o.Kind != "genre" {
+			group = tagCategoryLabel(o.Category)
+		}
+		items = append(items, tagDTO{Name: o.Name, Kind: o.Kind, Group: group})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -627,12 +728,18 @@ func (a *apiV1) wantedList(w http.ResponseWriter, r *http.Request) {
 
 func (a *apiV1) wantedAdd(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AniListID int `json:"anilist_id"`
+		AniListID  json.Number `json:"anilist_id"`
+		Provider   string      `json:"provider"`
+		ProviderID json.Number `json:"provider_id"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	item, err := a.svc.AddAniListWanted(r.Context(), body.AniListID, func(m catalog.Manga) bool {
+	provider, id := body.Provider, body.ProviderID.String()
+	if id == "" {
+		provider, id = catalog.AniListProvider, body.AniListID.String()
+	}
+	item, err := a.svc.AddWanted(r.Context(), provider, id, func(m catalog.Manga) bool {
 		return contentAllowed(r.Context(), m.IsAdult, mangaContentTags(m))
 	})
 	if errors.Is(err, service.ErrContentBlocked) {
@@ -716,20 +823,26 @@ func (a *apiV1) track(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiV1) jobsList(w http.ResponseWriter, r *http.Request) {
-	list, err := a.svc.List(r.Context())
+	q := r.URL.Query()
+	f := jobs.Filter{Type: q.Get("type"), Limit: clampLimit(q.Get("limit"))}
+	if status := q.Get("status"); status != "" {
+		f.Statuses = []string{status}
+	}
+	f.BeforeID, _ = strconv.ParseInt(q.Get("cursor"), 10, 64)
+	list, err := a.svc.FindJobs(r.Context(), f)
 	if err != nil {
 		v1err(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
-	q := r.URL.Query()
-	status, typ := q.Get("status"), q.Get("type")
 	items := make([]jobDTO, 0, len(list))
 	for _, j := range list {
-		if (status == "" || j.Status == status) && (typ == "" || j.Type == typ) {
-			items = append(items, toJobDTO(j))
-		}
+		items = append(items, toJobDTO(j))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	next := ""
+	if len(list) == f.Limit {
+		next = strconv.FormatInt(list[len(list)-1].ID, 10)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
 
 func (a *apiV1) jobGet(w http.ResponseWriter, r *http.Request) {

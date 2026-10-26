@@ -7,6 +7,7 @@ import (
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
+	"github.com/brogergvhs/kaodoku/internal/service"
 )
 
 // permMeta gives each permission a human name and a description shown when
@@ -26,7 +27,7 @@ func permMeta(perm string) (label, desc string) {
 	case auth.PermReaderUse:
 		return "Read manga", "Open the reader and keep their own reading progress."
 	case auth.PermLibraryAdd:
-		return "Add manga", "Search AniList and add new titles to the library."
+		return "Add manga", "Search metadata backends and add new titles to the library."
 	case auth.PermLibraryManage:
 		return "Manage library", "Refresh chapters, download, link sources, monitor and remove titles."
 	case auth.PermImportUse:
@@ -67,17 +68,28 @@ func permGroups() []permGroup {
 }
 
 type usersView struct {
-	Users      []auth.User
-	Roles      []auth.Role
-	Groups     []permGroup
-	TagOptions []catalog.ContentTag
+	Users           []auth.User
+	Roles           []auth.Role
+	Groups          []permGroup
+	TagOptions      []catalog.ContentTag
+	ProviderOptions []providerOption
+}
+
+type providerOption struct{ Name, Label string }
+
+func (u *webUI) providerOptions(names []string) []providerOption {
+	var out []providerOption
+	for _, name := range names {
+		out = append(out, providerOption{Name: name, Label: u.svc.ProviderLabel(name)})
+	}
+	return out
 }
 
 func (u *webUI) usersData(r *http.Request) usersView {
 	users, _ := u.svc.Auth().ListUsers(r.Context())
 	roles, _ := u.svc.Auth().ListRoles(r.Context())
 	opts, _ := u.svc.ContentTagOptions(r.Context())
-	return usersView{Users: users, Roles: roles, Groups: permGroups(), TagOptions: opts}
+	return usersView{Users: users, Roles: roles, Groups: permGroups(), TagOptions: opts, ProviderOptions: u.providerOptions(service.ProviderNames())}
 }
 
 func (u *webUI) usersPage(w http.ResponseWriter, r *http.Request) {
@@ -89,9 +101,10 @@ func (u *webUI) usersFrag(w http.ResponseWriter, r *http.Request) {
 }
 
 type userEditView struct {
-	User       auth.User
-	Roles      []auth.Role
-	TagOptions []catalog.ContentTag
+	User            auth.User
+	Roles           []auth.Role
+	TagOptions      []catalog.ContentTag
+	ProviderOptions []providerOption
 }
 
 func (u *webUI) userEditModal(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +120,7 @@ func (u *webUI) userEditModal(w http.ResponseWriter, r *http.Request) {
 	}
 	roles, _ := u.svc.Auth().ListRoles(r.Context())
 	opts, _ := u.svc.ContentTagOptions(r.Context())
-	u.frag(w, "userEditModal", userEditView{User: *usr, Roles: roles, TagOptions: opts})
+	u.frag(w, "userEditModal", userEditView{User: *usr, Roles: roles, TagOptions: opts, ProviderOptions: u.providerOptions(service.ProviderNames())})
 }
 
 type roleEditView struct {
@@ -134,9 +147,10 @@ func (u *webUI) roleEditModal(w http.ResponseWriter, r *http.Request) {
 func contentGuardsFromForm(r *http.Request) auth.ContentGuards {
 	_ = r.ParseForm()
 	return auth.ContentGuards{
-		AllowAdult:  r.FormValue("allow_adult") == "on",
-		BlockedTags: tagList(r.Form["blocked_tags"]),
-		AllowedTags: tagList(r.Form["allowed_tags"]),
+		AllowAdult:       r.FormValue("allow_adult") == "on",
+		BlockedTags:      tagList(r.Form["blocked_tags"]),
+		AllowedTags:      tagList(r.Form["allowed_tags"]),
+		BlockedProviders: r.Form["blocked_providers"],
 	}
 }
 

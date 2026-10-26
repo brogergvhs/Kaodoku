@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/brogergvhs/kaodoku/internal/library"
+	"github.com/brogergvhs/kaodoku/internal/service"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 )
 
@@ -181,5 +182,21 @@ func TestSourceRowShowsFetchIssues(t *testing.T) {
 	}
 	if !strings.Contains(list, "/library/7") {
 		t.Fatalf("failing title should link to its library page: %s", list)
+	}
+}
+
+func TestImportCandidatesLoadTitleOptionsOnOpen(t *testing.T) {
+	t.Parallel()
+	u := &webUI{}
+	u.tmpl = template.Must(template.New("").Funcs(u.funcs()).ParseFS(templateFS, "templates/*.html"))
+
+	cands := []service.ImportCandidate{{Folder: "a", ChapterFiles: 1}, {Folder: "b", ChapterFiles: 2}, {Folder: "c", ChapterFiles: 3}}
+	h := string(u.renderToHTML("importCandidates", importCandidatesView{Candidates: cands, HasTitles: true}))
+	if strings.Count(h, `hx-get="/ui/import/titles"`) != 3 || strings.Contains(h, "<option") {
+		t.Fatalf("candidates should lazy-load title options: %s", h)
+	}
+	opts := string(u.renderToHTML("importTitleOptions", []library.Title{{ID: 1, DisplayTitle: "One"}, {ID: 2, DisplayTitle: "Two"}}))
+	if strings.Count(opts, "<option") != 2 || !strings.Contains(opts, `value="2">Two<`) {
+		t.Fatalf("title options = %s", opts)
 	}
 }

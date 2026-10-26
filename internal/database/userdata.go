@@ -16,9 +16,11 @@ var userDataTables = []string{
 	"settings",
 	"user_settings",
 	"api_tokens",
-	"user_anilist",
+	"tracker_accounts",
 	"sources",
 	"catalog_manga",
+	"catalog_external_ids",
+	"mangabaka_suggestions",
 	"titles",
 	"title_sources",
 	"chapters",
@@ -31,6 +33,9 @@ var userDataTables = []string{
 	"collection_smart_pins",
 	"library_screens",
 	"user_favourites",
+	"tracker_title_sync",
+	"user_ratings",
+	"tracker_ratings",
 }
 
 var restoreClearOnlyTables = []string{
@@ -40,7 +45,6 @@ var restoreClearOnlyTables = []string{
 	"browser_cookies",
 	"title_source_matches",
 	"catalog_relations",
-	"content_tags",
 }
 
 func BackupUserData(ctx context.Context, dbPath, outPath string) error {

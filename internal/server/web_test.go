@@ -6,10 +6,49 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brogergvhs/kaodoku/internal/catalog"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/sources"
 )
+
+func TestTagFilterViewGroupsByCategory(t *testing.T) {
+	t.Parallel()
+
+	// Options arrive in the reader's order: genres first, then category asc.
+	opts := []catalog.ContentTag{
+		{Name: "Action", Kind: "genre"},
+		{Name: "Comedy", Kind: "genre"},
+		{Name: "Loose End", Kind: "tag"}, // empty category -> Other
+		{Name: "Time Travel", Kind: "tag", Category: "Setting-Time"},
+		{Name: "Magic", Kind: "tag", Category: "Theme-Fantasy", Description: "Spells and such"},
+	}
+	v := tagFilterView(opts, []string{"Magic"}, []string{"Action", "StaleCustom"}, "Tags")
+	groups := v["Groups"].([]tagGroupView)
+	titles := make([]string, len(groups))
+	for i, g := range groups {
+		titles[i] = g.Title
+	}
+	// Genres pinned first; category groups in input order; Custom last.
+	want := []string{"Genres", "Other", "Setting – Time", "Theme – Fantasy", "Custom"}
+	if strings.Join(titles, ",") != strings.Join(want, ",") {
+		t.Fatalf("group order = %v, want %v", titles, want)
+	}
+	if v["IncludeCount"] != 1 || v["ExcludeCount"] != 2 {
+		t.Fatalf("counts = inc %v exc %v", v["IncludeCount"], v["ExcludeCount"])
+	}
+	// Magic chip is included and carries its description tooltip.
+	for _, g := range groups {
+		for _, c := range g.Tags {
+			if c.Name == "Magic" && (c.State != "include" || c.Tooltip != "Spells and such") {
+				t.Fatalf("magic chip = %+v", c)
+			}
+			if c.Name == "StaleCustom" && c.State != "exclude" {
+				t.Fatalf("custom chip state = %q", c.State)
+			}
+		}
+	}
+}
 
 func TestTitleActivityFromTargetedTitleJob(t *testing.T) {
 	t.Parallel()
@@ -63,41 +102,6 @@ func TestSelectedTitleIDs(t *testing.T) {
 	}
 	if _, err := selectedTitleIDs([]string{"x"}); err == nil {
 		t.Fatal("bad id accepted")
-	}
-}
-
-func TestFilterTitlesBySourceID(t *testing.T) {
-	t.Parallel()
-
-	titles := []library.Title{
-		{ID: 1, SourceID: "mangadex", SourceURL: "https://mangadex.org/x"},
-		{ID: 2, SourceID: "other", SourceURL: "https://other.to/y"},
-		{ID: 3, SourceURL: "local:import"},
-	}
-	got := filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		Sources: []string{"mangadex"}, SourceLinks: map[int64]bool{3: true},
-		Monitor: "all", Fav: "all", Content: "all", Progress: "all",
-	})
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
-		t.Fatalf("source filter kept %#v", got)
-	}
-	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		Sources: []string{"linked"}, Monitor: "all", Fav: "all", Content: "all", Progress: "all",
-	})
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
-		t.Fatalf("linked filter kept %#v", got)
-	}
-	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		Monitor: "all", Fav: "all", Content: "all", Progress: "all",
-	})
-	if len(got) != 3 {
-		t.Fatalf("all filter kept %#v", got)
-	}
-	got = filterTitles(append([]library.Title(nil), titles...), libraryControls{
-		Sources: []string{"mangadex", "other"}, Monitor: "all", Fav: "all", Content: "all", Progress: "all",
-	})
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
-		t.Fatalf("multi-source filter kept %#v", got)
 	}
 }
 

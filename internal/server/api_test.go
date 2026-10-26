@@ -15,42 +15,37 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brogergvhs/kaodoku/internal/catalog"
 	chaptersPkg "github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/database"
-	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/providers"
 	"github.com/brogergvhs/kaodoku/internal/service"
 )
 
-func TestAPISettings(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	var got map[string]string
-	requestJSON(t, api, http.MethodGet, "/api/settings", nil, http.StatusOK, &got)
-	if got[service.SettingServeRefreshEvery] != "1h" || got[service.SettingServeRunEvery] != "5s" {
-		t.Fatalf("default settings = %#v", got)
+func TestSettingValidation(t *testing.T) {
+	for _, kv := range [][2]string{
+		{service.SettingServeDownloadEvery, "15m"},
+		{service.SettingJobsKeepHistory, "720h"},
+		{service.SettingJobsKeepHistory, "0"},
+		{service.SettingJobsKeepHistory, ""},
+	} {
+		if err := service.ValidateSetting(kv[0], kv[1]); err != nil {
+			t.Errorf("%s=%q rejected: %v", kv[0], kv[1], err)
+		}
 	}
-	if got[service.SettingBrowserSolverEnabled] != "false" || got[service.SettingBrowserSolverEndpoint] == "" {
-		t.Fatalf("solver settings = %#v", got)
+	for _, kv := range [][2]string{
+		{service.SettingServeRunEvery, "0s"},
+		{service.SettingBrowserSolverTimeoutSeconds, "0"},
+		{service.SettingBrowserDownloaderTimeoutSeconds, "0"},
+		{service.SettingJobsWorkers, "0"},
+		{service.SettingJobsKeepHistory, "-1h"},
+		{service.SettingJobsKeepHistory, "abc"},
+	} {
+		if service.ValidateSetting(kv[0], kv[1]) == nil {
+			t.Errorf("%s=%q accepted", kv[0], kv[1])
+		}
 	}
-	if got[service.SettingBrowserDownloaderEnabled] != "false" || got[service.SettingBrowserDownloaderEndpoint] == "" {
-		t.Fatalf("browser downloader settings = %#v", got)
-	}
-	if got[service.SettingJobsWorkers] != "4" {
-		t.Fatalf("job worker setting = %#v", got)
-	}
-
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingServeDownloadEvery: "15m"}, http.StatusOK, &got)
-	if got[service.SettingServeDownloadEvery] != "15m" {
-		t.Fatalf("updated settings = %#v", got)
-	}
-
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingServeRunEvery: "0s"}, http.StatusBadRequest, nil)
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingBrowserSolverTimeoutSeconds: "0"}, http.StatusBadRequest, nil)
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingBrowserDownloaderTimeoutSeconds: "0"}, http.StatusBadRequest, nil)
-	requestJSON(t, api, http.MethodPut, "/api/settings", map[string]string{service.SettingJobsWorkers: "0"}, http.StatusBadRequest, nil)
 }
 
 func TestSettingsPageRedactsAniListSecret(t *testing.T) {
@@ -72,7 +67,7 @@ func TestSettingsPageRedactsAniListSecret(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/server", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("settings status = %d; body=%s", rec.Code, rec.Body.String())
 	}
@@ -93,20 +88,47 @@ func TestSettingsPageRedactsAniListSecret(t *testing.T) {
 	}
 }
 
-func TestAPIJobs(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	var job jobs.Job
-	requestJSON(t, api, http.MethodPost, "/api/jobs/enqueue", map[string]any{"type": jobs.TypeScanDownloads}, http.StatusCreated, &job)
-	if job.Type != jobs.TypeScanDownloads || job.Status != "queued" {
-		t.Fatalf("job = %#v", job)
+func TestSettingsToggleSelectAndMultiSave(t *testing.T) {
+	ctx := context.Background()
+	svc, closeDB, err := service.OpenJobs(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	var all []jobs.Job
-	requestJSON(t, api, http.MethodGet, "/api/jobs", nil, http.StatusOK, &all)
-	if len(all) != 1 || all[0].ID != job.ID {
-		t.Fatalf("jobs = %#v", all)
+	defer closeDB()
+	api := New(svc, func(context.Context) (service.RunSummary, error) { return service.RunSummary{}, nil },
+		func(context.Context, string) (service.SourceVerifyResult, error) {
+			return service.SourceVerifyResult{}, nil
+		})
+	save := func(form url.Values) {
+		req := httptest.NewRequest(http.MethodPut, "/ui/settings", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "alert-error") {
+			t.Fatalf("save %v: %d %s", form, rec.Code, rec.Body.String())
+		}
+	}
+	save(url.Values{
+		service.SettingRateLimitDisabled: {"false", "true"},
+		service.SettingProvidersDisabled: {"", "kitsu", "mal"},
+		service.SettingProvidersDefault:  {"mangaupdates"},
+	})
+	for key, want := range map[string]string{service.SettingRateLimitDisabled: "true", service.SettingProvidersDisabled: "kitsu,mal", service.SettingProvidersDefault: "mangaupdates"} {
+		if got := svc.Setting(ctx, key, ""); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/server", nil))
+	body := rec.Body.String()
+	for _, want := range []string{`class="toggle" id="set-ratelimit.disabled" name="ratelimit.disabled" value="true" checked`, `value="kitsu" checked`, `data-empty-label="None">2 selected</summary>`, `<option value="mangaupdates" selected>MangaUpdates</option>`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("settings page missing %s", want)
+		}
+	}
+	save(url.Values{service.SettingRateLimitDisabled: {"false"}, service.SettingProvidersDisabled: {""}})
+	if svc.Setting(ctx, service.SettingRateLimitDisabled, "false") != "false" || svc.Setting(ctx, service.SettingProvidersDisabled, "") != "" {
+		t.Fatal("unchecking did not clear the settings")
 	}
 }
 
@@ -244,7 +266,7 @@ func TestSessionAuth(t *testing.T) {
 	defer closeDB()
 
 	rec := httptest.NewRecorder()
-	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/me", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d, want 401", rec.Code)
 	}
@@ -267,61 +289,13 @@ func TestSessionAuth(t *testing.T) {
 		t.Fatal("no session cookie issued")
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	req.AddCookie(session)
 	rec = httptest.NewRecorder()
 	api.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("session status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-}
-
-func TestAPISolverHealthDisabled(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	var got map[string]any
-	requestJSON(t, api, http.MethodGet, "/api/solver/health", nil, http.StatusOK, &got)
-	if got["ok"] != false {
-		t.Fatalf("health = %#v", got)
-	}
-}
-
-func TestAPISourcesList(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	var got []map[string]any
-	requestJSON(t, api, http.MethodGet, "/api/sources", nil, http.StatusOK, &got)
-	if len(got) == 0 || got[0]["id"] == "" {
-		t.Fatalf("sources = %#v", got)
-	}
-}
-
-func TestAPISourcesLocal(t *testing.T) {
-	api, closeDB := testAPI(t)
-	defer closeDB()
-
-	profile := map[string]any{
-		"id":               "localdemo",
-		"name":             "Local Demo",
-		"base_url":         "https://local.test/",
-		"sample_manga_url": "https://local.test/manga/demo/",
-		"enabled":          true,
-	}
-	requestJSON(t, api, http.MethodPost, "/api/sources/local", profile, http.StatusOK, nil)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/sources/export?id=localdemo", nil)
-	api.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("export status = %d; body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "id: localdemo") {
-		t.Fatalf("export body = %s", rec.Body.String())
-	}
-
-	requestJSON(t, api, http.MethodDelete, "/api/sources/local?id=localdemo", nil, http.StatusNoContent, nil)
 }
 
 func testAPI(t *testing.T) (http.Handler, func()) {
@@ -360,5 +334,131 @@ func requestJSON(t *testing.T, handler http.Handler, method, path string, body a
 		if err := json.NewDecoder(rec.Body).Decode(out); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestMeAndServerPagesSplitSettings(t *testing.T) {
+	ctx := context.Background()
+	svc, closeDB, err := service.OpenJobs(ctx, filepath.Join(t.TempDir(), "kaodoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	api := New(svc, func(context.Context) (service.RunSummary, error) { return service.RunSummary{}, nil },
+		func(context.Context, string) (service.SourceVerifyResult, error) {
+			return service.SourceVerifyResult{}, nil
+		})
+	get := func(path string) string {
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec.Body.String()
+	}
+	me, server := get("/me"), get("/server")
+	if !strings.Contains(me, "/ui/account") || !strings.Contains(me, `name="ui.theme"`) || strings.Contains(me, "Scheduling") {
+		t.Fatalf("/me should hold account and appearance only:\n%s", me)
+	}
+	if !strings.Contains(server, `id="app-anilist"`) || !strings.Contains(server, "getElementById('app-mal').showModal()") || !strings.Contains(server, "/trackers/mal/callback") {
+		t.Fatal("/server is missing the tracker app rows and modals")
+	}
+	if strings.Contains(server, "/ui/account") || strings.Contains(server, `name="ui.theme"`) || !strings.Contains(server, "Scheduling") {
+		t.Fatalf("/server should hold server settings only:\n%s", server)
+	}
+	if !strings.Contains(me, `href="/me"`) || !strings.Contains(me, "Log out") || !strings.Contains(me, `href="/server"`) {
+		t.Fatal("account menu or Server link missing")
+	}
+	allow := func(on bool) bool {
+		form := url.Values{"blocked_providers": {"kitsu"}}
+		if on {
+			form.Set("allow_adult", "on")
+		}
+		req := httptest.NewRequest(http.MethodPost, "/ui/account/content", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		if !strings.Contains(rec.Body.String(), "Saved") {
+			t.Fatalf("content save: %s", rec.Body.String())
+		}
+		return strings.Contains(get("/me"), `name="allow_adult" checked`)
+	}
+	if !strings.Contains(me, "Content preferences") || !allow(true) || allow(false) || !strings.Contains(get("/me"), `value="kitsu" checked`) {
+		t.Fatal("content preferences do not round-trip on /me")
+	}
+}
+
+func TestSearchSwapsTagPickerWithBackend(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	svc, closeDB, err := service.OpenJobs(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	db, err := database.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := catalog.NewRepository(db)
+	if err := repo.ReplaceContentTags(ctx, catalog.MALProvider, []catalog.ContentTag{{Name: "Gourmet", Kind: "genre"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceContentTags(ctx, catalog.AniListProvider, []catalog.ContentTag{{Name: "Isekai", Kind: "tag"}}); err != nil {
+		t.Fatal(err)
+	}
+	api := New(svc, func(context.Context) (service.RunSummary, error) { return service.RunSummary{}, nil },
+		func(context.Context, string) (service.SourceVerifyResult, error) {
+			return service.SourceVerifyResult{}, nil
+		})
+	search := func(form url.Values) string {
+		req := httptest.NewRequest(http.MethodPost, "/ui/search", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	swapped := search(url.Values{"provider": {"mal"}, "tags_for": {"anilist"}, "include_tags": {"Isekai"}})
+	if !strings.Contains(swapped, `id="search-tags" class="filter-panel grid grid-cols-1 items-start gap-2 sm:grid-cols-2" hx-swap-oob="true"`) ||
+		!strings.Contains(swapped, `data-tag-name="Gourmet"`) || strings.Contains(swapped, "Isekai") || !strings.Contains(swapped, `name="tags_for" value="mal"`) {
+		t.Fatalf("backend switch should swap in MAL's tags and drop AniList picks:\n%s", swapped)
+	}
+	if same := search(url.Values{"provider": {"mal"}, "tags_for": {"mal"}}); strings.Contains(same, "hx-swap-oob") {
+		t.Fatal("tag picker re-sent without a backend change")
+	}
+}
+
+func TestCoverRouteFillsMissingCovers(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	svc, closeDB, err := service.OpenJobs(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	db, err := database.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := catalog.NewRepository(db)
+	if err := repo.ReplaceContentTags(ctx, catalog.MangaUpdatesProvider, []catalog.ContentTag{{Name: "Drama", Kind: "genre"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertManga(ctx, catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "55", TitleRomaji: "Solo", CoverImage: "https://c/55.jpg"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := coverURL(catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "55"}); got != "/ui/covers/mangaupdates/55" {
+		t.Fatalf("coverURL = %q", got)
+	}
+	if got := coverURL(catalog.Manga{Provider: catalog.MangaUpdatesProvider, ProviderID: "55", CoverImage: "https://c/x.jpg"}); got != "https://c/x.jpg" {
+		t.Fatalf("coverURL kept = %q", got)
+	}
+	api := New(svc, func(context.Context) (service.RunSummary, error) { return service.RunSummary{}, nil },
+		func(context.Context, string) (service.SourceVerifyResult, error) {
+			return service.SourceVerifyResult{}, nil
+		})
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui/covers/mangaupdates/55", nil))
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://c/55.jpg" {
+		t.Fatalf("cover route = %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 }

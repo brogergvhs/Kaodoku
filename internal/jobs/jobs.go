@@ -4,16 +4,18 @@ package jobs
 import "time"
 
 const (
-	TypeRefreshTitle    = "refresh_title"
-	TypeScanDownloads   = "scan_downloads"
-	TypeDownloadMissing = "download_missing"
-	TypeSyncAniList     = "sync_anilist"
-	TypeCatalogRefresh  = "catalog_refresh"
-	TypeAttachVolumes   = "attach_volumes"
-	TypeVerifySource    = "verify_source"
-	TypeMatchSources    = "match_sources"
-	TypeBackupUserData  = "backup_user_data"
-	TypeDetectCrops     = "detect_crops"
+	TypeRefreshTitle     = "refresh_title"
+	TypeScanDownloads    = "scan_downloads"
+	TypeDownloadMissing  = "download_missing"
+	TypeSyncTrackers     = "sync_trackers"
+	TypeCatalogRefresh   = "catalog_refresh"
+	TypeAttachVolumes    = "attach_volumes"
+	TypeVerifySource     = "verify_source"
+	TypeMatchSources     = "match_sources"
+	TypeImportList       = "import_list"
+	TypeBackupUserData   = "backup_user_data"
+	TypeDetectCrops      = "detect_crops"
+	TypeMangaBakaRefresh = "mangabaka_refresh"
 )
 
 type Job struct {

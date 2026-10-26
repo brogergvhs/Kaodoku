@@ -164,7 +164,7 @@ extension LocalStore.LocalTitle {
 extension LocalTitleCard {
   var cardLine: String {
     if title.entries.isEmpty, !title.pending.isEmpty {
-      return "downloading \(title.pending.count)…"
+      return "downloading \(title.pending.count)..."
     }
     let ch = title.chapterEntries, vols = title.volumeEntries
     if !vols.isEmpty, !ch.isEmpty {
@@ -183,8 +183,7 @@ extension LocalTitleCard {
   }
 }
 
-// LocalTitleView is the offline title page, identical in layout to
-// TitleDetailView: header, content header with the Read button, chapter rows.
+/// LocalTitleView is the offline title page, identical in layout to TitleDetailView.
 struct LocalTitleView: View {
   @Environment(AppState.self) private var app
   @Environment(\.dismiss) private var dismiss
@@ -192,6 +191,12 @@ struct LocalTitleView: View {
   @State private var reading: LocalStore.Entry?
   @State private var showRemoveRange = false
   @State private var volumesTab = false
+  @State private var order = ChapterOrder.number
+  @State private var ascending = false
+  @State private var page = 0
+  @State private var bannerRest: CGFloat?
+  @State private var bannerShift: CGFloat = 0
+  private let perPage = 25
 
   private var title: LocalStore.LocalTitle? {
     app.store.titles.first { $0.id == titleId }
@@ -205,24 +210,44 @@ struct LocalTitleView: View {
     let title = title
     List {
       if let title {
+        Section {
+          TitleTop(cover: Cover(path: "", adult: title.info.isAdult, local: title.coverURL, targetWidth: 140),
+                   name: title.info.name) { readButton(title) }
+            .padding(.top, title.bannerURL == nil ? 0 : 30)
+            .trackBanner(rest: $bannerRest, shift: $bannerShift)
+        }
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets())
         Section { header(title) }
           .nordRows()
-        Section { contentHeader(title) }
+        if hasChapters(title), hasVolumes(title) {
+          Section {
+            Picker("Content", selection: $volumesTab) {
+              Text("\(title.chapterEntries.count) Chapters").tag(false)
+              Text("\(title.volumeEntries.count) Volumes").tag(true)
+            }
+            .pickerStyle(.segmented)
+          }
           .listRowBackground(Color.clear)
           .listRowInsets(EdgeInsets())
-        Section(volumesTab ? "Volumes" : "Chapters") {
-          ForEach(rows(title)) { entry in
+        }
+        let byID = Dictionary(uniqueKeysWithValues: rows(title).map { ($0.id, $0) })
+        let sorted = order.sorted(rows(title).map(chapterProgress), ascending: ascending)
+        let pages = max(1, (sorted.count + perPage - 1) / perPage)
+        let current = min(page, pages - 1)
+        let shown = Array(sorted.dropFirst(current * perPage).prefix(perPage))
+        Section {
+          ForEach(shown) { ch in
             Button {
-              reading = entry
+              reading = byID[ch.id]
             } label: {
-              ChapterRow(chapter: chapterProgress(entry), volumes: volumesTab, local: true,
-                         localThumb: app.store.thumbURL(entry))
+              ChapterRow(chapter: ch, volumes: volumesTab, local: true,
+                         localThumb: byID[ch.id].flatMap(app.store.thumbURL))
             }
           }
           .onDelete { offsets in
-            let list = rows(title)
             for i in offsets {
-              app.store.delete(list[i].id, volume: volumesTab)
+              app.store.delete(shown[i].id, volume: volumesTab)
             }
           }
           ForEach(volumesTab ? title.pendingVolumes : title.pendingChapters) { p in
@@ -230,11 +255,23 @@ struct LocalTitleView: View {
                        active: app.store.isActive(p),
                        progress: app.store.isActive(p) ? app.store.downloadProgress : 0)
           }
+          PagerRow(page: $page, current: current, pages: pages)
+        } header: {
+          ChapterListHeader(label: volumesTab ? "Volumes" : "Chapters", order: $order, ascending: $ascending)
         }
         .nordRows()
       }
     }
+    .listSectionSpacing(.compact)
+    .background(alignment: .top) {
+      if let banner = title?.bannerURL {
+        TitleBanner(shift: bannerShift, local: banner)
+      }
+    }
     .nordScreen()
+    .onChange(of: volumesTab) { page = 0 }
+    .onChange(of: order) { page = 0 }
+    .onChange(of: ascending) { page = 0 }
     .onAppear {
       if let t = title, t.chapterEntries.isEmpty, t.pendingChapters.isEmpty,
          !(t.volumeEntries.isEmpty && t.pendingVolumes.isEmpty)
@@ -256,7 +293,7 @@ struct LocalTitleView: View {
             app.store.deleteTitle(titleId)
             dismiss()
           }
-          Button("Range…") { showRemoveRange = true }
+          Button("Range...") { showRemoveRange = true }
         } label: {
           Label("Remove downloads", systemImage: "trash")
         }
@@ -281,13 +318,6 @@ struct LocalTitleView: View {
 
   private func header(_ title: LocalStore.LocalTitle) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      HStack {
-        Spacer()
-        Cover(path: "", adult: title.info.isAdult, local: title.coverURL, targetWidth: 170)
-          .frame(width: 170)
-        Spacer()
-      }
-      Text(title.info.name).font(.title2.bold())
       VStack(alignment: .leading, spacing: 4) {
         let ch = title.chapterEntries, vols = title.volumeEntries
         if ch.isEmpty, !vols.isEmpty {
@@ -295,8 +325,7 @@ struct LocalTitleView: View {
         } else {
           BarView(read: pct(Int64(ch.count { $0.isRead }), Int64(ch.count)), full: 1)
         }
-        Text(headerLine(title))
-          .font(.caption).foregroundStyle(.secondary)
+        StatsLine(left: headerLine(title), right: "\(humanBytes(title.size)) on device")
       }
       if let detail = title.info.detail {
         MangaDetailBlock(manga: detail)
@@ -304,28 +333,19 @@ struct LocalTitleView: View {
     }
   }
 
-  private func contentHeader(_ title: LocalStore.LocalTitle) -> some View {
-    VStack(spacing: 10) {
-      let hasCh = !title.chapterEntries.isEmpty || !title.pendingChapters.isEmpty
-      let hasVols = !title.volumeEntries.isEmpty || !title.pendingVolumes.isEmpty
-      if hasCh, hasVols {
-        Picker("Content", selection: $volumesTab) {
-          Text("\(title.chapterEntries.count) Chapters").tag(false)
-          Text("\(title.volumeEntries.count) Volumes").tag(true)
-        }
-        .pickerStyle(.segmented)
-      }
-      let list = rows(title)
-      if let next = list.first(where: { !$0.isRead }) ?? list.last {
-        Button {
-          reading = next
-        } label: {
-          Text(list.contains { $0.readPages > 0 || $0.isRead } ? "Continue reading" : "Read")
-            .font(.headline)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-        }
-        .buttonStyle(.borderedProminent)
+  private func hasChapters(_ title: LocalStore.LocalTitle) -> Bool {
+    !title.chapterEntries.isEmpty || !title.pendingChapters.isEmpty
+  }
+
+  private func hasVolumes(_ title: LocalStore.LocalTitle) -> Bool {
+    !title.volumeEntries.isEmpty || !title.pendingVolumes.isEmpty
+  }
+
+  @ViewBuilder private func readButton(_ title: LocalStore.LocalTitle) -> some View {
+    let list = rows(title)
+    if let next = list.first(where: { !$0.isRead }) ?? list.last {
+      ReadButton(label: list.contains { $0.readPages > 0 || $0.isRead } ? "Continue reading" : "Read") {
+        reading = next
       }
     }
   }
@@ -339,7 +359,6 @@ struct LocalTitleView: View {
     if !vols.isEmpty {
       parts.append("\(vols.count { $0.isRead })/\(vols.count) vols")
     }
-    parts.append("\(humanBytes(title.size)) on device")
     return parts.joined(separator: " · ")
   }
 

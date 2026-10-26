@@ -1,11 +1,11 @@
-// dropdowns: close any open <details.dropdown> on outside click or action
+// dropdowns: close any open <details.dropdown> on outside click or action,
+// except those marked data-keep-open (multi-action popovers like the tag filter).
 document.addEventListener("click", function (e) {
   var inDrop = e.target.closest("details.dropdown");
+  var keepOpen = e.target.closest("[data-keep-open]");
+  var action = e.target.closest(".menu a, .menu button, .dropdown-content button");
   document.querySelectorAll("details.dropdown[open]").forEach(function (d) {
-    if (
-      d !== inDrop ||
-      e.target.closest(".menu a, .menu button, .dropdown-content button")
-    ) {
+    if (d !== inDrop || (action && !keepOpen)) {
       d.removeAttribute("open");
     }
   });
@@ -178,19 +178,237 @@ document.addEventListener("click", function (e) {
 });
 document.body.addEventListener("htmx:afterSwap", kotatsuSync);
 
-// Tag picker: the filter input hides non-matching checkbox rows.
+// Tag picker: the filter input hides non-matching checkbox rows or chips.
 document.addEventListener("input", function (e) {
   var filter = e.target.closest("[data-tag-filter]");
   if (!filter) return;
-  var list = filter.parentElement.querySelector("[data-tag-list]");
-  if (!list) return;
+  var scope = filter.closest(".dropdown-content") || filter.parentElement;
+  if (!scope) return;
   var q = filter.value.trim().toLowerCase();
-  list.querySelectorAll("label").forEach(function (row) {
-    row.hidden = q !== "" && row.textContent.toLowerCase().indexOf(q) === -1;
+  scope.querySelectorAll("label, [data-tag-chip], [data-filter-row]").forEach(function (row) {
+    var el = row.matches("[data-tag-chip]") ? row.parentElement : row;
+    el.hidden = q !== "" && row.textContent.toLowerCase().indexOf(q) === -1;
   });
-  var divider = list.querySelector("[data-tag-divider]");
+  var divider = scope.querySelector("[data-tag-divider]");
   if (divider) divider.hidden = q !== "";
+  // tag filter: a matching category header reveals its whole group; then hide
+  // groups with no visible chips and show the empty state when nothing matches.
+  if (filter.closest("[data-tagfilter]")) {
+    var anyVisible = false;
+    scope.querySelectorAll("[data-tag-list]").forEach(function (group) {
+      var header = group.querySelector("span");
+      if (q !== "" && header && header.textContent.toLowerCase().indexOf(q) !== -1) {
+        group.querySelectorAll("li").forEach(function (li) {
+          li.hidden = false;
+        });
+      }
+      var hasVisible = !!group.querySelector("li:not([hidden])");
+      group.hidden = !hasVisible;
+      if (hasVisible) anyVisible = true;
+    });
+    var empty = scope.querySelector("[data-tagfilter-empty]");
+    if (empty) empty.hidden = anyVisible;
+  }
 });
+
+// Tag filter: tri-state chips cycle neutral -> include -> exclude -> neutral.
+var TAG_CHIP_BASE = "cursor-pointer rounded-md border px-2 py-0.5 text-xs transition-colors";
+var TAG_CHIP_CLASS = {
+  include: "border-solid border-success text-success bg-success/10",
+  exclude: "border-solid border-error text-error bg-error/10",
+  "": "border-solid border-line text-base-content",
+};
+function tagFilterApply(root) {
+  var hidden = root.querySelector("[data-tagfilter-hidden]");
+  hidden.innerHTML = "";
+  var inc = 0;
+  var exc = 0;
+  root.querySelectorAll("[data-tag-chip]").forEach(function (chip) {
+    var state = chip.dataset.state;
+    chip.className = TAG_CHIP_BASE + " " + TAG_CHIP_CLASS[state];
+    if (state !== "include" && state !== "exclude") return;
+    var input = document.createElement("input");
+    input.type = "hidden";
+    input.name = state === "include" ? "include_tags" : "exclude_tags";
+    input.value = chip.dataset.tagName;
+    hidden.appendChild(input);
+    if (state === "include") inc++;
+    else exc++;
+  });
+  var summary = root.querySelector("[data-tagfilter-summary]");
+  if (summary) {
+    var parts = [];
+    if (inc) parts.push(inc + " included");
+    if (exc) parts.push(exc + " excluded");
+    summary.textContent = parts.length ? parts.join(" · ") : summary.dataset.emptyLabel;
+  }
+  var trigger = root.querySelector("[data-tagfilter-trigger]");
+  if (trigger) {
+    trigger.value = String(Number(trigger.value || "0") + 1);
+    trigger.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}
+document.addEventListener("click", function (e) {
+  var chip = e.target.closest("[data-tag-chip]");
+  if (chip) {
+    e.preventDefault();
+    chip.dataset.state =
+      chip.dataset.state === "include"
+        ? "exclude"
+        : chip.dataset.state === "exclude"
+          ? ""
+          : "include";
+    tagFilterApply(chip.closest("[data-tagfilter]"));
+    return;
+  }
+  var reset = e.target.closest("[data-tagfilter-reset]");
+  if (reset) {
+    e.preventDefault();
+    var root = reset.closest("[data-tagfilter]");
+    root.querySelectorAll("[data-tag-chip]").forEach(function (c) {
+      c.dataset.state = "";
+    });
+    tagFilterApply(root);
+  }
+});
+
+// Reparent instead of duplicating controls, preserving selections and form submission.
+var desktopFilters = window.matchMedia("(min-width: 640px)");
+function positionFilterControls() {
+  document.querySelectorAll(".filter-form").forEach(function (form) {
+    var controls = form.querySelector(".filter-display-controls");
+    var target = form.querySelector(desktopFilters.matches
+      ? "[data-filter-desktop-controls]"
+      : "[data-filter-mobile-controls]");
+    if (controls && target && controls.parentElement !== target) target.appendChild(controls);
+  });
+}
+desktopFilters.addEventListener("change", positionFilterControls);
+document.body.addEventListener("htmx:afterSwap", positionFilterControls);
+positionFilterControls();
+
+function filterChips(form) {
+  var chips = [];
+  form.querySelectorAll("select[data-default]").forEach(function (sel) {
+    if (sel.value === sel.dataset.default) return;
+    var legend = sel.closest(".fieldset");
+    legend = legend ? legend.querySelector(".fieldset-legend").textContent : sel.name;
+    chips.push({ k: "sel", name: sel.name, text: legend + ": " + sel.selectedOptions[0].textContent, cls: "badge-ghost" });
+  });
+  form.querySelectorAll("input[data-filter-toggle]:checked").forEach(function (t) {
+    chips.push({ k: "tog", name: t.name, text: t.closest("label").textContent.trim(), cls: "badge-ghost" });
+  });
+  form.querySelectorAll("[data-tag-list] input[name='source']:checked").forEach(function (c) {
+    chips.push({ k: "src", val: c.value, text: "Source: " + c.closest("label").textContent.trim(), cls: "badge-ghost" });
+  });
+  form.querySelectorAll("[data-tagfilter-hidden] input[name='include_tags']").forEach(function (i) {
+    chips.push({ k: "inc", val: i.value, text: i.value, cls: "badge-soft badge-success" });
+  });
+  form.querySelectorAll("[data-tagfilter-hidden] input[name='exclude_tags']").forEach(function (i) {
+    chips.push({ k: "exc", val: i.value, text: i.value, cls: "badge-soft badge-error" });
+  });
+  return chips;
+}
+function updateFilterCounts() {
+  document.querySelectorAll("[data-filter-count]").forEach(function (span) {
+    var form = span.closest("form");
+    if (!form) return;
+    var chips = filterChips(form);
+    span.textContent = chips.length ? "Filters · " + chips.length : "Filters";
+    var strip = form.nextElementSibling;
+    if (!strip || !strip.hasAttribute("data-active-filters")) return;
+    strip.innerHTML = "";
+    strip.classList.toggle("hidden", chips.length === 0);
+    strip.classList.toggle("flex", chips.length > 0);
+    chips.forEach(function (c) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "badge badge-sm cursor-pointer gap-1 " + c.cls;
+      b.dataset.k = c.k;
+      if (c.name) b.dataset.name = c.name;
+      if (c.val !== undefined) b.dataset.val = c.val;
+      b.append(c.text);
+      var x = document.createElement("span");
+      x.className = "opacity-60";
+      x.textContent = "\u2715";
+      b.appendChild(x);
+      strip.appendChild(b);
+    });
+    var clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "btn btn-ghost btn-xs";
+    clear.dataset.k = "clear";
+    clear.textContent = "Clear all";
+    strip.appendChild(clear);
+  });
+}
+document.addEventListener("change", function (e) {
+  if (e.target.closest("form")) updateFilterCounts();
+});
+document.addEventListener("click", function (e) {
+  var strip = e.target.closest("[data-active-filters]");
+  if (!strip) return;
+  var chip = e.target.closest("[data-k]");
+  if (!chip) return;
+  var form = strip.previousElementSibling;
+  var fire = function (el) {
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  var tagOff = function (name) {
+    var tc = form.querySelector("[data-tag-chip][data-tag-name='" + CSS.escape(name) + "']");
+    if (tc) {
+      tc.dataset.state = "";
+      tagFilterApply(tc.closest("[data-tagfilter]"));
+    }
+  };
+  switch (chip.dataset.k) {
+    case "sel": {
+      var sel = form.querySelector("select[name='" + chip.dataset.name + "']");
+      sel.value = sel.dataset.default;
+      fire(sel);
+      break;
+    }
+    case "tog": {
+      var t = form.querySelector("input[data-filter-toggle][name='" + chip.dataset.name + "']");
+      t.checked = false;
+      fire(t);
+      break;
+    }
+    case "src": {
+      var c = form.querySelector("input[name='source'][value='" + CSS.escape(chip.dataset.val) + "']");
+      c.checked = false;
+      fire(c);
+      break;
+    }
+    case "inc":
+    case "exc":
+      tagOff(chip.dataset.val);
+      break;
+    case "clear": {
+      form.querySelectorAll("select[data-default]").forEach(function (sel) {
+        sel.value = sel.dataset.default;
+      });
+      form.querySelectorAll("input[data-filter-toggle]:checked, [data-tag-list] input[name='source']:checked").forEach(function (c) {
+        c.checked = false;
+      });
+      var summary = form.querySelector("[data-tag-count]");
+      if (summary) summary.textContent = summary.dataset.emptyLabel || "None selected";
+      var tf = form.querySelector("[data-tagfilter]");
+      if (tf && tf.querySelector("[data-tag-chip][data-state='include'], [data-tag-chip][data-state='exclude']")) {
+        tf.querySelectorAll("[data-tag-chip]").forEach(function (c) {
+          c.dataset.state = "";
+        });
+        tagFilterApply(tf);
+      } else {
+        fire(form.querySelector("select[data-default]"));
+      }
+      break;
+    }
+  }
+  updateFilterCounts();
+});
+updateFilterCounts();
+document.body.addEventListener("htmx:oobAfterSwap", updateFilterCounts);
 
 // Tag picker: keep the "N selected" summary in sync with the checkboxes.
 document.addEventListener("change", function (e) {
@@ -273,35 +491,34 @@ document.body.addEventListener("htmx:afterRequest", function (e) {
   history.replaceState(null, "", qs ? "/search?" + qs : "/search");
 });
 
-// Sidebar screen reordering: drag rows, persist the new order on drop.
+// Drag-to-reorder lists: drag [data-reorder-id] rows, post the new order to the list's data-reorder URL on drop.
 (function () {
-  var list = document.querySelector("[data-screen-list]");
-  if (!list) return;
   var dragging = null;
-  list.addEventListener("dragstart", function (e) {
-    dragging = e.target.closest("[data-screen-id]");
+  document.addEventListener("dragstart", function (e) {
+    dragging = e.target.closest("[data-reorder] > [data-reorder-id]");
     if (dragging) dragging.classList.add("dragging");
   });
-  list.addEventListener("dragend", function () {
+  document.addEventListener("dragend", function () {
     if (dragging) dragging.classList.remove("dragging");
     dragging = null;
   });
-  list.addEventListener("dragover", function (e) {
+  document.addEventListener("dragover", function (e) {
+    var over = dragging && e.target.closest("[data-reorder-id]");
+    if (!over || over.parentElement !== dragging.parentElement) return;
+    e.preventDefault();
+    if (over === dragging) return;
+    var rect = over.getBoundingClientRect();
+    over.parentElement.insertBefore(dragging, e.clientY > rect.top + rect.height / 2 ? over.nextSibling : over);
+  });
+  document.addEventListener("drop", function (e) {
     if (!dragging) return;
     e.preventDefault();
-    var over = e.target.closest("[data-screen-id]");
-    if (!over || over === dragging) return;
-    var rect = over.getBoundingClientRect();
-    var after = e.clientY > rect.top + rect.height / 2;
-    list.insertBefore(dragging, after ? over.nextSibling : over);
-  });
-  list.addEventListener("drop", function (e) {
-    e.preventDefault();
+    var list = dragging.parentElement;
     var params = new URLSearchParams();
-    list.querySelectorAll("[data-screen-id]").forEach(function (row) {
-      params.append("order", row.dataset.screenId);
+    list.querySelectorAll(":scope > [data-reorder-id]").forEach(function (row) {
+      params.append("order", row.dataset.reorderId);
     });
-    fetch("/ui/screens/reorder", {
+    fetch(list.dataset.reorder, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: params.toString(),
@@ -872,3 +1089,25 @@ document.body.addEventListener("htmx:afterRequest", function (e) {
   applyView();
   appendNext();
 })();
+
+function showLoading(el) {
+  el.innerHTML = '<p class="flex items-center gap-2 py-2 text-sm text-base-content/60"><span class="loading loading-spinner loading-xs"></span>Loading...</p>';
+}
+
+function openPicker(key) {
+  showLoading(document.getElementById("picker-results-" + key));
+  var d = document.getElementById("picker-" + key);
+  if (!d.open) d.showModal();
+}
+
+function openLoading(id) {
+  var d = document.getElementById(id);
+  showLoading(d.querySelector("[data-loading]"));
+  d.showModal();
+}
+
+function trackerConnectPick(select) {
+  select.closest("dialog").querySelectorAll("[data-connect]").forEach(function (el) {
+    el.hidden = el.dataset.connect !== select.value;
+  });
+}

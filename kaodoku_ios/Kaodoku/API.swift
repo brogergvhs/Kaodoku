@@ -70,7 +70,7 @@ struct APIClient {
     }
   }
 
-  /// download streams a large CBZ to a temp file, reporting 0…1 progress
+  /// download streams a large CBZ to a temp file, reporting 0...1 progress
   /// against the response length (expectedBytes covers a stripped length).
   func download(_ path: String, expectedBytes: Int64 = 0,
                 progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL
@@ -111,6 +111,10 @@ struct APIClient {
 
   func post<T: Decodable>(_ path: String, body: (any Encodable)? = nil) async throws -> T {
     try await Self.decoder.decode(T.self, from: data("POST", path, body: body))
+  }
+
+  func put<T: Decodable>(_ path: String, body: (any Encodable)? = nil) async throws -> T {
+    try await Self.decoder.decode(T.self, from: data("PUT", path, body: body))
   }
 }
 

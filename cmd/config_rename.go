@@ -19,7 +19,7 @@ var configRenameCmd = &cobra.Command{
 		if err := config.RenameConfig(oldLabel, newLabel); err != nil {
 			return err
 		}
-		fmt.Printf("Renamed config %q → %q\n", oldLabel, newLabel)
+		fmt.Printf("Renamed config %q -> %q\n", oldLabel, newLabel)
 
 		return nil
 	},

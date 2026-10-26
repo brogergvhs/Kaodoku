@@ -370,11 +370,6 @@ struct LibraryFiltersSheet: View {
   @Binding var includeTags: Set<String>
   @Binding var excludeTags: Set<String>
   @State private var options: [TagOption] = []
-  @State private var filter = ""
-
-  private var shown: [TagOption] {
-    filter.isEmpty ? options : options.filter { $0.name.localizedCaseInsensitiveContains(filter) }
-  }
 
   var body: some View {
     NavigationStack {
@@ -421,19 +416,7 @@ struct LibraryFiltersSheet: View {
               Text("Without volumes").tag("no-volumes")
             }
           }
-          Section("Genres & tags") {
-            TextField("Filter…", text: $filter)
-            ForEach(shown) { option in
-              HStack {
-                Text(option.name)
-                if option.kind == "genre" {
-                  Text("genre").font(.caption2).foregroundStyle(.secondary)
-                }
-                Spacer()
-                TagCycle(name: option.name, include: $includeTags, exclude: $excludeTags)
-              }
-            }
-          }
+          TagFilterSection(options: options, include: $includeTags, exclude: $excludeTags)
         }
         .nordRows()
       }

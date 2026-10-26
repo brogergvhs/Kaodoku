@@ -1,9 +1,9 @@
-{{define "cellCover"}}<img id="row-cover-{{.ID}}" hx-preserve class="h-14 w-10 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy">{{end}}
+{{define "cellCover"}}<img id="row-cover-{{.ID}}" hx-preserve class="h-14 w-10 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
 
 {{define "addToCollection"}}
 <div class="grid gap-4">
   <form class="flex gap-2" hx-post="/ui/library/{{.TitleID}}/collections/add" hx-target="#toast" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful){add_to_collection_modal.close()}">
-    <input class="input input-sm w-full" name="name" required placeholder="New collection name…">
+    <input class="input input-sm w-full" name="name" required placeholder="New collection name...">
     <button class="btn btn-sm btn-primary shrink-0">Create &amp; add</button>
   </form>
   {{if .Custom}}
@@ -41,7 +41,7 @@
   {{if .Members}}
   {{range .Members}}
   <div class="flex items-center gap-2 rounded-lg p-1 hover:bg-base-200">
-    <img class="h-10 w-7 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy">
+    <img class="h-10 w-7 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">
     <span class="min-w-0 flex-1 truncate text-sm">{{.DisplayTitle}}</span>
     {{if $.SmartKey}}
     <button class="btn btn-xs btn-ghost text-error" hx-post="/ui/collections/smart/{{pathEscape $.SmartKey}}/remove" hx-vals='{"title":"{{.ID}}"}' hx-target="#collection-manage" hx-swap="outerHTML">Unpin</button>
@@ -75,10 +75,10 @@
   {{if .Description}}<p class="text-sm text-base-content/70 leading-relaxed whitespace-pre-line">{{desc .Description}}</p>{{end}}
   <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-base-content/50">
     {{if .Authors}}<span>By {{range $i, $a := .Authors}}{{if $i}}, {{end}}{{$a}}{{end}}</span>{{end}}
-    {{if .Chapters}}<span>{{.Chapters}} chapters (AniList)</span>{{end}}
-    {{if .Volumes}}<span>{{.Volumes}} volumes (AniList)</span>{{end}}
+    {{if .Chapters}}<span>{{.Chapters}} chapters (catalog)</span>{{end}}
+    {{if .Volumes}}<span>{{.Volumes}} volumes (catalog)</span>{{end}}
   </div>
-  {{if .Genres}}<div class="flex flex-wrap gap-1.5">{{range .Genres}}<span class="badge badge-outline badge-sm">{{.}}</span>{{end}}</div>{{end}}
+  {{if .Genres}}<div class="flex flex-wrap gap-1.5">{{range .Genres}}<a href="/library?include_tags={{. | urlquery}}" class="badge badge-outline badge-sm transition-colors hover:border-primary hover:text-primary">{{.}}</a>{{end}}</div>{{end}}
 </div>
 {{end}}
 
@@ -128,7 +128,7 @@
 <div id="kotatsu-browse">
 {{if .Error}}<p class="text-sm text-error">{{.Error}}</p>
 {{else}}
-<div class="max-h-96 overflow-y-auto divide-y divide-line/25">
+<div class="max-h-96 overflow-y-auto -mr-5 pr-5 divide-y divide-line/25">
   {{range .Rows}}{{template "kotatsuRow" .}}{{else}}<p class="py-3 text-sm text-base-content/60">No parser matches these filters.</p>{{end}}
 </div>
 <div class="flex items-center justify-between gap-2 mt-3">
@@ -156,7 +156,7 @@
     </div>
     <form id="kotatsu-filters" class="mt-3 grid gap-2" hx-get="/ui/sources/kotatsu/list" hx-target="#kotatsu-browse" hx-swap="outerHTML"
       hx-trigger="submit, change target:select, keyup changed delay:300ms from:input[name='q']">
-      <input class="input input-sm w-full" name="q" value="{{.Filter.Q}}" placeholder="Search by name, id, or domain…">
+      <input class="input input-sm w-full" name="q" value="{{.Filter.Q}}" placeholder="Search by name, id, or domain...">
       <div class="grid grid-cols-4 gap-2">
         <select class="select select-sm" name="lang">
           <option value="">Any language</option>
@@ -208,7 +208,7 @@
     <span class="w-16 shrink-0">Volume</span>
     <span class="w-6 shrink-0"></span>
   </div>
-  <div class="max-h-96 overflow-y-auto grid gap-1 pr-1">
+  <div class="max-h-96 overflow-y-auto -mr-5 pr-5 grid gap-1">
     {{range .Rows}}
     <div class="grid gap-0.5" data-bulk-row>
       <div class="flex items-center gap-1">
@@ -317,9 +317,9 @@
 <div id="chapters-table"
   hx-get="{{.PageURL .Page}}" hx-swap="outerHTML" hx-sync="this:drop"
   hx-trigger="{{if .Poll}}load delay:4s, {{end}}title-job-started from:body">
-  <div class="divide-y divide-line/25 rounded-xl overflow-hidden">
+  <div class="divide-y divide-line/25 rounded-xl">
     {{range .Chapters}}
-    <div class="flex items-center gap-3 p-4 {{.Tint}}">
+    <div class="flex items-center gap-3 p-4 first:rounded-t-xl last:rounded-b-xl {{.Tint}}">
       <div class="min-w-0 flex-1">
         {{template "chapterName" .ChapterStatus}}
         <div class="mt-0.5 flex items-center gap-2 text-xs text-base-content/50 sm:hidden">
@@ -392,13 +392,7 @@
     <span><span class="text-sm font-medium">Also delete downloaded files from disk</span>
     <span class="block text-xs text-base-content/50">Leave unchecked to keep the folder — it will show up on the Import page for re-importing later.</span></span>
   </label>
-  {{if .AniListConnected}}
-  <label class="label cursor-pointer justify-start gap-2">
-    <input type="checkbox" class="checkbox checkbox-sm" name="delete_anilist">
-    <span><span class="text-sm font-medium">Also delete from AniList</span>
-    <span class="block text-xs text-base-content/50">Removes this manga from your AniList list entirely. Left unchecked, it is set to Dropped instead.</span></span>
-  </label>
-  {{end}}
+  {{if .TrackersConnected}}{{template "removeRemoteOption"}}{{end}}
   <div class="modal-action">
     <button type="button" class="btn btn-ghost" onclick="lib_title_dialog.close()">Cancel</button>
     <button class="btn btn-error">Remove title</button>
@@ -424,7 +418,7 @@
 <div class="relative min-w-0">
   {{if .CanManage}}<input form="library-bulk" type="checkbox" class="checkbox checkbox-sm absolute left-1 top-1 z-10 bg-base-100" name="title_id" value="{{.Title.ID}}" aria-label="Select {{.Title.DisplayTitle}}" data-bulk-title>{{end}}
   <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .Title.IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
-    <a href="/library/{{.Title.ID}}{{if .Screen}}?screen={{.Screen}}{{end}}"><img id="card-cover-{{.Title.ID}}" hx-preserve class="h-full w-full object-cover" src="{{.Title.CoverImage}}" alt="" loading="lazy"></a>
+    <a href="/library/{{.Title.ID}}{{if .Screen}}?screen={{.Screen}}{{end}}"><img id="card-cover-{{.Title.ID}}" hx-preserve class="h-full w-full object-cover" src="{{img .Title.CoverImage}}" alt="" loading="lazy"></a>
   </div>
   <div class="absolute right-1 top-1 z-10 flex items-center rounded-lg bg-base-300/70">{{template "favToggle" .Title}}{{if .CanManage}}{{template "monitorToggle" .Title}}{{template "libraryTitleActions" .}}{{end}}</div>
   <a href="/library/{{.Title.ID}}{{if .Screen}}?screen={{.Screen}}{{end}}" class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{.Title.DisplayTitle}}</a>
@@ -496,7 +490,7 @@
     {{range .Fulls}}
     <div class="card bg-base-100 p-4{{if .Title.IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
       <div class="flex gap-5 max-sm:flex-col">
-        <figure class="shrink-0 max-sm:self-center"><a href="/library/{{.Title.ID}}{{if $.Screen}}?screen={{$.Screen}}{{end}}"><img id="full-cover-{{.Title.ID}}" hx-preserve class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.Title.CoverImage}}" alt="" loading="lazy"></a></figure>
+        <figure class="shrink-0 max-sm:self-center"><a href="/library/{{.Title.ID}}{{if $.Screen}}?screen={{$.Screen}}{{end}}"><img id="full-cover-{{.Title.ID}}" hx-preserve class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{img .Title.CoverImage}}" alt="" loading="lazy"></a></figure>
         <div class="flex min-w-0 flex-1 flex-col gap-2">
           <div class="flex items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-2">
@@ -527,11 +521,19 @@
 </div>
 {{end}}
 
-{{define "anilistSuggestions"}}
+{{define "removeRemoteOption"}}
+<label class="label cursor-pointer justify-start gap-2">
+  <input type="checkbox" class="checkbox checkbox-sm" name="delete_remote">
+  <span><span class="text-sm font-medium">Also delete from your trackers</span>
+  <span class="block text-xs text-base-content/50">Removes this manga from the trackers it has progressive sync on. Left unchecked, it is set to Dropped there instead.</span></span>
+</label>
+{{end}}
+
+{{define "trackerSuggestions"}}
 {{if .Items}}
 <div class="collapse collapse-arrow bg-base-100 mt-4 mb-4">
   <input type="checkbox">
-  <div class="collapse-title font-semibold">From your AniList <span class="badge badge-sm badge-ghost">{{len .Items}} not in library</span></div>
+  <div class="collapse-title font-semibold">From your lists <span class="badge badge-sm badge-ghost">{{len .Items}} not in library</span></div>
   <div class="collapse-content">{{template "mangaResults" .}}</div>
 </div>
 {{end}}
@@ -548,8 +550,8 @@
 {{if .Description}}<p class="line-clamp-3 text-sm leading-relaxed text-base-content/70">{{desc .Description}}</p>{{end}}
 {{if or .Genres .Tags}}
 <div class="flex flex-wrap gap-1.5">
-  {{range .Genres}}<span class="badge badge-outline badge-sm">{{.}}</span>{{end}}
-  {{range .Tags}}<span class="badge badge-ghost badge-sm">{{.}}</span>{{end}}
+  {{range .Genres}}<a href="/library?include_tags={{. | urlquery}}" class="badge badge-outline badge-sm transition-colors hover:border-primary hover:text-primary">{{.}}</a>{{end}}
+  {{range .Tags}}<a href="/library?include_tags={{. | urlquery}}" class="badge badge-ghost badge-sm transition-colors hover:text-primary">{{.}}</a>{{end}}
 </div>
 {{end}}
 {{end}}
@@ -559,10 +561,14 @@
 <form class="py-2 text-center text-sm" hx-post="/ui/search" hx-target="this" hx-swap="outerHTML" hx-indicator="#search-spin">
   {{template "searchResultsState" .}}
   <input type="hidden" name="page" value="{{.RetryPage}}">
+  <input type="hidden" name="skip" value="{{.Skip}}">
   <span class="text-error">Search failed.</span>
   <button type="submit" class="btn btn-xs btn-outline">Retry</button>
 </form>
 {{else}}
+{{with .FetchFrom}}<div class="mt-4 -mb-2 flex flex-wrap items-center gap-2 text-sm text-base-content/60">From MangaBaka and what {{.}} sent before.
+  <button type="button" class="btn btn-xs btn-outline" hx-post="/ui/search" hx-include="#search-form" hx-vals='{"fetch": "1"}' hx-target="#search-results" hx-indicator="#search-spin">Fetch from {{.}}</button>
+</div>{{end}}
 {{if .Results.Items}}{{template "mangaResults" .Results}}
 {{else if and (not .Append) (not .NextPage)}}{{template "mangaResults" .Results}}
 {{else if not .Append}}<p class="py-2 text-sm text-base-content/60">No matches on the first pages — “Show more” keeps scanning.</p>
@@ -571,6 +577,7 @@
 <form class="py-2 text-center" hx-post="/ui/search" hx-target="this" hx-swap="outerHTML" hx-indicator="#search-spin">
   {{template "searchResultsState" .}}
   <input type="hidden" name="page" value="{{.NextPage}}">
+  <input type="hidden" name="skip" value="{{.Skip}}">
   <button type="submit" class="btn btn-sm btn-outline">Show more</button>
 </form>
 {{end}}
@@ -586,6 +593,29 @@
 {{range .Controls.ExcludeTags}}<input type="hidden" name="exclude_tags" value="{{.}}">{{end}}
 {{end}}
 
+{{define "relatedSections"}}
+<div id="related-sections">{{range .}}{{template "relatedSection" .}}{{end}}</div>
+{{end}}
+
+{{define "relatedSection"}}
+<div id="related-{{.Kind}}">{{if or .Results.Items .Fetch}}
+<div class="collapse collapse-arrow bg-base-100 mt-4">
+  <input type="checkbox"{{if .Open}} checked{{end}}>
+  <div class="collapse-title font-semibold">{{.Heading}} <span class="badge badge-sm badge-ghost ml-1">{{len .Results.Items}}</span></div>
+  <div class="collapse-content">
+    {{with .Fetch}}<form class="mb-3 flex flex-wrap items-center gap-2 text-sm" hx-post="/ui/library/{{$.TitleID}}/related/fetch" hx-vals='{"kind":"{{$.Kind}}"}' hx-target="#related-{{$.Kind}}" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <span class="text-base-content/60">Fetch from</span>
+      {{if eq (len .) 1}}{{with index . 0}}<input type="hidden" name="provider" value="{{.Name}}"><button class="btn btn-xs btn-outline">{{.Label}}</button>{{end}}
+      {{else}}<select class="select select-xs w-auto" name="provider" aria-label="Tracker">{{range .}}<option value="{{.Name}}">{{.Label}}</option>{{end}}</select><button class="btn btn-xs btn-outline">Fetch</button>{{end}}
+    </form>{{end}}
+    {{template "mangaResults" .Results}}
+  </div>
+</div>
+{{end}}</div>
+{{end}}
+
+{{define "mangaOrigin"}}{{if .APIs}}<span class="mr-1 inline-flex align-middle [&>svg]:size-3" role="img" title="{{.Note}}" aria-label="{{.Note}}">{{template "iconCloud"}}</span>{{end}}{{end}}
+
 {{define "mangaResults"}}
 {{if .Heading}}<h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-base-content/60">{{.Heading}}</h2>{{end}}
 {{if not .Items}}
@@ -596,14 +626,14 @@
     <tbody>
       {{$canAdd := .CanAdd}}{{range .Items}}
       <tr {{if .IsAdult}}class="outline outline-1 -outline-offset-1 outline-error"{{end}}>
-        <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}/manga/{{.ProviderID}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a></td>
+        <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a></td>
         <td class="min-w-0">
-          <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}/manga/{{.ProviderID}}{{end}}">{{mangaTitle .Manga}}</a>
-          <div class="text-xs text-base-content/50">{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
+          <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}">{{mangaTitle .Manga}}</a>
+          <div class="text-xs text-base-content/50">{{template "mangaOrigin" .Origin}}{{if .Origin.Local}}Local DB · {{end}}{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
         </td>
         <td class="whitespace-nowrap text-right">
           {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
-          {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
+          {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
         </td>
       </tr>
       {{end}}
@@ -616,15 +646,15 @@
   <div class="card bg-base-100 p-4{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
     <div class="flex gap-5 max-sm:flex-col">
       <figure class="shrink-0 max-sm:self-center">
-        {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a>
-        {{else}}<a href="/manga/{{.ProviderID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
+        {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>
+        {{else}}<a href="{{mangaURL .Manga}}"><img class="h-52 w-36 rounded-lg object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>{{end}}
       </figure>
       <div class="flex min-w-0 flex-1 flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}</h3>
+          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}{{if $.ShowProvider}} <span class="badge badge-ghost badge-sm align-middle">{{providerLabel .Provider}}</span>{{end}}{{if .Origin.Local}} <span class="badge badge-ghost badge-sm align-middle">Local DB</span>{{end}}{{if .Origin.APIs}} <span class="text-base-content/50 align-middle">{{template "mangaOrigin" .Origin}}</span>{{end}}</h3>
           <div class="shrink-0">
             {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
-            {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
+            {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
           </div>
         </div>
         {{template "mangaSummary" .Manga}}
@@ -638,16 +668,20 @@
   {{$canAdd := .CanAdd}}{{range .Items}}
   <div class="flex min-w-0 flex-col">
     <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
-      {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>
-      {{else}}<a href="/manga/{{.ProviderID}}"><img class="h-full w-full object-cover" src="{{.CoverImage}}" alt="" loading="lazy"></a>{{end}}
+      {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>
+      {{else}}<a href="{{mangaURL .Manga}}"><img class="h-full w-full object-cover" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>{{end}}
+      {{if or $.ShowProvider .Origin.Local}}<div class="pointer-events-none absolute left-2 top-2 flex flex-wrap gap-1">{{if $.ShowProvider}}<span class="badge badge-sm bg-base-100">{{providerLabel .Provider}}</span>{{end}}{{if .Origin.Local}}<span class="badge badge-sm bg-base-100">Local DB</span>{{end}}</div>{{end}}
+      {{if $.ShowRelations}}<div class="pointer-events-none absolute inset-x-2 bottom-2 flex">
+        <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
+      </div>{{end}}
     </div>
     <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{mangaTitle .Manga}}</div>
     <div class="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-base-content/50">
       <span class="truncate">{{.Format}}{{if .Chapters}} · {{.Chapters}} ch{{end}}</span>
-      <span class="shrink-0">{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
+      <span class="shrink-0">{{template "mangaOrigin" .Origin}}{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
     </div>
     {{if .TitleID}}<a class="btn btn-xs btn-success btn-soft mt-auto w-full pt-0.5" href="/library/{{.TitleID}}">✓ In library</a>
-    {{else if $canAdd}}<button class="btn btn-xs btn-outline mt-auto w-full" hx-post="/ui/library/add" hx-vals='{"provider_id":"{{.ProviderID}}","card":"1"}' hx-target="this" hx-swap="outerHTML">Add</button>
+    {{else if $canAdd}}<button class="btn btn-xs btn-outline mt-auto w-full" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}","card":"1"}' hx-target="this" hx-swap="outerHTML">Add</button>
     {{else}}<div class="mt-auto"></div>{{end}}
   </div>
   {{end}}
@@ -684,7 +718,7 @@
 
 {{define "titleContent"}}
 <div id="title-content" {{if .Attaching}}hx-get="/ui/library/{{.Title.ID}}/content?tab=volumes" hx-trigger="load delay:3s" hx-swap="outerHTML" hx-sync="this:drop"{{end}}>
-  <div class="flex sm:items-center justify-between gap-2 mt-6 mb-3 max-sm:flex-col">
+  <div class="flex flex-wrap items-center justify-between gap-2 mt-6 mb-3">
     <div class="flex items-center gap-4">
       <button class="text-sm font-semibold uppercase tracking-wide {{if eq .Tab "chapters"}}text-base-content{{else}}text-base-content/40 hover:text-base-content/70{{end}}"
         hx-get="/ui/library/{{.Title.ID}}/content?tab=chapters" hx-target="#title-content" hx-swap="outerHTML">{{.ChapterCount}} Chapters</button>
@@ -693,56 +727,61 @@
         hx-get="/ui/library/{{.Title.ID}}/content?tab=volumes" hx-target="#title-content" hx-swap="outerHTML">{{.VolumeCount}} Volumes</button>
       {{end}}
     </div>
-    <div class="flex sm:items-center gap-2 max-sm:flex-col">
+    <div class="ml-auto flex items-center gap-2">
       {{if eq .Tab "volumes"}}
-      {{if .VolumeCount}}<a class="btn btn-primary max-sm:w-full" href="/reader/{{.Title.ID}}?mode=volumes">{{.VolumeReadLabel}}</a>{{end}}
-      {{else if gt .Title.CompletedCount 0}}<a class="btn btn-primary max-sm:w-full" href="/reader/{{.Title.ID}}">{{.ReadLabel}}</a>{{end}}
-      <details class="dropdown dropdown-end max-sm:w-full">
-        <summary class="btn btn-outline max-sm:w-full">Bulk mark</summary>
-        {{if eq .Tab "volumes"}}
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/volumes/range" hx-target="#title-content" hx-swap="outerHTML">
-        {{else}}
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/chapters/range" hx-target="#chapters-table" hx-swap="outerHTML">
-        {{end}}
-          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
-          <div class="join"><button class="btn btn-sm join-item grow" name="action" value="read">Mark read</button><button class="btn btn-sm btn-ghost join-item grow" name="action" value="unread">Unread</button></div>
-        </form>
+      {{if .VolumeCount}}<a class="btn btn-primary" href="/reader/{{.Title.ID}}?mode=volumes">{{.VolumeReadLabel}}</a>{{end}}
+      {{else if gt .Title.CompletedCount 0}}<a class="btn btn-primary" href="/reader/{{.Title.ID}}">{{.ReadLabel}}</a>{{end}}
+      <details class="dropdown dropdown-end">
+        <summary class="btn btn-ghost btn-square" aria-label="Bulk actions">{{template "iconDots"}}</summary>
+        <ul class="dropdown-content menu z-30 w-72 max-w-[calc(100vw-2rem)] max-h-[70dvh] overflow-y-auto rounded-lg border border-line bg-base-100 p-2">
+          <li><details class="group/bulk">
+            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-neutral sm:min-h-0 [&::-webkit-details-marker]:hidden">{{template "iconCheckCircle"}}Bulk mark<span class="ml-auto group-open/bulk:rotate-90">{{template "iconChevron"}}</span></summary>
+          {{if eq .Tab "volumes"}}
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open hx-post="/ui/library/{{.Title.ID}}/volumes/range" hx-target="#title-content" hx-swap="outerHTML">
+          {{else}}
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open hx-post="/ui/library/{{.Title.ID}}/chapters/range" hx-target="#chapters-table" hx-swap="outerHTML">
+          {{end}}
+              <div class="join"><input name="from" aria-label="From chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" aria-label="To chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
+              <div class="join"><button class="btn btn-sm join-item grow" name="action" value="read">Mark read</button><button class="btn btn-sm btn-ghost join-item grow" name="action" value="unread">Unread</button></div>
+            </form>
+          </details></li>
+          {{if ne .Tab "volumes"}}
+          <li><details class="group/bulk">
+            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-neutral sm:min-h-0 [&::-webkit-details-marker]:hidden">{{template "iconDownload"}}Bulk download<span class="ml-auto group-open/bulk:rotate-90">{{template "iconChevron"}}</span></summary>
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open method="get" action="/ui/library/{{.Title.ID}}/chapters/download" target="_blank" rel="noopener">
+              <div class="join"><input name="from" aria-label="From chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" aria-label="To chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
+              <button class="btn btn-sm">Download .zip</button>
+              <p class="text-xs text-base-content/50">Whole chapter numbers. In the installed app, downloads open in Safari.</p>
+            </form>
+          </details></li>
+          {{if .CanManage}}
+          <li><button type="button" hx-get="/ui/library/{{.Title.ID}}/chapters/bulk-rename" hx-target="#bulk-rename-body" hx-swap="innerHTML" onclick="bulk_rename_modal.showModal()">{{template "iconEdit"}}Bulk rename</button></li>
+          <li><details class="group/bulk">
+            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-neutral sm:min-h-0 [&::-webkit-details-marker]:hidden">{{template "iconRefresh"}}Reset names<span class="ml-auto group-open/bulk:rotate-90">{{template "iconChevron"}}</span></summary>
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open hx-post="/ui/library/{{.Title.ID}}/chapters/reset-names" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Reset manually renamed chapters back to their scraped names?">
+              <div class="join"><input name="from" aria-label="From chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from"><input name="to" aria-label="To chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to"></div>
+              <button class="btn btn-sm">Reset to scraped</button>
+              <p class="text-xs text-base-content/50">Leave the range empty to reset every manually renamed chapter.</p>
+            </form>
+          </details></li>
+          <li class="mt-1 border-t border-line/40 pt-1"><details class="group/bulk">
+            <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm text-error hover:bg-error/10 sm:min-h-0 [&::-webkit-details-marker]:hidden">{{template "iconTrash"}}Bulk delete<span class="ml-auto group-open/bulk:rotate-90">{{template "iconChevron"}}</span></summary>
+            <form class="grid gap-2 px-3 pt-1 pb-3" data-keep-open hx-post="/ui/library/{{.Title.ID}}/chapters/delete-range" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Remove downloaded files for chapters in this range? They will show as missing.">
+              <div class="join"><input name="from" aria-label="From chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" aria-label="To chapter or volume" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
+              <button class="btn btn-sm btn-error">Remove from disk</button>
+              <p class="text-xs text-base-content/50">Whole chapter numbers. Files are deleted; chapters become missing.</p>
+            </form>
+          </details></li>
+          {{end}}
+          {{end}}
+        </ul>
       </details>
-      {{if ne .Tab "volumes"}}
-      <details class="dropdown dropdown-end max-sm:w-full">
-        <summary class="btn btn-outline max-sm:w-full">Bulk download</summary>
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" method="get" action="/ui/library/{{.Title.ID}}/chapters/download" target="_blank" rel="noopener">
-          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
-          <button class="btn btn-sm">Download .zip</button>
-          <p class="text-xs text-base-content/50">Whole chapter numbers. In the installed app, downloads open in Safari.</p>
-        </form>
-      </details>
-      {{if .CanManage}}
-      <details class="dropdown dropdown-end max-sm:w-full">
-        <summary class="btn btn-outline max-sm:w-full">Bulk delete</summary>
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/chapters/delete-range" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Remove downloaded files for chapters in this range? They will show as missing.">
-          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from" required><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to" required></div>
-          <button class="btn btn-sm btn-error">Remove from disk</button>
-          <p class="text-xs text-base-content/50">Whole chapter numbers. Files are deleted; chapters become missing.</p>
-        </form>
-      </details>
-      <button class="btn btn-outline max-sm:w-full" hx-get="/ui/library/{{.Title.ID}}/chapters/bulk-rename" hx-target="#bulk-rename-body" hx-swap="innerHTML" onclick="bulk_rename_modal.showModal()">Bulk rename</button>
-      <details class="dropdown dropdown-end max-sm:w-full">
-        <summary class="btn btn-outline max-sm:w-full">Reset names</summary>
-        <form class="dropdown-content card card-sm bg-base-200 z-20 mt-1 w-64 shadow-lg p-3 grid gap-2" hx-post="/ui/library/{{.Title.ID}}/chapters/reset-names" hx-target="#chapters-table" hx-swap="outerHTML" hx-confirm="Reset manually renamed chapters back to their scraped names?">
-          <div class="join"><input name="from" class="input input-sm join-item w-full" inputmode="numeric" placeholder="from"><input name="to" class="input input-sm join-item w-full" inputmode="numeric" placeholder="to"></div>
-          <button class="btn btn-sm">Reset to scraped</button>
-          <p class="text-xs text-base-content/50">Leave the range empty to reset every manually renamed chapter.</p>
-        </form>
-      </details>
-      {{end}}
-      {{end}}
     </div>
   </div>
 
   {{if eq .Tab "volumes"}}
   {{if .Attaching}}
-  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Attaching volumes…</div>
+  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Attaching volumes...</div>
   {{end}}
   {{if .Volumes}}
   <div class="divide-y divide-line/25 rounded-xl bg-base-100 px-4">
@@ -780,7 +819,7 @@
   <form class="mb-2 flex items-center gap-2"
     hx-get="/ui/library/{{.Title.ID}}/chapters" hx-target="#chapters-table" hx-swap="outerHTML"
     hx-trigger="change, keyup changed delay:300ms from:input[name='q']">
-    <input class="input input-sm w-full" name="q" placeholder="Filter chapters…">
+    <input class="input input-sm w-full" name="q" placeholder="Filter chapters...">
     <select class="select select-sm shrink-0" name="order" aria-label="Sort chapters">
       <option value="number-asc">Oldest first</option>
       <option value="number-desc">Newest first</option>
@@ -796,18 +835,480 @@
   <dialog id="chapter_rename_modal" class="modal">
     <div class="modal-box max-w-sm">
       <h3 class="text-lg font-bold mb-3">Rename chapter</h3>
-      <div id="chapter-rename-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+      <div id="chapter-rename-body"><p class="text-sm text-base-content/60">Loading...</p></div>
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>
   <dialog id="bulk_rename_modal" class="modal">
     <div class="modal-box max-w-2xl">
       <h3 class="text-lg font-bold mb-3">Bulk rename chapters</h3>
-      <div id="bulk-rename-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+      <div id="bulk-rename-body"><p class="text-sm text-base-content/60">Loading...</p></div>
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>
   {{end}}
   {{end}}
+</div>
+{{end}}
+
+{{define "providerPanel"}}
+<div id="providers-{{.TitleID}}" class="collapse collapse-arrow bg-base-100 mt-4 overflow-visible">
+  <input type="checkbox" {{if .Open}}checked{{end}}>
+  <div class="collapse-title font-semibold">Metadata &amp; trackers</div>
+  <div class="collapse-content">
+    <div class="divide-y divide-line/25">
+      {{range .Links}}
+      {{$linked := and .ID .Confirmed}}
+      <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0{{if .Outage}} opacity-60{{end}}">
+        {{if .Cover}}<img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{img .Cover}}" alt="" loading="lazy">{{end}}
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-center gap-2 text-sm font-medium">
+            {{.Label}}
+            <div class="flex gap-1">
+              {{with .Outage}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Temporarily unavailable: {{.}}" aria-label="Temporarily unavailable">{{template "iconPower"}}</span>{{end}}
+              {{if .Primary}}<span class="badge badge-sm badge-primary badge-soft tip" tabindex="0" data-tip="Metadata source" aria-label="Metadata source">{{template "iconDatabase"}}</span>{{end}}
+              {{if eq .Method "mangabaka"}}<span class="badge badge-sm badge-info badge-soft tip" tabindex="0" data-tip="Linked from MangaBaka. Confirm or relink it." aria-label="Linked from MangaBaka">{{template "iconDatabase"}}</span>{{end}}
+              {{if $linked}}{{if .Syncing}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Progressive sync" aria-label="Progressive sync">{{template "iconRefresh"}}</span>{{else if not .Primary}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Linked" aria-label="Linked">{{template "iconLink"}}</span>{{end}}
+              {{else if .ID}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Suggested match" aria-label="Suggested match">{{template "iconAlert"}}</span>
+              {{else if eq .Method "user"}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Not on {{.Label}}" aria-label="Not on {{.Label}}">{{template "iconBan"}}</span>
+              {{else}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Not linked" aria-label="Not linked">{{template "iconUnlink"}}</span>{{end}}
+            </div>
+          </div>
+          {{if .URL}}<a class="text-xs text-base-content/50 link-hover" href="{{.URL}}" target="_blank" rel="noreferrer noopener">#{{.ID}} ↗</a>{{end}}
+        </div>
+        {{$sync := and $linked .Connected}}
+        {{if .Outage}}<button type="button" class="btn btn-ghost btn-sm btn-square shrink-0" disabled aria-label="{{.Label}} is temporarily unavailable">{{template "iconDots"}}</button>
+        {{else if or $.CanManage $sync}}
+        <details class="dropdown dropdown-end shrink-0">
+          <summary class="btn btn-ghost btn-sm btn-square" aria-label="{{.Label}} actions">{{template "iconDots"}}</summary>
+          <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-max whitespace-nowrap p-2 shadow-lg border border-base-300">
+            {{if and $sync (not .Syncing)}}
+            <li><button hx-post="/ui/library/{{$.TitleID}}/tracker-sync" hx-vals='{"provider":"{{.Provider}}"}' hx-target="#toast">{{template "iconUpload"}}Sync current progress</button></li>
+            <li><button hx-post="/ui/library/{{$.TitleID}}/providers/progressive" hx-vals='{"provider":"{{.Provider}}","on":"1"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconPower"}}Start progressive sync</button></li>
+            {{end}}
+            {{if $.CanManage}}
+            {{if and .ID (or (not .Confirmed) (eq .Method "mangabaka"))}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconCheckCircle"}}{{if .Confirmed}}Confirm link{{else}}Confirm match{{end}}</button></li>{{end}}
+            <li><button hx-post="/ui/library/{{$.TitleID}}/providers/search" hx-include="#picker-form-{{$.TitleID}}-{{.Provider}}" hx-target="#picker-results-{{$.TitleID}}-{{.Provider}}" onclick="openPicker('{{$.TitleID}}-{{.Provider}}')">{{if or .Primary $linked}}{{template "iconRefresh"}}Relink{{else}}{{template "iconLink"}}Link{{end}}</button></li>
+            {{if and $linked (not .Primary)}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}","mode":"primary"}' hx-confirm="Use {{.Label}} for this title's metadata?">{{template "iconDatabase"}}Use for metadata</button></li>{{end}}
+            {{end}}
+            {{if and $sync .Syncing}}<li><button class="text-error" hx-post="/ui/library/{{$.TitleID}}/providers/progressive" hx-vals='{"provider":"{{.Provider}}","on":"0"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconPower"}}Stop progressive sync</button></li>{{end}}
+            {{if $.CanManage}}
+            {{if .Primary}}{{else if $linked}}<li><button class="text-error" hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":""}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML" hx-confirm="Unlink {{.Label}} from this title? It won't be matched automatically again.">{{template "iconUnlink"}}Unlink</button></li>
+            {{else if or .ID (ne .Method "user")}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":""}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconBan"}}Not on {{.Label}}</button></li>{{end}}
+            {{end}}
+          </ul>
+        </details>
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+    {{if .CanManage}}{{range .Links}}{{if not .Outage}}
+    <dialog id="picker-{{$.TitleID}}-{{.Provider}}" class="modal">
+      <div class="modal-box flex max-w-lg flex-col gap-2 overflow-hidden">
+        <div class="flex items-start justify-between gap-2">
+          <h3 class="text-lg font-bold">{{if or .Primary (and .ID .Confirmed)}}Relink{{else}}Link{{end}} {{.Label}}</h3>
+          <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+        </div>
+        <form id="picker-form-{{$.TitleID}}-{{.Provider}}" class="grid grid-cols-1 gap-2" hx-post="/ui/library/{{$.TitleID}}/providers/search" hx-target="#picker-results-{{$.TitleID}}-{{.Provider}}" hx-on::before-request="openPicker('{{$.TitleID}}-{{.Provider}}')">
+          <input type="hidden" name="provider" value="{{.Provider}}">
+          <span class="text-xs text-base-content/60">Pick the matching {{.Label}} entry. Linking doesn't sync anyone's progress by itself.</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <input name="q" class="input input-sm min-w-40 flex-1" value="{{$.Query}}" aria-label="Search">
+            <button class="btn btn-sm btn-outline max-sm:w-full">Search</button>
+          </div>
+        </form>
+        <div id="picker-results-{{$.TitleID}}-{{.Provider}}" class="min-h-0 flex-1 overflow-y-auto"></div>
+        {{if and (not .Primary) (or .ID (ne .Method "user"))}}<button type="button" class="btn btn-sm btn-ghost self-start" hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":""}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconBan"}}None of these, not on {{.Label}}</button>{{end}}
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>close</button></form>
+    </dialog>
+    {{end}}{{end}}{{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "providerPicker"}}
+  {{if .Error}}<p class="text-sm text-error">{{.Error}}</p>{{end}}
+  <div class="flex flex-col gap-2 divide-y divide-line/25">
+    {{range .Results}}
+    {{$cur := eq .ProviderID $.Current}}
+    <div class="flex items-center gap-3 py-2">
+      <img class="h-14 w-10 shrink-0 rounded object-cover bg-base-300" src="{{img (coverURL .)}}" alt="" loading="lazy">
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-sm font-medium">{{mangaTitle .}}</div>
+        <div class="text-xs text-base-content/50">{{.Format}}{{if .Year}} · {{.Year}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}} · <a class="link-hover" href="{{providerURL .Provider .ProviderID}}" target="_blank" rel="noreferrer noopener">#{{.ProviderID}} ↗</a></div>
+      </div>
+      {{if $cur}}<span class="badge badge-success badge-soft badge-sm shrink-0">linked</span>
+      {{else if $.Unlinked}}<button type="button" class="btn btn-sm btn-outline" hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}","unlinked":"1"}' hx-target="closest [data-unlinked]" hx-swap="outerHTML" hx-sync="closest [data-unlinked]:drop" hx-disabled-elt="this"><span class="htmx-indicator loading loading-spinner loading-xs"></span>Use</button>
+      {{else}}<button type="button" class="btn btn-sm btn-outline" hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">Use</button>{{end}}
+    </div>
+    {{else}}<p class="py-2 text-sm text-center text-base-content/60">No results — refine the search.</p>{{end}}
+    {{if .Unlinked}}<button type="button" class="btn btn-sm btn-ghost" hx-post="/ui/library/{{.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"","unlinked":"1"}' hx-target="closest [data-unlinked]" hx-swap="outerHTML" hx-sync="closest [data-unlinked]:drop" hx-disabled-elt="this"><span class="htmx-indicator loading loading-spinner loading-xs"></span>{{template "iconBan"}}None of these, not on {{providerLabel .Provider}}</button>{{end}}
+  </div>
+{{end}}
+
+{{define "providerBlocks"}}
+<div class="fieldset"><span class="fieldset-legend">Blocked metadata &amp; tracking backends</span>
+  <details class="dropdown w-full" data-keep-open>
+    <summary class="select select-sm w-full flex cursor-pointer items-center" data-tag-count>{{with .Blocked}}{{len .}} selected{{else}}None selected{{end}}</summary>
+    <div class="dropdown-content z-30 mt-1 w-full rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
+      <div class="grid gap-y-1" data-tag-list>
+        {{range .Options}}<label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="blocked_providers" value="{{.Name}}" {{if has $.Blocked .Name}}checked{{end}}><span>{{.Label}}</span></label>{{end}}
+      </div>
+    </div>
+  </details>
+  <span class="label">This user can't search, link or sync with blocked backends.</span>
+</div>
+{{end}}
+
+{{define "trackerRows"}}
+<div id="tracker-rows" class="contents"{{if .OOB}} hx-swap-oob="true"{{end}}>
+  {{$connected := false}}{{range .Cards}}{{if .Account}}{{$connected = true}}{{end}}{{end}}
+  {{if $connected}}
+  {{if .Reorder}}<p class="text-xs text-base-content/60">Drag the trackers that are the source of truth to pick which one wins first.</p>{{end}}
+  <div class="divide-y divide-line/25"{{if .Reorder}} data-reorder="/ui/trackers/reorder"{{end}}>
+    {{range .Cards}}{{if .Account}}{{$c := .}}{{with .Account}}
+    <div class="flex items-center gap-3 py-2 first:pt-0 last:pb-0 [&.dragging]:opacity-50"{{if $.Reorder}} draggable="true" data-reorder-id="{{.Provider}}"{{end}}>
+      {{if $.Reorder}}<span class="cursor-grab select-none text-base-content/30">⠿</span>{{end}}
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2 text-sm font-medium{{if $c.Outage}} text-base-content/50{{end}}">
+          <span>{{.Label}} <span class="font-normal text-base-content/50">({{.Name}})</span></span>
+          <div class="flex gap-1">
+            {{if .AutoLink}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Links new titles automatically" aria-label="Links new titles automatically">{{template "iconLink"}}</span>{{end}}
+            {{if .AutoProgressive}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Progressive sync for linked titles" aria-label="Progressive sync for linked titles">{{template "iconRefresh"}}</span>{{end}}
+            {{if eq .Source "tracker"}}<span class="badge badge-sm badge-info badge-soft tip" tabindex="0" data-tip="{{.Label}} is the source of truth" aria-label="{{.Label}} is the source of truth">{{template "iconDownload"}}</span>
+            {{else}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Kaodoku is the source of truth" aria-label="Kaodoku is the source of truth">{{template "iconUpload"}}</span>{{end}}
+            {{if ne .RatingSync "off"}}{{$when := "same as progressive sync"}}{{if eq .RatingSync "on"}}{{$when = "always"}}{{end}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Ratings sync, {{$when}}" aria-label="Ratings sync, {{$when}}">{{template "iconStar"}}</span>{{end}}
+            {{if .Relations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its related manga" aria-label="Uses its related manga">{{template "iconLayers"}}</span>{{end}}
+            {{if .Recommendations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its recommendations" aria-label="Uses its recommendations">{{template "iconUsers"}}</span>{{end}}
+            {{with $c.MangaBaka}}<span class="badge badge-sm badge-info tip" tabindex="0" data-tip="MangaBaka links to check" aria-label="MangaBaka links to check" data-mangabaka-item="{{$c.Provider}}"><span data-mangabaka-count="{{$c.Provider}}">{{capCount .}}</span></span>{{end}}
+          </div>
+        </div>
+        {{if .ExpiresAt}}<div class="text-xs {{if .ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.ExpiresAt}}</div>{{end}}
+        {{if $c.Outage}}<div class="text-xs text-warning">Temporarily unavailable: {{$c.Outage}}</div>
+        {{else if .LastError}}<div class="text-xs text-error">{{.LastError}}</div>{{end}}
+      </div>
+      <details class="dropdown dropdown-end shrink-0">
+        <summary class="btn btn-ghost btn-sm btn-square" aria-label="{{.Label}} actions">{{template "iconDots"}}</summary>
+        <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-max whitespace-nowrap p-2 shadow-lg border border-base-300">
+          <li><button hx-get="/ui/trackers/{{.Provider}}/settings" hx-target="#tracker-prefs-body" onclick="tracker_prefs_modal.showModal()">{{template "iconEdit"}}Edit</button></li>
+          {{if and $.CanManage (not $c.Outage) $c.Unlinked}}<li data-unlinked-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/unlinked" hx-target="#tracker-unlinked-body" onclick="openLoading('tracker_unlinked_modal')">{{template "iconUnlink"}}Unlinked titles<span class="badge badge-sm badge-ghost" data-unlinked-count="{{.Provider}}">{{$c.Unlinked}}</span></button></li>{{end}}
+          {{if and $.CanManage $c.MangaBaka}}<li data-mangabaka-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/mangabaka" hx-target="#tracker-mangabaka-body" onclick="openLoading('tracker_mangabaka_modal')">{{template "iconDatabase"}}MangaBaka links<span class="badge badge-sm badge-ghost" data-mangabaka-count="{{.Provider}}">{{capCount $c.MangaBaka}}</span></button></li>{{end}}
+          {{if $c.Missing}}<li data-missing-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/missing-ratings" hx-target="#tracker-missing-body" onclick="openLoading('tracker_missing_modal')">{{template "iconStar"}}Missing ratings<span class="badge badge-sm badge-ghost" data-missing-count="{{.Provider}}">{{$c.Missing}}</span></button></li>{{end}}
+          {{if not $c.Outage}}<li><button hx-post="/ui/trackers/{{.Provider}}/sync" hx-target="#toast">{{template "iconRefresh"}}Sync now</button></li>{{end}}
+          {{if and .ExpiringSoon (eq $c.Login "oauth")}}<li><a href="/trackers/{{.Provider}}/connect">{{template "iconLink"}}Reconnect</a></li>{{end}}
+          <li><button class="text-error" hx-post="/ui/trackers/{{.Provider}}/disconnect" hx-swap="none" hx-confirm="Disconnect your {{.Label}} account?">{{template "iconPower"}}Disconnect</button></li>
+        </ul>
+      </details>
+    </div>
+    {{end}}{{end}}{{end}}
+  </div>
+  {{else}}<p class="text-sm text-base-content/60">No trackers here yet.</p>{{end}}
+</div>
+{{end}}
+
+{{define "trackerCards"}}
+<div class="card bg-base-100 card-body p-4 gap-2 mb-4">
+  <div class="flex items-center justify-between gap-2">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Tracking accounts</h2>
+    <div class="flex gap-2">
+      <button type="button" class="btn btn-sm" hx-get="/ui/lists/mal" hx-target="#mal-xml-body" onclick="openLoading('mal_xml_modal')">MyAnimeList XML</button>
+      {{if .CanConnect}}<button type="button" class="btn btn-sm btn-primary" onclick="tracker_connect_modal.showModal()">{{template "iconPlus"}}Connect</button>{{end}}
+    </div>
+  </div>
+  {{template "trackerRows" .}}
+</div>
+{{if .CanConnect}}
+<dialog id="tracker_connect_modal" class="modal">
+  <div class="modal-box grid max-w-md gap-3">
+    <div class="flex items-start justify-between gap-2">
+      <h3 class="text-lg font-bold">Connect a tracker</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+    </div>
+    <select class="select select-sm w-full" aria-label="Tracker" onchange="trackerConnectPick(this)">
+      <option value="" selected disabled>Pick a tracker...</option>
+      {{range .Cards}}{{if and (not .Account) .Login}}<option value="{{.Provider}}"{{with .Outage}} disabled title="Temporarily unavailable: {{.}}"{{end}}>{{.Label}}{{if .Outage}} (unavailable){{end}}</option>{{end}}{{end}}
+    </select>
+    {{range .Cards}}{{if and (not .Account) .Login (not .Outage)}}
+    <div class="grid gap-2" data-connect="{{.Provider}}" hidden>
+      {{if eq .Login "oauth"}}
+      <p class="text-sm text-base-content/60">You'll approve access on {{.Label}}, then come back here.</p>
+      <a class="btn btn-sm btn-primary" href="/trackers/{{.Provider}}/connect">Continue to {{.Label}}</a>
+      {{else if eq .Login "token"}}
+      <form class="grid gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
+        <input class="input input-sm w-full" type="password" name="password" placeholder="mb-..." aria-label="{{.Label}} personal access token" autocomplete="off" required>
+        <span class="text-xs text-base-content/50">Create a personal access token with library access in your {{.Label}} account settings.</span>
+        <button class="btn btn-sm btn-primary">Connect</button>
+      </form>
+      {{else}}
+      <form class="grid gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
+        <input class="input input-sm w-full" name="username" placeholder="{{.Label}} username or email" aria-label="{{.Label}} username or email" autocomplete="off" required>
+        <input class="input input-sm w-full" type="password" name="password" placeholder="Password" aria-label="Password" autocomplete="off" required>
+        <span class="text-xs text-base-content/50">Your password is sent to {{.Label}} once; only the returned token is stored.</span>
+        <button class="btn btn-sm btn-primary">Connect</button>
+      </form>
+      {{end}}
+    </div>
+    {{end}}{{end}}
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{{end}}
+<dialog id="tracker_prefs_modal" class="modal">
+  <div class="modal-box max-w-lg">
+    <div id="tracker-prefs-body"><p class="text-sm text-base-content/60">Loading...</p></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+<dialog id="mal_xml_modal" class="modal">
+  <div class="modal-box grid max-w-lg gap-3">
+    <div id="mal-xml-body" class="contents" data-loading></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+<dialog id="tracker_missing_modal" class="modal">
+  <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
+    <div id="tracker-missing-body" class="contents" data-loading></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{{if .CanManage}}
+<dialog id="tracker_mangabaka_modal" class="modal">
+  <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
+    <div id="tracker-mangabaka-body" class="contents" data-loading></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+<dialog id="tracker_unlinked_modal" class="modal">
+  <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
+    <div id="tracker-unlinked-body" class="contents" data-loading></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+{{end}}
+{{end}}
+
+{{define "trackerUnlinked"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">Unlinked on {{.Label}}</h3>
+    <p class="text-sm text-base-content/60">Library titles without a confirmed {{.Label}} link. Open one to pick its match.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="flex min-h-0 flex-1 flex-col gap-2">
+  {{if .Titles}}
+  <input class="input input-sm w-full shrink-0" aria-label="Filter titles" placeholder="Filter titles..." data-tag-filter form="">
+  <div class="min-h-0 flex-1 divide-y divide-line/25 overflow-y-auto rounded-lg border border-line/40">
+    {{range .Titles}}
+    <details class="group" data-unlinked data-filter-row>
+      <summary class="flex cursor-pointer list-none items-center gap-3 p-2 text-sm hover:bg-base-200 group-open:bg-base-200 [&::-webkit-details-marker]:hidden">
+        {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+        <span class="min-w-0 flex-1">
+          <span class="block truncate font-medium">{{.DisplayTitle}}</span>
+          <span class="block text-xs text-base-content/50">{{providerLabel .Provider}}{{with .Format}} · {{.}}{{end}}{{with .Year}} · {{.}}{{end}}{{with .AverageScore}} · ★ {{.}}%{{end}}</span>
+        </span>
+        {{if .Suggested}}<span class="badge badge-warning badge-soft badge-sm shrink-0">suggested match</span>{{end}}
+        <span class="shrink-0 group-open:rotate-90">{{template "iconChevron"}}</span>
+      </summary>
+      <div class="grid grid-cols-1 gap-2 p-2">
+        <form class="flex gap-2" hx-post="/ui/library/{{.ID}}/providers/search" hx-trigger="submit, toggle once from:closest details" hx-target="next [data-results]" hx-disabled-elt="find button" hx-on::before-request="showLoading(this.nextElementSibling)">
+          <input type="hidden" name="provider" value="{{$.Provider}}">
+          <input type="hidden" name="unlinked" value="1">
+          <input name="q" class="input input-sm min-w-0 flex-1" value="{{.DisplayTitle}}" aria-label="Search {{$.Label}}">
+          <button class="btn btn-sm btn-outline">Search</button>
+        </form>
+        <div data-results></div>
+      </div>
+    </details>
+    {{end}}
+    <p class="hidden px-3 py-2 text-sm text-base-content/50 first:block">Every title is linked or marked as not on {{.Label}}.</p>
+  </div>
+  {{else}}<p class="text-sm text-base-content/50">Every title is linked or marked as not on {{.Label}}.</p>{{end}}
+</div>
+{{end}}
+
+{{define "trackerMissingRatings"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">No rating on {{.Label}}</h3>
+    <p class="text-sm text-base-content/60">Titles you rated in Kaodoku that {{.Label}}, their source of truth, has no rating for.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="min-h-0 flex-1 divide-y divide-line/25 overflow-y-auto rounded-lg border border-line/40">
+  {{range .Titles}}
+  <div class="flex items-center gap-3 p-2" data-missing-row>
+    {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+    <div class="min-w-0 flex-1">
+      <div class="truncate text-sm font-medium">{{.DisplayTitle}}</div>
+      <div class="text-xs text-base-content/60">Your rating {{.Rating}}/10</div>
+    </div>
+    <button class="btn btn-sm" hx-post="/ui/library/{{.ID}}/rating/missing" hx-vals='{"provider":"{{$.Provider}}","action":"send","row":"1"}' hx-target="closest [data-missing-row]" hx-swap="outerHTML" hx-disabled-elt="this">Send</button>
+    <button class="btn btn-ghost btn-sm" hx-post="/ui/library/{{.ID}}/rating/missing" hx-vals='{"provider":"{{$.Provider}}","action":"keep","row":"1"}' hx-target="closest [data-missing-row]" hx-swap="outerHTML" hx-disabled-elt="this">Keep</button>
+  </div>
+  {{end}}
+  <p class="hidden px-3 py-2 text-sm text-base-content/60 first:block">Nothing left to answer.</p>
+</div>
+{{if .Titles}}<div class="flex justify-end gap-2">
+  <button class="btn btn-ghost btn-sm" hx-post="/ui/trackers/{{.Provider}}/missing-ratings" hx-vals='{"action":"keep"}' hx-target="#tracker-missing-body" hx-disabled-elt="this">Keep all</button>
+  <button class="btn btn-primary btn-sm" hx-post="/ui/trackers/{{.Provider}}/missing-ratings" hx-vals='{"action":"send"}' hx-target="#tracker-missing-body" hx-disabled-elt="this">Send all</button>
+</div>{{end}}
+{{template "missingLeft" .}}
+{{end}}
+
+{{define "malXML"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">{{if eq .Step "export"}}Export to MyAnimeList XML{{else if eq .Step "import"}}Import MyAnimeList XML{{else}}MyAnimeList XML{{end}}</h3>
+    <p class="text-sm text-base-content/60">MyAnimeList's export format, which other sites import too.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+{{if eq .Step "export"}}
+<p class="text-sm">{{.Exported}} to export.</p>
+{{if or .Unlinked .Absent}}<p class="text-sm text-base-content/60">Left out:{{with .Unlinked}} {{.}} not linked to MyAnimeList yet{{if $.CanLink}} (<button type="button" class="link" hx-get="/ui/trackers/mal/unlinked" hx-target="#tracker-unlinked-body" onclick="mal_xml_modal.close(); openLoading('tracker_unlinked_modal')">link them</button>){{end}}{{end}}{{if and .Unlinked .Absent}},{{end}}{{with .Absent}} {{.}} marked as not on MyAnimeList{{end}}.</p>{{end}}
+<div class="flex justify-between gap-2">
+  <button type="button" class="btn btn-ghost btn-sm" hx-get="/ui/lists/mal" hx-target="#mal-xml-body">Back</button>
+  <a class="btn btn-sm btn-primary" href="/ui/lists/mal.xml">Download XML</a>
+</div>
+{{else if eq .Step "import"}}
+<form class="grid gap-2" hx-post="/ui/lists/mal" hx-encoding="multipart/form-data" hx-target="#mal-xml-result" hx-disabled-elt="find button">
+  <label class="btn btn-sm justify-start">
+    <input type="file" class="sr-only" name="file" accept=".xml,text/xml" required onchange="this.nextElementSibling.textContent=this.files[0]?this.files[0].name:'Choose file'">
+    <span class="truncate">Choose file</span>
+  </label>
+  <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-sm" name="progress" value="1" checked>Raise read progress (never lowers it)</label>
+  <select class="select select-sm" name="ratings" aria-label="Ratings">
+    <option value="missing">Set ratings where I have none</option>
+    <option value="all">Overwrite my ratings</option>
+    <option value="">Leave my ratings</option>
+  </select>
+  <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-sm" name="add" value="1">Add titles that aren't in the library</label>
+  <div id="mal-xml-result" class="contents"></div>
+  <div class="flex justify-between gap-2">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/ui/lists/mal" hx-target="#mal-xml-body">Back</button>
+    <div class="flex gap-2">
+      <button class="btn btn-sm" name="apply" value="">Preview</button>
+      <button class="btn btn-sm btn-primary" name="apply" value="1">Import</button>
+    </div>
+  </div>
+</form>
+{{else}}
+<div class="grid gap-2">
+  <button type="button" class="btn btn-outline h-auto flex-col items-start gap-0.5 py-2 text-left" hx-get="/ui/lists/mal?step=export" hx-target="#mal-xml-body">
+    <span>Export</span>
+    <span class="text-xs font-normal text-base-content/60">Download your library as a file for MyAnimeList or another site.</span>
+  </button>
+  <button type="button" class="btn btn-outline h-auto flex-col items-start gap-0.5 py-2 text-left" hx-get="/ui/lists/mal?step=import" hx-target="#mal-xml-body">
+    <span>Import</span>
+    <span class="text-xs font-normal text-base-content/60">Bring read progress and ratings in from an exported file.</span>
+  </button>
+</div>
+{{end}}
+{{end}}
+
+{{define "malXMLResult"}}
+{{with .Result}}<p class="text-sm">{{if .Applied}}Raised progress on {{.Raised}} and set {{.Rated}} ratings.{{if .Queued}} Adding {{.Queued}} titles in the background.{{end}}{{else}}{{.InLibrary}} in your library, {{.NotInLibrary}} not in it.{{end}}{{if .Ignored}} {{.Ignored}} are Dropped or On-Hold, which Kaodoku doesn't keep.{{end}}</p>{{end}}
+{{with .Error}}<p class="text-sm text-error">{{.}}</p>{{end}}
+{{end}}
+
+{{define "trackerMangaBaka"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">MangaBaka links on {{.Label}}</h3>
+    <p class="text-sm text-base-content/60">Links Kaodoku made from MangaBaka. Confirm the ones that look right, or open a title to relink it.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="min-h-0 flex-1 divide-y divide-line/25 overflow-y-auto rounded-lg border border-line/40">
+  {{range .Links}}
+  <div class="flex items-center gap-3 p-2">
+    {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+    <div class="min-w-0 flex-1">
+      <a class="block truncate text-sm font-medium hover:underline" href="/library/{{.Title.ID}}">{{.DisplayTitle}}</a>
+      <a class="text-xs text-base-content/60 hover:underline" href="{{.URL}}" target="_blank" rel="noopener">{{$.Label}} {{.ID}}</a>
+    </div>
+    <button class="btn btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"confirm","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Confirm</button>
+  </div>
+  {{end}}
+  {{range .Suggestions}}
+  <div class="flex items-center gap-3 p-2">
+    {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+    <div class="min-w-0 flex-1">
+      <a class="block truncate text-sm font-medium hover:underline" href="/library/{{.Title.ID}}">{{.DisplayTitle}}</a>
+      <div class="text-xs text-base-content/60">{{if .Current}}Linked to {{.Current}}{{else}}Marked as not on {{$.Label}}{{end}}, MangaBaka says <a class="link" href="{{.URL}}" target="_blank" rel="noopener">{{.ID}}</a></div>
+    </div>
+    <button class="btn btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"use","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Use it</button>
+    <button class="btn btn-ghost btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"dismiss","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Dismiss</button>
+  </div>
+  {{end}}
+  <p class="hidden px-3 py-2 text-sm text-base-content/60 first:block">Nothing left to check.</p>
+</div>
+{{if .Links}}<div class="flex justify-end"><button class="btn btn-primary btn-sm" hx-post="/ui/trackers/{{.Provider}}/mangabaka" hx-vals='{"action":"confirm"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Confirm all</button></div>{{end}}
+{{$n := .Total}}<span hx-swap-oob="innerHTML:[data-mangabaka-count={{.Provider}}]">{{capCount $n}}</span>
+{{if not $n}}<div hx-swap-oob="delete:[data-mangabaka-item={{.Provider}}]"></div>{{end}}
+{{end}}
+
+{{define "missingLeft"}}<span hx-swap-oob="innerHTML:[data-missing-count={{.Provider}}]">{{len .Titles}}</span>
+{{if not .Titles}}<div hx-swap-oob="delete:[data-missing-item={{.Provider}}]"></div>{{end}}{{end}}
+
+{{define "unlinkedLeft"}}<span hx-swap-oob="innerHTML:[data-unlinked-count={{.Provider}}]">{{len .Titles}}</span>
+{{if not .Titles}}<div hx-swap-oob="delete:[data-unlinked-item={{.Provider}}]"></div>{{end}}{{end}}
+
+{{define "trackerPrefs"}}
+<form class="grid gap-1" hx-post="/ui/trackers/{{.Provider}}/settings" hx-target="#toast" hx-on::after-request="if (event.detail.successful) this.closest('dialog').close()">
+  <div class="mb-2 flex items-start justify-between gap-2">
+    <h3 class="text-lg font-bold">{{.Label}} settings</h3>
+    <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+  </div>
+  {{template "trackerPrefToggle" (pref "auto_link" "Link new titles automatically" "Look up every title added to the library on this tracker and link confident matches." .AutoLink)}}
+  {{template "trackerPrefToggle" (pref "auto_progressive" "Progressive sync for linked titles" "Turn on progressive sync whenever a title is linked to this tracker. You can still turn it off per title." .AutoProgressive)}}
+  {{template "trackerPrefToggle" (pref "relations" "Use its related manga" "Include related titles from this tracker on title pages." .Relations)}}
+  {{template "trackerPrefToggle" (pref "recommendations" "Use its recommendations" "Include recommendations from this tracker on title pages and the home page." .Recommendations)}}
+  <div class="flex items-start justify-between gap-4 border-b border-base-200 py-3">
+    <div class="min-w-0">
+      <label class="font-medium" for="tp-rating_sync">Sync ratings</label>
+      <div class="text-sm text-base-content/60">Keep your ratings of linked titles in step with {{.Label}}.</div>
+    </div>
+    <select class="select select-sm w-auto shrink-0" id="tp-rating_sync" name="rating_sync">
+      <option value=""{{if eq .RatingSync ""}} selected{{end}}>Same as progressive sync</option>
+      <option value="on"{{if eq .RatingSync "on"}} selected{{end}}>Always</option>
+      <option value="off"{{if eq .RatingSync "off"}} selected{{end}}>Never</option>
+    </select>
+  </div>
+  {{template "trackerPrefToggle" (pref "kaodoku_leads" "Kaodoku is the source of truth" (printf "On: Kaodoku sends progress, favourites and ratings to %s. Off: Kaodoku takes them from %s." .Label .Label) (eq .Source "kaodoku"))}}
+  {{template "trackerPrefToggle" (pref "exclusive" (printf "Only Kaodoku updates %s" .Label) (printf "Skips reading an entry from %s before each update and trusts what Kaodoku last sent, halving the calls. Leave off if you also update %s from another app or its website, or progress made there may be overwritten." .Label .Label) .Exclusive)}}
+  <button class="btn btn-sm btn-primary mt-3">Save</button>
+</form>
+{{end}}
+
+{{define "trackerPrefToggle"}}
+<div class="flex items-start justify-between gap-4 border-b border-base-200 py-3">
+  <div class="min-w-0">
+    <label class="font-medium" for="tp-{{.Key}}">{{.Label}}</label>
+    <div class="text-sm text-base-content/60">{{.Desc}}</div>
+  </div>
+  <input type="hidden" name="{{.Key}}" value="false">
+  <input type="checkbox" class="toggle shrink-0" id="tp-{{.Key}}" name="{{.Key}}" value="true" {{if .On}}checked{{end}}>
+</div>
+{{end}}
+
+{{define "mangaBakaStatus"}}
+<div id="mangabaka-status" class="flex items-start justify-between gap-4 py-3 max-sm:flex-col max-sm:gap-1"{{if .Running}} hx-get="/ui/settings/mangabaka/status" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
+  <div class="min-w-0">
+    <div class="font-medium">Database</div>
+    <div class="text-sm text-base-content/60 max-w-prose">{{.Note}} Data from <a class="link" href="https://mangabaka.org" target="_blank" rel="noopener">MangaBaka</a>, CC BY-NC-SA 4.0.</div>
+    {{if .Running}}<p class="mt-1 flex items-center gap-2 text-sm"><span class="loading loading-spinner loading-xs"></span>{{.Progress}}</p>
+    {{else}}{{with .Error}}<p class="mt-1 text-sm text-error">Last refresh failed: {{.}}</p>{{end}}{{end}}
+    {{with .Message}}<p class="mt-1 text-sm">{{.}}</p>{{end}}
+    {{if .Confirm}}<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">The published database is the one already imported. Re-import it anyway?
+      <button type="button" class="btn btn-xs btn-warning" hx-post="/ui/settings/mangabaka/refresh" hx-vals='{"force": "1", "confirm": "1"}' hx-target="#mangabaka-status" hx-swap="outerHTML">Re-import</button>
+    </div>{{end}}
+  </div>
+  <div class="flex shrink-0 items-center gap-3">
+    <label class="flex items-center gap-2 text-sm tip" data-tip="Re-import even if the database didn't change"><input type="checkbox" class="checkbox checkbox-sm" name="force" value="1" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>Force</label>
+    <button class="btn btn-sm" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>{{if .Running}}Refreshing...{{else}}Refresh now{{end}}</button>
+  </div>
 </div>
 {{end}}

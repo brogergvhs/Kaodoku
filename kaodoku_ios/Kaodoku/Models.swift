@@ -62,6 +62,7 @@ struct Title: Decodable, Identifiable, Hashable {
   var sourceUrl: String
   var displayTitle: String
   var coverImage: String
+  var bannerImage: String?
   var monitored: Bool
   var refreshInterval: String
   var isAdult: Bool
@@ -127,8 +128,20 @@ struct ChapterProgress: Decodable, Identifiable, Hashable {
   var lastReadAt: String?
 }
 
+struct TitleRating: Decodable {
+  struct Missing: Decodable, Hashable {
+    var provider: String
+    var label: String
+  }
+
+  var rating: Int
+  var from: String?
+  var missing: [Missing]?
+}
+
 struct TitleReadProgress: Decodable {
   var title: Title
+  var rating: TitleRating?
   var manga: MangaDetail?
   var chapters: [ChapterProgress]
   var readChapters: Int
@@ -138,8 +151,30 @@ struct TitleReadProgress: Decodable {
   var nextPage: Int
 }
 
-struct AniListStatus: Decodable {
-  var connected: Bool
+struct TrackerList: Decodable {
+  struct Tracker: Decodable, Identifiable {
+    var provider: String
+    var label: String
+    var connected: Bool
+    var name: String?
+    var unavailable: String?
+    var settings: TrackerSettings?
+    var id: String {
+      provider
+    }
+  }
+
+  var items: [Tracker]
+}
+
+struct TrackerSettings: Codable, Hashable {
+  var autoLink: Bool
+  var autoProgressive: Bool
+  var relations: Bool
+  var recommendations: Bool
+  var ratingSync: String
+  var source: String
+  var exclusive: Bool?
 }
 
 struct TitleActivity: Decodable {
@@ -225,6 +260,7 @@ struct UserSettings: Codable {
 
 struct Manga: Decodable, Identifiable, Hashable {
   var catalogId: Int64
+  var provider: String?
   var providerId: String
   var titleRomaji: String
   var titleEnglish: String
@@ -238,9 +274,9 @@ struct Manga: Decodable, Identifiable, Hashable {
   var titleId: Int64?
 
   /// Browse results aren't DB-cached (catalog id 0), so identity is the
-  /// stable AniList provider id.
+  /// backend plus its stable id.
   var id: String {
-    providerId
+    "\(provider ?? ""):\(providerId)"
   }
 
   var name: String {
@@ -249,7 +285,7 @@ struct Manga: Decodable, Identifiable, Hashable {
 
   enum CodingKeys: String, CodingKey {
     case catalogId = "id"
-    case providerId, titleRomaji, titleEnglish, description, coverImage
+    case provider, providerId, titleRomaji, titleEnglish, description, coverImage
     case status, format, chapters, averageScore, isAdult, titleId
   }
 
@@ -281,6 +317,7 @@ struct SearchPage: Decodable {
 struct TagOption: Decodable, Identifiable, Hashable {
   var name: String
   var kind: String
+  var group: String?
   var id: String {
     name
   }
@@ -301,8 +338,7 @@ struct MatchList: Decodable {
   var items: [Match]
 }
 
-// Source linking (GET /api/v1/library/{id}/sources) and management
-// (GET /api/v1/sources/manage) DTOs.
+// Source linking (GET /api/v1/library/{id}/sources) DTOs.
 
 struct LinkedSource: Decodable, Identifiable {
   var sourceId: String
@@ -327,20 +363,4 @@ struct TitleSources: Decodable {
   var failed: Bool
   var error: String?
   var sources: [SourcePick]
-}
-
-struct SourceManageRow: Decodable, Identifiable {
-  var id: String
-  var name: String
-  var enabled: Bool
-  var nsfw: Bool
-  var origin: String
-  var status: String
-  var lastCheckedAt: String?
-  var lastError: String?
-  var chaptersFound: Int
-}
-
-struct SourceManageList: Decodable {
-  var items: [SourceManageRow]
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -20,11 +22,12 @@ import (
 // plaintext and get re-encrypted on the next bootstrap.
 const encPrefix = "enc:v1:"
 
-// tokenCipher encrypts small secrets (AniList tokens) at rest with
+// tokenCipher encrypts small secrets (tracker tokens) at rest with
 // AES-256-GCM. The key comes from KAODOKU_ENCRYPTION_KEY (64 hex chars) or an
 // auto-generated kaodoku.key file next to the database.
 type tokenCipher struct {
 	aead cipher.AEAD
+	key  []byte
 }
 
 func newTokenCipher(dbPath string) (*tokenCipher, error) {
@@ -44,7 +47,7 @@ func cipherFromKey(key []byte) (*tokenCipher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &tokenCipher{aead: aead}, nil
+	return &tokenCipher{aead: aead, key: key}, nil
 }
 
 func keyFilePath(dbPath string) string {
@@ -75,6 +78,13 @@ func loadOrCreateKey(dbPath string) ([]byte, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+// Sign is a short HMAC of v, for URLs only the server should mint.
+func (c *tokenCipher) Sign(v string) string {
+	m := hmac.New(sha256.New, c.key)
+	m.Write([]byte(v))
+	return base64.RawURLEncoding.EncodeToString(m.Sum(nil)[:16])
 }
 
 func (c *tokenCipher) Encrypt(plain string) (string, error) {
@@ -154,40 +164,40 @@ func RotateEncryptionKey(ctx context.Context, dbPath string) (int, error) {
 		}
 	}()
 
-	rows, err := conn.QueryContext(ctx, `SELECT user_id, access_token FROM user_anilist WHERE access_token LIKE ?`, encPrefix+"%")
-	if err != nil {
-		return 0, err
-	}
 	type item struct {
-		id  int64
-		enc string
+		id              int64
+		access, refresh string
 	}
 	var items []item
-	for rows.Next() {
-		var id int64
-		var stored string
-		if err := rows.Scan(&id, &stored); err != nil {
-			rows.Close()
-			return 0, err
+	reenc := func(stored string) (string, error) {
+		if !strings.HasPrefix(stored, encPrefix) {
+			return stored, nil
 		}
 		plain, err := oldCipher.Decrypt(stored)
 		if err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("decrypt user %d token: %w", id, err)
+			return "", err
 		}
-		reenc, err := newCipher.Encrypt(plain)
-		if err != nil {
-			rows.Close()
-			return 0, err
-		}
-		items = append(items, item{id, reenc})
+		return newCipher.Encrypt(plain)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	if err := database.Each(ctx, conn, `SELECT rowid, access_token, refresh_token FROM tracker_accounts`, nil, func(r database.Scanner) error {
+		var it item
+		if err := r.Scan(&it.id, &it.access, &it.refresh); err != nil {
+			return err
+		}
+		var err error
+		if it.access, err = reenc(it.access); err == nil {
+			it.refresh, err = reenc(it.refresh)
+		}
+		if err != nil {
+			return fmt.Errorf("re-encrypt tracker token %d: %w", it.id, err)
+		}
+		items = append(items, it)
+		return nil
+	}); err != nil {
 		return 0, err
 	}
 	for _, it := range items {
-		if _, err := conn.ExecContext(ctx, `UPDATE user_anilist SET access_token = ? WHERE user_id = ?`, it.enc, it.id); err != nil {
+		if _, err := conn.ExecContext(ctx, `UPDATE tracker_accounts SET access_token = ?, refresh_token = ? WHERE rowid = ?`, it.access, it.refresh, it.id); err != nil {
 			return 0, err
 		}
 	}

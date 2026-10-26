@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
+	"github.com/brogergvhs/kaodoku/internal/catalog"
 	chaptersPkg "github.com/brogergvhs/kaodoku/internal/chapters"
 	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/library"
@@ -305,6 +307,14 @@ func seedTitle(t *testing.T, dbPath, url, name string, ownerID int64) int64 {
 func TestAPIV1Actions(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
 	titleID := seedTitle(t, dbPath, "https://example.test/m", "Example", 1)
+	seedDB, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := library.NewRepository(seedDB).UpsertChapters(context.Background(), titleID, []chaptersPkg.Chapter{{Chapter: providers.Chapter{URL: "https://example.test/m/1", Label: "1", NumMain: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	seedDB.Close()
 	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -320,6 +330,15 @@ func TestAPIV1Actions(t *testing.T) {
 
 	if rec := do(t, api, http.MethodPut, "/api/v1/library/"+tid+"/favourite", "", nil); rec.Code != http.StatusOK {
 		t.Fatalf("favourite status = %d; %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, api, http.MethodPut, "/api/v1/library/"+tid+"/rating", "", map[string]int{"rating": 7}); rec.Code != http.StatusOK {
+		t.Fatalf("rating = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, api, http.MethodGet, "/api/v1/reader/titles/"+tid, "", nil); !strings.Contains(rec.Body.String(), `"rating":{"rating":7}`) {
+		t.Fatalf("reader title misses the rating: %s", rec.Body.String())
+	}
+	if rec := do(t, api, http.MethodPut, "/api/v1/library/"+tid+"/rating", "", map[string]int{"rating": 11}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("out-of-range rating = %d", rec.Code)
 	}
 	var tdto titleDTO
 	rec := do(t, api, http.MethodGet, "/api/v1/library/"+tid, "", nil)
@@ -345,8 +364,8 @@ func TestAPIV1Actions(t *testing.T) {
 	}
 	rec = do(t, api, http.MethodGet, "/api/v1/collections/"+cid, "", nil)
 	_ = json.NewDecoder(rec.Body).Decode(&col)
-	if len(col.TitleIDs) != 1 || col.TitleIDs[0] != titleID {
-		t.Fatalf("members = %+v", col.TitleIDs)
+	if len(col.TitleIDs) != 1 || col.TitleIDs[0] != titleID || col.Chapters != 1 {
+		t.Fatalf("collection = %+v", col)
 	}
 
 	var scr screenDTO
@@ -463,7 +482,7 @@ func TestAPIV1RequiresAuth(t *testing.T) {
 
 	routes := []string{
 		"GET /api/v1/me", "DELETE /api/v1/auth/token",
-		"GET /api/v1/library", "GET /api/v1/library/1", "GET /api/v1/covers/1", "GET /api/v1/volumes/1/cover",
+		"GET /api/v1/library", "GET /api/v1/library/1", "GET /api/v1/covers/1", "GET /api/v1/banners/1", "GET /api/v1/volumes/1/cover",
 		"GET /api/v1/reader/titles/1", "GET /api/v1/reader/titles/1/manifest",
 		"GET /api/v1/reader/chapters/1/pages/1", "GET /api/v1/reader/volumes/1/pages/1",
 		"POST /api/v1/reader/chapters/1/pages", "POST /api/v1/reader/chapters/1/complete",
@@ -473,6 +492,7 @@ func TestAPIV1RequiresAuth(t *testing.T) {
 		"POST /api/v1/reader/progress/batch", "POST /api/v1/reader/volumes/1/read",
 		"POST /api/v1/reader/volumes/1/unread", "POST /api/v1/reader/titles/1/volumes/read-range",
 		"PUT /api/v1/library/1/favourite", "DELETE /api/v1/library/1/favourite",
+		"PUT /api/v1/library/1/rating", "POST /api/v1/library/1/rating/missing",
 		"PATCH /api/v1/library/1", "DELETE /api/v1/library/1",
 		"GET /api/v1/collections", "POST /api/v1/collections", "GET /api/v1/collections/1",
 		"PATCH /api/v1/collections/1", "DELETE /api/v1/collections/1",
@@ -481,7 +501,7 @@ func TestAPIV1RequiresAuth(t *testing.T) {
 		"GET /api/v1/screens", "POST /api/v1/screens", "PATCH /api/v1/screens/1",
 		"DELETE /api/v1/screens/1", "POST /api/v1/screens/reorder",
 		"GET /api/v1/me/settings", "PUT /api/v1/me/settings",
-		"GET /api/v1/anilist", "POST /api/v1/anilist/sync", "DELETE /api/v1/anilist",
+		"POST /api/v1/trackers/sync", "PUT /api/v1/trackers/order", "PUT /api/v1/trackers/anilist/settings",
 		"GET /api/v1/wanted/search", "GET /api/v1/wanted/trending", "GET /api/v1/wanted",
 		"POST /api/v1/wanted", "GET /api/v1/wanted/matches", "POST /api/v1/wanted/matches",
 		"POST /api/v1/wanted/track",
@@ -588,5 +608,213 @@ func TestAPIV1LoginReplacesDeviceToken(t *testing.T) {
 		if rec := do(t, api, http.MethodGet, "/api/v1/me", tok, nil); rec.Code != http.StatusOK {
 			t.Fatalf("%s token rejected: %d", name, rec.Code)
 		}
+	}
+}
+
+func TestAPIV1LibraryAndJobsPaginateInSQL(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	var ids []int64
+	for i := 1; i <= 5; i++ {
+		ids = append(ids, seedTitle(t, dbPath, fmt.Sprintf("https://x.test/%d", i), fmt.Sprintf("T%d", i), 1))
+	}
+	db, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO catalog_manga(provider, provider_id, is_adult) VALUES ('anilist', 'adult', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE titles SET catalog_manga_id = (SELECT id FROM catalog_manga) WHERE id = ?`, ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	api := New(svc, nil, nil)
+
+	type page struct {
+		Items []titleDTO `json:"items"`
+		Next  string     `json:"next_cursor"`
+		Total int        `json:"total"`
+	}
+	get := func(path, token string) page {
+		t.Helper()
+		var p page
+		rec := do(t, api, http.MethodGet, path, token, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d %s", path, rec.Code, rec.Body.String())
+		}
+		_ = json.NewDecoder(rec.Body).Decode(&p)
+		return p
+	}
+	names := func(p page) string {
+		var out []string
+		for _, it := range p.Items {
+			out = append(out, it.DisplayTitle)
+		}
+		return strings.Join(out, ",")
+	}
+	if p := get("/api/v1/library?limit=2&sort=title&dir=desc", ""); names(p) != "T5,T4" || p.Next != "2" || p.Total != 5 {
+		t.Fatalf("first page = %s next=%q total=%d", names(p), p.Next, p.Total)
+	}
+	if p := get("/api/v1/library?limit=2&sort=title&dir=desc&cursor=4", ""); names(p) != "T1" || p.Next != "" {
+		t.Fatalf("last page = %s next=%q", names(p), p.Next)
+	}
+	if p := get("/api/v1/library?cursor=10", ""); len(p.Items) != 0 || p.Total != 5 {
+		t.Fatalf("past end = %+v", p)
+	}
+	if p := get("/api/v1/library?q=t3", ""); names(p) != "T3" {
+		t.Fatalf("search = %s", names(p))
+	}
+
+	ctx := context.Background()
+	roles, _ := svc.Auth().ListRoles(ctx)
+	for _, ro := range roles {
+		if ro.Name == "member" {
+			if err := svc.Auth().CreateUser(ctx, "reader", "pass12345", ro.ID, auth.ContentGuards{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	token, err := svc.Auth().CreateAPIToken(ctx, func() int64 {
+		users, _ := svc.Auth().ListUsers(ctx)
+		for _, u := range users {
+			if u.Username == "reader" {
+				return u.ID
+			}
+		}
+		return 0
+	}(), "test", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KAODOKU_ADMIN_USER", "boss")
+	t.Setenv("KAODOKU_ADMIN_PASSWORD", "secret123")
+	if p := get("/api/v1/library?sort=title", token); p.Total != 4 || strings.Contains(names(p), "T3") {
+		t.Fatalf("restricted library = %s total=%d", names(p), p.Total)
+	}
+	t.Setenv("KAODOKU_ADMIN_USER", "")
+	t.Setenv("KAODOKU_ADMIN_PASSWORD", "")
+
+	for _, id := range ids[:3] {
+		if _, err := svc.Enqueue(ctx, "scan_downloads", id, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var jl struct {
+		Items []jobDTO `json:"items"`
+		Next  string   `json:"next_cursor"`
+	}
+	rec := do(t, api, http.MethodGet, "/api/v1/jobs?limit=2", "", nil)
+	_ = json.NewDecoder(rec.Body).Decode(&jl)
+	if len(jl.Items) != 2 || jl.Next == "" || jl.Items[0].ID < jl.Items[1].ID {
+		t.Fatalf("jobs page 1 = %+v next=%q", jl.Items, jl.Next)
+	}
+	cursor := jl.Next
+	jl.Items, jl.Next = nil, ""
+	rec = do(t, api, http.MethodGet, "/api/v1/jobs?limit=2&status=queued&cursor="+cursor, "", nil)
+	_ = json.NewDecoder(rec.Body).Decode(&jl)
+	if c, _ := strconv.ParseInt(cursor, 10, 64); len(jl.Items) != 1 || jl.Next != "" || jl.Items[0].ID >= c {
+		t.Fatalf("jobs page 2 = %+v next=%q", jl.Items, jl.Next)
+	}
+	jl.Items = nil
+	rec = do(t, api, http.MethodGet, "/api/v1/jobs?status=done", "", nil)
+	_ = json.NewDecoder(rec.Body).Decode(&jl)
+	if len(jl.Items) != 0 {
+		t.Fatalf("done jobs = %+v", jl.Items)
+	}
+}
+
+func TestAPIV1TitleBanner(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	plain := seedTitle(t, dbPath, "https://x.test/plain", "Plain", 1)
+	withBanner := seedTitle(t, dbPath, "https://x.test/banner", "Banner", 1)
+	db, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO catalog_manga(provider, provider_id, banner_image) VALUES ('anilist', '1', 'https://img.test/b.jpg')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE titles SET catalog_manga_id = (SELECT id FROM catalog_manga) WHERE id = ?`, withBanner); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	api := New(svc, nil, nil)
+
+	for id, want := range map[int64]string{plain: "", withBanner: fmt.Sprintf("/api/v1/banners/%d", withBanner)} {
+		var dto titleDTO
+		_ = json.NewDecoder(do(t, api, http.MethodGet, fmt.Sprintf("/api/v1/library/%d", id), "", nil).Body).Decode(&dto)
+		if dto.BannerImage != want {
+			t.Fatalf("title %d banner_image = %q, want %q", id, dto.BannerImage, want)
+		}
+	}
+	if rec := do(t, api, http.MethodGet, fmt.Sprintf("/api/v1/banners/%d", plain), "", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("banner without image = %d, want 404", rec.Code)
+	}
+}
+
+func TestAPIV1TrackerSettingsKeepWhatClientsDontSend(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	t.Setenv("KAODOKU_ADMIN_PASSWORD", "")
+	db, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO tracker_accounts (user_id, provider, access_token, exclusive) VALUES (1, 'anilist', 'x', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"auto_link": true, "auto_progressive": true, "relations": true, "recommendations": true, "rating_sync": "", "source": "kaodoku"}
+	if rec := do(t, New(svc, nil, nil), http.MethodPut, "/api/v1/trackers/anilist/settings", "", body); rec.Code != http.StatusOK {
+		t.Fatalf("settings = %d %s", rec.Code, rec.Body)
+	}
+	if a := svc.TrackerAccounts(context.Background(), 1); len(a) != 1 || !a[0].Exclusive || !a[0].AutoProgressive {
+		t.Fatalf("accounts = %+v, want exclusive kept and progressive set", a)
+	}
+}
+
+func TestAPIV1TagsGrouped(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	db, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = catalog.NewRepository(db).ReplaceContentTags(context.Background(), catalog.AniListProvider,
+		[]catalog.ContentTag{{Name: "Action", Kind: "genre"}, {Name: "Isekai", Kind: "tag", Category: "Theme-Fantasy"}, {Name: "Loner", Kind: "tag"}})
+	_ = db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Items []struct{ Name, Group string } `json:"items"`
+	}
+	_ = json.NewDecoder(do(t, New(svc, nil, nil), http.MethodGet, "/api/v1/tags", "", nil).Body).Decode(&got)
+	groups := map[string]string{}
+	for _, it := range got.Items {
+		groups[it.Name] = it.Group
+	}
+	want := map[string]string{"Action": "Genres", "Isekai": "Theme – Fantasy", "Loner": "Other"}
+	if !reflect.DeepEqual(groups, want) {
+		t.Fatalf("tag groups = %v, want %v", groups, want)
 	}
 }

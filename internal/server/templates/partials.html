@@ -7,7 +7,7 @@
 {{define "matches"}}
 {{if .Active}}
 <div id="{{.DomID}}" class="flex items-center gap-2 py-2" hx-get="{{.PollURL}}" hx-trigger="load delay:1200ms" hx-swap="outerHTML">
-  <span class="loading loading-spinner loading-sm"></span> <span class="text-sm text-base-content/60">Searching sources…</span>
+  {{if .Queued}}<span class="text-sm text-base-content/60">Search queued</span>{{else}}<span class="loading loading-spinner loading-sm"></span> <span class="text-sm text-base-content/60">Searching sources...</span>{{end}}
 </div>
 {{else}}
 <div id="{{.DomID}}">
@@ -67,6 +67,32 @@
 </button>
 {{end}}
 
+{{define "titleRating"}}
+<form id="title-rating" class="flex flex-wrap items-center gap-2" hx-post="/ui/library/{{.TitleID}}/rating" hx-trigger="change" hx-swap="outerHTML">
+  <div class="rating" title="Your rating">
+    <input type="radio" name="rating" value="0" aria-label="No rating"{{if not .Rating}} checked{{end}}>
+    <input type="radio" name="rating" value="1" aria-label="1 out of 10"{{if eq .Rating 1}} checked{{end}}>
+    <input type="radio" name="rating" value="2" aria-label="2 out of 10"{{if eq .Rating 2}} checked{{end}}>
+    <input type="radio" name="rating" value="3" aria-label="3 out of 10"{{if eq .Rating 3}} checked{{end}}>
+    <input type="radio" name="rating" value="4" aria-label="4 out of 10"{{if eq .Rating 4}} checked{{end}}>
+    <input type="radio" name="rating" value="5" aria-label="5 out of 10"{{if eq .Rating 5}} checked{{end}}>
+    <input type="radio" name="rating" value="6" aria-label="6 out of 10"{{if eq .Rating 6}} checked{{end}}>
+    <input type="radio" name="rating" value="7" aria-label="7 out of 10"{{if eq .Rating 7}} checked{{end}}>
+    <input type="radio" name="rating" value="8" aria-label="8 out of 10"{{if eq .Rating 8}} checked{{end}}>
+    <input type="radio" name="rating" value="9" aria-label="9 out of 10"{{if eq .Rating 9}} checked{{end}}>
+    <input type="radio" name="rating" value="10" aria-label="10 out of 10"{{if eq .Rating 10}} checked{{end}}>
+  </div>
+  {{if .Rating}}<span class="text-sm tabular-nums text-base-content/70">{{.Rating}}/10</span>
+  <button type="button" class="btn btn-ghost btn-xs" hx-post="/ui/library/{{.TitleID}}/rating" hx-vals='{"rating":"0"}' hx-target="#title-rating" hx-swap="outerHTML">Clear</button>{{end}}
+  {{with .From}}<span class="text-xs text-base-content/50">from {{.}}</span>{{end}}
+  {{range .Missing}}<div class="flex w-full flex-wrap items-center gap-2 text-sm">
+    <span class="text-base-content/70">{{.Label}} has no rating for this title.</span>
+    <button type="button" class="btn btn-xs" hx-post="/ui/library/{{$.TitleID}}/rating/missing" hx-vals='{"provider":"{{.Provider}}","action":"send"}' hx-target="#title-rating" hx-swap="outerHTML">Send {{$.Rating}}/10</button>
+    <button type="button" class="btn btn-ghost btn-xs" hx-post="/ui/library/{{$.TitleID}}/rating/missing" hx-vals='{"provider":"{{.Provider}}","action":"keep"}' hx-target="#title-rating" hx-swap="outerHTML">Keep</button>
+  </div>{{end}}
+</form>
+{{end}}
+
 {{define "monitorBadge"}}
 <span class="inline-flex h-6 w-6 items-center justify-center" title="{{if .Monitored}}Monitored{{else}}Not monitored{{end}}">
   {{if .Monitored}}<span class="text-warning leading-none">{{template "iconBellRing"}}</span>{{else}}<span class="text-base-content/40 leading-none">{{template "iconBellOff"}}</span>{{end}}
@@ -92,7 +118,7 @@
 <div id="act-{{.Title.ID}}" {{if .Running}}hx-get="/ui/library/{{.Title.ID}}/activity" hx-trigger="load delay:1200ms" hx-swap="outerHTML"{{end}}>
   {{if or .ActiveLabel .Queued}}
   <div class="alert py-2">
-    {{if .ActiveLabel}}<span class="loading loading-spinner loading-sm"></span><span class="text-sm">{{.ActiveLabel}}…</span>{{end}}
+    {{if .ActiveLabel}}<span class="loading loading-spinner loading-sm"></span><span class="text-sm">{{.ActiveLabel}}...</span>{{end}}
     {{if .Queued}}{{if .ActiveLabel}}<span class="text-base-content/40">·</span>{{end}}<span class="text-base-content/60">{{template "iconClock"}}</span><span class="text-sm text-base-content/60">queued: {{range $i, $q := .Queued}}{{if $i}} · {{end}}{{$q}}{{end}}</span>{{end}}
   </div>
   {{else if .Failed}}<div class="alert alert-error alert-soft py-2"><span class="text-sm">failed{{if .Error}} — {{.Error}}{{end}}</span></div>

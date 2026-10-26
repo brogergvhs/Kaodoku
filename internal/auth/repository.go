@@ -29,7 +29,7 @@ func boolInt(b bool) int {
 
 // Service manages users, roles and sessions.
 type Service struct {
-	db      *sql.DB
+	db      database.Handle
 	touched sync.Map // session token hash -> last_seen_at write
 	loginMu sync.Mutex
 	logins  map[string]*loginState
@@ -45,7 +45,9 @@ const (
 	loginLockWindow = 15 * time.Minute
 )
 
-func NewService(db *sql.DB) *Service { return &Service{db: db, logins: map[string]*loginState{}} }
+func NewService(db database.Handle) *Service {
+	return &Service{db: db, logins: map[string]*loginState{}}
+}
 
 // loginAllowed rejects a username that has hit the failed-attempt cap within
 // the lock window.
@@ -320,7 +322,7 @@ func (s *Service) Logout(ctx context.Context, token string) {
 }
 
 const userSelect = `
-	SELECT u.id, u.username, u.origin, u.allow_adult, u.blocked_tags, u.allowed_tags, u.oidc_subject, u.pending, u.created_at, r.id, r.name, r.permissions_json
+	SELECT u.id, u.username, u.origin, u.allow_adult, u.blocked_tags, u.allowed_tags, u.blocked_providers, u.oidc_subject, u.pending, u.created_at, r.id, r.name, r.permissions_json
 	FROM users u JOIN roles r ON r.id = u.role_id`
 
 // GetUser loads one user with its role and permissions.
@@ -334,15 +336,16 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 
 func scanUser(row database.Scanner) (*User, error) {
 	var u User
-	var created, perms, blocked, allowed string
+	var created, perms, blocked, allowed, providers string
 	var allowAdult, pending int
-	if err := row.Scan(&u.ID, &u.Username, &u.Origin, &allowAdult, &blocked, &allowed, &u.OIDCSubject, &pending, &created, &u.RoleID, &u.RoleName, &perms); err != nil {
+	if err := row.Scan(&u.ID, &u.Username, &u.Origin, &allowAdult, &blocked, &allowed, &providers, &u.OIDCSubject, &pending, &created, &u.RoleID, &u.RoleName, &perms); err != nil {
 		return nil, err
 	}
 	u.AllowAdult = allowAdult != 0
 	u.Pending = pending != 0
 	_ = json.Unmarshal([]byte(blocked), &u.BlockedTags)
 	_ = json.Unmarshal([]byte(allowed), &u.AllowedTags)
+	_ = json.Unmarshal([]byte(providers), &u.BlockedProviders)
 	u.CreatedAt, _ = database.ParseTime(created)
 	var list []string
 	_ = json.Unmarshal([]byte(perms), &list)
@@ -373,9 +376,17 @@ func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 
 // ContentGuards is a user's per-user content restriction set.
 type ContentGuards struct {
-	AllowAdult  bool
-	BlockedTags []string
-	AllowedTags []string
+	AllowAdult       bool
+	BlockedTags      []string
+	AllowedTags      []string
+	BlockedProviders []string
+}
+
+func (g ContentGuards) encode() (blocked, allowed, providers string) {
+	b, _ := json.Marshal(g.BlockedTags)
+	a, _ := json.Marshal(g.AllowedTags)
+	p, _ := json.Marshal(g.BlockedProviders)
+	return string(b), string(a), string(p)
 }
 
 // CreateUser adds a local user.
@@ -401,11 +412,10 @@ func (s *Service) CreateUser(ctx context.Context, username, password string, rol
 	if err != nil {
 		return err
 	}
-	blocked, _ := json.Marshal(guards.BlockedTags)
-	allowed, _ := json.Marshal(guards.AllowedTags)
+	blocked, allowed, providers := guards.encode()
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (username, password_hash, role_id, origin, allow_adult, blocked_tags, allowed_tags) VALUES (?, ?, ?, 'local', ?, ?, ?)
-	`, username, string(hash), roleID, boolInt(guards.AllowAdult), string(blocked), string(allowed)); err != nil {
+		INSERT INTO users (username, password_hash, role_id, origin, allow_adult, blocked_tags, allowed_tags, blocked_providers) VALUES (?, ?, ?, 'local', ?, ?, ?, ?)
+	`, username, string(hash), roleID, boolInt(guards.AllowAdult), blocked, allowed, providers); err != nil {
 		return fmt.Errorf("create user %q: %w", username, err)
 	}
 	return nil
@@ -413,10 +423,9 @@ func (s *Service) CreateUser(ctx context.Context, username, password string, rol
 
 // UpdateUser changes a local user's role and optionally password.
 func (s *Service) UpdateUser(ctx context.Context, id int64, roleID int64, password string, guards ContentGuards) error {
-	blocked, _ := json.Marshal(guards.BlockedTags)
-	allowed, _ := json.Marshal(guards.AllowedTags)
+	blocked, allowed, providers := guards.encode()
 	if id == EnvAdminID {
-		_, err := s.db.ExecContext(ctx, `UPDATE users SET allow_adult = ?, blocked_tags = ?, allowed_tags = ? WHERE id = ?`, boolInt(guards.AllowAdult), string(blocked), string(allowed), id)
+		_, err := s.db.ExecContext(ctx, `UPDATE users SET allow_adult = ?, blocked_tags = ?, allowed_tags = ?, blocked_providers = ? WHERE id = ?`, boolInt(guards.AllowAdult), blocked, allowed, providers, id)
 		return err
 	}
 	if password != "" {
@@ -427,10 +436,10 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, roleID int64, passwo
 		if err != nil {
 			return err
 		}
-		_, err = s.db.ExecContext(ctx, `UPDATE users SET role_id = ?, allow_adult = ?, blocked_tags = ?, allowed_tags = ?, password_hash = ? WHERE id = ? AND origin != 'env'`, roleID, boolInt(guards.AllowAdult), string(blocked), string(allowed), string(hash), id)
+		_, err = s.db.ExecContext(ctx, `UPDATE users SET role_id = ?, allow_adult = ?, blocked_tags = ?, allowed_tags = ?, blocked_providers = ?, password_hash = ? WHERE id = ? AND origin != 'env'`, roleID, boolInt(guards.AllowAdult), blocked, allowed, providers, string(hash), id)
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET role_id = ?, allow_adult = ?, blocked_tags = ?, allowed_tags = ? WHERE id = ? AND origin != 'env'`, roleID, boolInt(guards.AllowAdult), string(blocked), string(allowed), id)
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET role_id = ?, allow_adult = ?, blocked_tags = ?, allowed_tags = ?, blocked_providers = ? WHERE id = ? AND origin != 'env'`, roleID, boolInt(guards.AllowAdult), blocked, allowed, providers, id)
 	return err
 }
 

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -13,11 +14,11 @@ import (
 
 // Repository persists canonical manga and source matches.
 type Repository struct {
-	db *sql.DB
+	db database.Handle
 }
 
 // NewRepository creates a catalog repository.
-func NewRepository(db *sql.DB) *Repository {
+func NewRepository(db database.Handle) *Repository {
 	return &Repository{db: db}
 }
 
@@ -54,15 +55,16 @@ func (r *Repository) UpsertManga(ctx context.Context, m Manga) (Manga, error) {
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO catalog_manga (
 			provider, provider_id, title_romaji, title_english, title_native,
-			description, cover_image, status, format, chapters, volumes, synonyms_json,
+			description, cover_image, banner_image, status, format, chapters, volumes, synonyms_json,
 			genres_json, authors_json, year, average_score, is_adult, tags_json, wanted, raw_json, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(provider, provider_id) DO UPDATE SET
 			title_romaji = excluded.title_romaji,
 			title_english = excluded.title_english,
 			title_native = excluded.title_native,
 			description = excluded.description,
 			cover_image = excluded.cover_image,
+			banner_image = excluded.banner_image,
 			status = excluded.status,
 			format = excluded.format,
 			chapters = excluded.chapters,
@@ -79,13 +81,56 @@ func (r *Repository) UpsertManga(ctx context.Context, m Manga) (Manga, error) {
 			updated_at = CURRENT_TIMESTAMP
 		RETURNING id
 	`, m.Provider, m.ProviderID, m.TitleRomaji, m.TitleEnglish, m.TitleNative, m.Description,
-		m.CoverImage, m.Status, m.Format, chapters, volumes, string(synonyms),
+		m.CoverImage, m.BannerImage, m.Status, m.Format, chapters, volumes, string(synonyms),
 		string(genres), string(authors), m.Year, m.AverageScore, database.BoolToInt(m.IsAdult), string(tags), database.BoolToInt(m.Wanted), m.RawJSON)
 	var id int64
 	if err := row.Scan(&id); err != nil {
 		return Manga{}, fmt.Errorf("upsert manga: %w", err)
 	}
+	for p, pid := range m.ExternalIDs {
+		if p != m.Provider && pid != "" {
+			if err := r.SetExternalID(ctx, id, ExternalID{Provider: p, ProviderID: pid, Method: "cross_link", Confirmed: true}); err != nil {
+				return Manga{}, err
+			}
+		}
+	}
 	return r.GetManga(ctx, id)
+}
+
+// ExternalID Method is cross_link, title_match, mangabaka, user, or miss (searched, nothing found).
+type ExternalID struct {
+	Provider   string
+	ProviderID string
+	Method     string
+	Confirmed  bool
+	CheckedAt  string
+}
+
+// SetExternalID stores a mapping; a user-made one is only replaced by another, and a MangaBaka one never replaces a confirmed link.
+func (r *Repository) SetExternalID(ctx context.Context, catalogID int64, e ExternalID) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO catalog_external_ids (catalog_manga_id, provider, provider_id, method, confirmed, checked_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(catalog_manga_id, provider) DO UPDATE SET
+			provider_id = excluded.provider_id, method = excluded.method,
+			confirmed = excluded.confirmed, checked_at = CURRENT_TIMESTAMP
+		WHERE (catalog_external_ids.method != 'user' OR excluded.method = 'user')
+			AND NOT (excluded.method = 'mangabaka' AND catalog_external_ids.confirmed = 1 AND catalog_external_ids.method != 'mangabaka')`,
+		catalogID, e.Provider, e.ProviderID, e.Method, database.BoolToInt(e.Confirmed))
+	return err
+}
+
+func (r *Repository) ExternalIDs(ctx context.Context, catalogID int64) ([]ExternalID, error) {
+	return database.Collect(ctx, r.db, func(row database.Scanner) (e ExternalID, err error) {
+		return e, row.Scan(&e.Provider, &e.ProviderID, &e.Method, &e.Confirmed, &e.CheckedAt)
+	}, `SELECT provider, provider_id, method, confirmed, checked_at FROM catalog_external_ids WHERE catalog_manga_id = ? ORDER BY provider`, catalogID)
+}
+
+func (r *Repository) CopyExternalIDs(ctx context.Context, fromID, toID int64) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO catalog_external_ids (catalog_manga_id, provider, provider_id, method, confirmed, checked_at)
+		SELECT ?, provider, provider_id, method, confirmed, checked_at FROM catalog_external_ids WHERE catalog_manga_id = ?`, toID, fromID)
+	return err
 }
 
 // DeleteMatches drops all cached source decisions for a manga, forcing the
@@ -95,7 +140,7 @@ func (r *Repository) DeleteMatches(ctx context.Context, catalogMangaID int64) er
 	return err
 }
 
-// Relation is an AniList media relation to another manga, kept for grouping
+// Relation is a provider relation to another manga, kept for grouping
 // connected titles into collections.
 type Relation struct {
 	ProviderID string
@@ -152,32 +197,30 @@ func (r *Repository) CollectionEdges(ctx context.Context) ([][2]string, error) {
 	return out, rows.Err()
 }
 
-// ContentTag is one AniList genre or tag name, for content-guard pickers.
+// ContentTag is one provider genre or tag name, for filters and content-guard pickers.
 type ContentTag struct {
-	Name    string
-	Kind    string // "genre" or "tag"
-	IsAdult bool
+	Name        string
+	Kind        string // "genre" or "tag"
+	Category    string // tag group, e.g. AniList's "Theme-Fantasy"; empty for genres
+	Description string
+	Slug        string // provider filter key when it differs from Name
+	IsAdult     bool
 }
 
-// ReplaceContentTags swaps the stored tag/genre vocabulary.
-func (r *Repository) ReplaceContentTags(ctx context.Context, genres []string, tags []ContentTag) error {
+// ReplaceContentTags swaps one provider's stored vocabulary.
+func (r *Repository) ReplaceContentTags(ctx context.Context, provider string, tags []ContentTag) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM content_tags`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM provider_tags WHERE provider = ?`, provider); err != nil {
 		return err
-	}
-	for _, name := range cleanStrings(genres) {
-		adult := strings.EqualFold(name, "Hentai")
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_tags (name, kind, is_adult) VALUES (?, 'genre', ?)`, name, adult); err != nil {
-			return err
-		}
 	}
 	for _, t := range tags {
 		if name := strings.TrimSpace(t.Name); name != "" {
-			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO content_tags (name, kind, is_adult) VALUES (?, 'tag', ?)`, name, t.IsAdult); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO provider_tags (provider, name, kind, category, description, slug, is_adult) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				provider, name, cmp.Or(t.Kind, "tag"), t.Category, t.Description, t.Slug, t.IsAdult || AdultName(name)); err != nil {
 				return err
 			}
 		}
@@ -185,9 +228,25 @@ func (r *Repository) ReplaceContentTags(ctx context.Context, genres []string, ta
 	return tx.Commit()
 }
 
-// ContentTags lists the stored vocabulary, genres first, alphabetical within.
+// ContentTags merges every provider's vocabulary by name; a name adult anywhere stays adult.
 func (r *Repository) ContentTags(ctx context.Context) ([]ContentTag, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT name, kind, is_adult FROM content_tags ORDER BY kind = 'genre' DESC, name COLLATE NOCASE`)
+	return r.contentTags(ctx, `SELECT name, MIN(kind), MAX(category), MAX(description), '', MAX(is_adult) FROM provider_tags
+		GROUP BY name COLLATE NOCASE ORDER BY MIN(kind) = 'genre' DESC, MAX(category) COLLATE NOCASE, name COLLATE NOCASE`)
+}
+
+// ProviderTags lists one provider's vocabulary, genres first.
+func (r *Repository) ProviderTags(ctx context.Context, provider string) ([]ContentTag, error) {
+	return r.contentTags(ctx, `SELECT name, kind, category, description, slug, is_adult FROM provider_tags WHERE provider = ?
+		ORDER BY kind = 'genre' DESC, category COLLATE NOCASE, name COLLATE NOCASE`, provider)
+}
+
+func (r *Repository) HasProviderTags(ctx context.Context, provider string) bool {
+	var one int
+	return r.db.QueryRowContext(ctx, `SELECT 1 FROM provider_tags WHERE provider = ? LIMIT 1`, provider).Scan(&one) == nil
+}
+
+func (r *Repository) contentTags(ctx context.Context, query string, args ...any) ([]ContentTag, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +254,7 @@ func (r *Repository) ContentTags(ctx context.Context) ([]ContentTag, error) {
 	var out []ContentTag
 	for rows.Next() {
 		var t ContentTag
-		if err := rows.Scan(&t.Name, &t.Kind, &t.IsAdult); err != nil {
+		if err := rows.Scan(&t.Name, &t.Kind, &t.Category, &t.Description, &t.Slug, &t.IsAdult); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -230,6 +289,26 @@ func (r *Repository) MangaByIDs(ctx context.Context, ids []int64) (map[int64]Man
 	return out, rows.Err()
 }
 
+// MangaAuthors loads only ID, Provider, ProviderID and Authors for the given manga.
+func (r *Repository) MangaAuthors(ctx context.Context, ids []int64) (map[int64]Manga, error) {
+	raw, _ := json.Marshal(ids)
+	out := make(map[int64]Manga, len(ids))
+	err := database.Each(ctx, r.db, `SELECT id, provider, provider_id, authors_json FROM catalog_manga WHERE id IN (SELECT value FROM json_each(?))`, []any{string(raw)}, func(row database.Scanner) error {
+		var m Manga
+		var authors string
+		if err := row.Scan(&m.ID, &m.Provider, &m.ProviderID, &authors); err != nil {
+			return err
+		}
+		err := json.Unmarshal([]byte(authors), &m.Authors)
+		out[m.ID] = m
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load manga authors: %w", err)
+	}
+	return out, nil
+}
+
 func (r *Repository) GetManga(ctx context.Context, id int64) (Manga, error) {
 	row := r.db.QueryRowContext(ctx, mangaSelect()+` WHERE id = ?`, id)
 	m, err := scanManga(row)
@@ -254,6 +333,20 @@ func (r *Repository) MangaByProvider(ctx context.Context, provider, providerID s
 		return Manga{}, false, fmt.Errorf("get manga by provider: %w", err)
 	}
 	return m, true, nil
+}
+
+// MangaByProviderIDs returns stored manga of one provider keyed by provider id, in one query.
+func (r *Repository) MangaByProviderIDs(ctx context.Context, provider string, ids []string) (map[string]Manga, error) {
+	raw, _ := json.Marshal(ids)
+	list, err := database.Collect(ctx, r.db, scanManga, mangaSelect()+` WHERE provider = ? AND provider_id IN (SELECT value FROM json_each(?))`, provider, string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("load manga by provider ids: %w", err)
+	}
+	out := make(map[string]Manga, len(list))
+	for _, m := range list {
+		out[m.ProviderID] = m
+	}
+	return out, nil
 }
 
 // ListWanted returns wanted canonical titles.
@@ -292,6 +385,11 @@ func (r *Repository) RecordMatchMiss(ctx context.Context, catalogMangaID int64, 
 // turned usable is retried immediately instead of after the 24h cache.
 func (r *Repository) ClearMissesForSource(ctx context.Context, sourceID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM title_source_matches WHERE source_id = ? AND match_method = 'miss'`, sourceID)
+	return err
+}
+
+func (r *Repository) MoveMatches(ctx context.Context, fromID, toID int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE OR IGNORE title_source_matches SET catalog_manga_id = ? WHERE catalog_manga_id = ?`, toID, fromID)
 	return err
 }
 
@@ -364,7 +462,7 @@ func (r *Repository) ListMatches(ctx context.Context, catalogMangaID int64) ([]M
 func mangaSelect() string {
 	return `
 		SELECT id, provider, provider_id, title_romaji, title_english, title_native,
-			description, cover_image, status, format, chapters, volumes, synonyms_json,
+			description, cover_image, banner_image, status, format, chapters, volumes, synonyms_json,
 			genres_json, authors_json, year, average_score, COALESCE(is_adult, 0), COALESCE(tags_json, '[]'), wanted, raw_json, updated_at
 		FROM catalog_manga`
 }
@@ -377,14 +475,14 @@ func matchSelect() string {
 		FROM title_source_matches`
 }
 
-func scanManga(row interface{ Scan(...any) error }) (Manga, error) {
+func scanManga(row database.Scanner) (Manga, error) {
 	var m Manga
 	var chapters, volumes sql.NullInt64
 	var synonymsJSON, genresJSON, authorsJSON, tagsJSON string
 	var wanted, isAdult int
 	var updated string
 	if err := row.Scan(&m.ID, &m.Provider, &m.ProviderID, &m.TitleRomaji, &m.TitleEnglish,
-		&m.TitleNative, &m.Description, &m.CoverImage, &m.Status, &m.Format, &chapters, &volumes,
+		&m.TitleNative, &m.Description, &m.CoverImage, &m.BannerImage, &m.Status, &m.Format, &chapters, &volumes,
 		&synonymsJSON, &genresJSON, &authorsJSON, &m.Year, &m.AverageScore, &isAdult, &tagsJSON, &wanted, &m.RawJSON, &updated); err != nil {
 		return Manga{}, err
 	}
@@ -420,7 +518,7 @@ func scanManga(row interface{ Scan(...any) error }) (Manga, error) {
 	return m, nil
 }
 
-func scanMatch(row interface{ Scan(...any) error }) (Match, error) {
+func scanMatch(row database.Scanner) (Match, error) {
 	var m Match
 	var updated string
 	if err := row.Scan(&m.ID, &m.CatalogMangaID, &m.SourceID, &m.SourceURL, &m.Title,

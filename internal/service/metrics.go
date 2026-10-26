@@ -31,7 +31,7 @@ const (
 )
 
 // genuineJoin restricts chapter_read_pages to chapters read
-// in-app page-by-page (manual = 0), excluding bulk/AniList marks that carry no
+// in-app page-by-page (manual = 0), excluding bulk/tracker marks that carry no
 // real timing. Every time-based metric joins through it.
 const genuineJoin = `JOIN chapter_read_progress crp ON crp.user_id = cp.user_id AND crp.chapter_id = cp.chapter_id AND crp.manual = 0`
 
@@ -75,7 +75,7 @@ type PersonalMetrics struct {
 	ChaptersRead              int64 // window, genuinely read (page-by-page)
 	PagesRead                 int64 // window, genuine
 	ChaptersActuallyReadTotal int64 // all-time, read in-app page-by-page
-	ChaptersMarkedTotal       int64 // all-time, bulk/AniList-marked (read elsewhere)
+	ChaptersMarkedTotal       int64 // all-time, bulk/tracker-marked (read elsewhere)
 	PagesReadTotal            int64 // all-time, genuine
 	VolumesReadTotal          int64
 	TitlesCompleted           int64
@@ -109,7 +109,7 @@ func (s *JobService) PersonalMetrics(ctx context.Context, userID int64, days int
 	since := database.FormatTime(time.Now().AddDate(0, 0, -days))
 
 	// "Genuine" = pages/chapters read in-app page-by-page (manual = 0). Bulk and
-	// AniList marks (manual = 1) are counted separately and excluded from page
+	// tracker marks (manual = 1) are counted separately and excluded from page
 	// counts and every time-based metric, since they carry no real timing.
 	m.PagesReadTotal = s.count(ctx, `SELECT COUNT(*) FROM chapter_read_pages cp `+genuineJoin+` WHERE cp.user_id = ?`, userID)
 	m.PagesRead = s.count(ctx, `SELECT COUNT(*) FROM chapter_read_pages cp `+genuineJoin+` WHERE cp.user_id = ? AND cp.read_at >= ?`, userID, since)
@@ -565,6 +565,7 @@ type OverviewMetrics struct {
 	Downloads               DownloadStats
 	Sources                 []NamedCount
 	Jobs                    []NamedCount
+	TrackerRequests         []TrackerRequests
 	System                  SystemStats
 }
 
@@ -644,6 +645,7 @@ func (s *JobService) OverviewMetrics(ctx context.Context, allowAdult bool) (Over
 	m.Downloads = s.downloadStats(ctx)
 	m.Sources = s.leaderboard(ctx, `SELECT status, COUNT(*) FROM sources GROUP BY status ORDER BY 2 DESC`)
 	m.Jobs = s.leaderboard(ctx, `SELECT status, COUNT(*) FROM jobs GROUP BY status ORDER BY 2 DESC`)
+	m.TrackerRequests = s.TrackerRequestStats(ctx)
 	m.System = s.systemStats()
 	return m, nil
 }

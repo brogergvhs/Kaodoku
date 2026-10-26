@@ -73,37 +73,57 @@ lighter stack and still use most built-ins:
 
 Sources you add yourself may need one or both of these depending on the site.
 
-### Kotatsu sources (optional sidecar)
+Both are off in the example Compose file. To turn one on, uncomment its service
+and depends_on entry in `docker-compose.yml` and its variables in `.env`.
+
+### Kotatsu sources (optional)
 
 The optional [`kotatsu-worker`](kotatsu-worker/README.md) sidecar unlocks a
 bunch of sources from [kotatsu-parsers-redo](https://github.com/Kotatsu-Redo/kotatsu-parsers-redo).
-Enable it, point Kaodoku at the worker, then browse and import those sources
-on the **Sources** page. It (can) reuse the same FlareSolverr and
+Uncomment it in `docker-compose.yml` and its variables in `.env`, then browse
+and import those sources on the **Sources** page. It (can) reuse the same FlareSolverr and
 browser-worker helpers, so Cloudflare- and JS-gated kotatsu sources work (mostly).
 See the sidecar's README for [setup](./kotatsu-worker).
 
+### MangaBaka DB (optional)
+
+Turn on **Use MangaBaka** under **Server -> MangaBaka** to download the open
+[MangaBaka](https://mangabaka.org) database (checked weekly by default). Kaodoku
+then links titles across AniList, MyAnimeList, Kitsu and MangaUpdates from it,
+merges duplicate related titles, fills in details and covers, and can search it
+offline. In aggressive mode (on by default) related titles, recommendations and
+trending come only from MangaBaka, and trackers are asked only when you click
+**Fetch from...**. Links made from MangaBaka can be reviewed per tracker. MangaBaka
+can also be connected as a tracker with a personal access token. Its data is
+CC BY-NC-SA 4.0: personal, non-commercial use with credit.
+
 ## Quick start (Docker Compose)
 
-The recommended way to run Kaodoku is Docker Compose. A working example with all
-services wired up is in [`docker-compose.example.yml`](docker-compose.example.yml).
+The recommended way to run Kaodoku is Docker Compose:
 
 ```bash
 cp docker-compose.example.yml docker-compose.yml
+cp .env.example .env
 docker compose up -d --build
 ```
 
+Settings live in `.env`, and each one is explained in
+[`.env.example`](.env.example). Everything in both example files that's optional
+is commented out, so the copies work as is. Uncomment what you need, such as an
+admin password to require sign-in, OIDC, or the helper services below.
+
 Open <http://127.0.0.1:8080>.
 
-By default the example binds only to `127.0.0.1` (local machine). 
+By default the example binds only to `127.0.0.1` (local machine).
 
 ### Single-user vs. accounts
 
 - **No login (default).** If `KAODOKU_ADMIN_PASSWORD` is unset, Kaodoku runs
   single-user with no sign-in.
-- **Accounts.** Set `KAODOKU_ADMIN_USER` and `KAODOKU_ADMIN_PASSWORD` to enable
-  sign-in. That environment admin is immutable in-app and manages further users,
-  roles, and permissions from the **Users** page. Each user then has their own
-  progress, favourites, AniList connection, and content guards.
+- **Accounts.** Set `KAODOKU_ADMIN_USER` and `KAODOKU_ADMIN_PASSWORD` in `.env`
+  to enable sign-in. That environment admin is immutable in-app and manages
+  further users, roles, and permissions from the **Users** page. Each user then
+  has their own progress, favourites, AniList connection, and content guards.
 
 ## Using it
 
@@ -120,7 +140,7 @@ Once the server is up:
 4. **Let it download.** The scheduler discovers and downloads chapters in the
    background; you can also trigger "Download missing", "Refresh chapters", or
    "Scan files" per title from its actions menu. Watch progress under
-   **Management → jobs**.
+   **Management -> jobs**.
 5. **Read and track.** Open a title and read. Progress is saved
    automatically; mark chapters read/unread, export a chapter or a range as
    CBZ/ZIP, and organize titles into Collections. If AniList is connected, your
@@ -137,22 +157,13 @@ reading. Titles others added can still be planned manually from the title's
 
 ## Configuration
 
-Configuration is via environment variables (see the compose example) and a few
-`serve` flags. All are optional; sensible defaults apply.
+Configuration is via environment variables and a few `serve` flags. All are
+optional; sensible defaults apply.
 
-### Environment variables
-
-| Variable | Purpose |
-| --- | --- |
-| `KAODOKU_ADMIN_USER` / `KAODOKU_ADMIN_PASSWORD` | Enable sign-in and define the environment admin. Unset = single-user, no login. |
-| `KAODOKU_DOWNLOAD_DIR` | Where CBZ files are written (mount a volume here). |
-| `KAODOKU_DB` | SQLite database path (the `--db` flag takes precedence). |
-| `KAODOKU_ENCRYPTION_KEY` | 64 hex chars; encrypts stored secrets (AniList tokens). If unset, a `kaodoku.key` is generated next to the database. |
-| `KAODOKU_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_REDIRECT_URL` | OIDC single sign-on (requires the admin password as break-glass). See the compose example for the optional role-mapping and auto-provisioning knobs. |
-| `KAODOKU_BROWSER_SOLVER_ENABLED` / `_ENDPOINT` / `_TIMEOUT_SECONDS` | FlareSolverr for Cloudflare-protected sites. |
-| `KAODOKU_BROWSER_DOWNLOADER_ENABLED` / `_ENDPOINT` / `_TIMEOUT_SECONDS` | Headless-browser worker for JS-rendered readers. |
-| `KAODOKU_KOTATSU_WORKER_ENABLED` / `_ENDPOINT` / `_API_KEY` | Kotatsu sidecar; the API key must match the worker's `WORKER_KEY`. See [`kotatsu-worker/README.md`](kotatsu-worker/README.md). |
-| `XDG_CONFIG_HOME` | Config directory (source definitions, profiles). |
+With Docker Compose, the variables live in `.env`; see
+[`.env.example`](.env.example) for what each one does. To run the binary
+directly, set the same variables in your shell, with the endpoints pointing at
+`localhost` instead of the Compose service names.
 
 ### `serve` flags
 
@@ -179,8 +190,13 @@ go build -o kaodoku ./main.go
 
 Most built-in sources work with just the binary. The few that need FlareSolverr
 or the browser-worker (see [Built-in sources](#built-in-sources)) require those
-services running and pointed at via the `KAODOKU_BROWSER_*` variables above; the
-Compose file wires all of them up.
+services running and pointed at via the `KAODOKU_BROWSER_*` variables in
+[`.env.example`](.env.example); the Compose file has all of them ready to
+uncomment.
+
+## Benchmarking
+
+See [`bench/`](bench/README.md).
 
 ## CLI one-off downloads
 

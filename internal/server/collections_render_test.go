@@ -73,8 +73,8 @@ func TestTitleActionsTemplatesRender(t *testing.T) {
 		t.Errorf("view-only user should get no actions menu, got %q", out)
 	}
 
-	rm := render("removeTitleDialog", titleDialogView{Title: library.Title{ID: 5, DisplayTitle: "Berserk"}, AniListConnected: true})
-	for _, want := range []string{"Remove Berserk?", "/ui/library/5/remove", "delete_anilist", "lib_title_dialog.close()"} {
+	rm := render("removeTitleDialog", titleDialogView{Title: library.Title{ID: 5, DisplayTitle: "Berserk"}, TrackersConnected: true})
+	for _, want := range []string{"Remove Berserk?", "/ui/library/5/remove", "delete_remote", "lib_title_dialog.close()"} {
 		if !strings.Contains(rm, want) {
 			t.Errorf("remove dialog missing %q in:\n%s", want, rm)
 		}

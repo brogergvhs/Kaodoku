@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/database"
+	"github.com/brogergvhs/kaodoku/internal/library"
 )
 
 // serveArchive streams a CBZ with Range/If-Modified-Since support.
@@ -133,8 +135,9 @@ func (a *apiV1) progressBatch(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	applied := 0
 	skipped := map[string]int{}
+	verdicts := map[[2]int64]string{}
+	var marks []library.ReadMark
 	for _, e := range body.Entries {
 		readAt := ""
 		if e.ReadAt != "" {
@@ -148,42 +151,51 @@ func (a *apiV1) progressBatch(w http.ResponseWriter, r *http.Request) {
 			}
 			readAt = database.FormatTime(t)
 		}
-		switch {
-		case e.ChapterID > 0:
-			status, err := a.svc.ChapterReadStatus(r.Context(), e.ChapterID)
-			if err != nil {
-				skipped["unknown_chapter"]++
-				continue
-			}
-			if !titleAllowed(r.Context(), a.svc, status.TitleID) {
-				skipped["blocked_title"]++
-				continue
-			}
-			if _, err := a.svc.MarkPageReadAt(r.Context(), e.ChapterID, e.Page, e.TotalPages, readAt); err != nil {
-				skipped["write_failed"]++
-				continue
-			}
-			applied++
-		case e.VolumeID > 0:
-			vol, err := a.svc.GetVolume(r.Context(), e.VolumeID)
-			if err != nil {
-				skipped["unknown_volume"]++
-				continue
-			}
-			if !titleAllowed(r.Context(), a.svc, vol.TitleID) {
-				skipped["blocked_title"]++
-				continue
-			}
-			if _, err := a.svc.MarkVolumePageRead(r.Context(), e.VolumeID, e.Page, e.TotalPages); err != nil {
-				skipped["write_failed"]++
-				continue
-			}
-			applied++
-		default:
+		if e.ChapterID <= 0 && e.VolumeID <= 0 {
 			skipped["no_id"]++
+			continue
 		}
+		key := [2]int64{e.ChapterID, e.VolumeID}
+		why, seen := verdicts[key]
+		if !seen {
+			why = a.readMarkSkip(r.Context(), e.ChapterID, e.VolumeID)
+			verdicts[key] = why
+		}
+		if why == "" && e.Page <= 0 {
+			why = "write_failed"
+		}
+		if why != "" {
+			skipped[why]++
+			continue
+		}
+		marks = append(marks, library.ReadMark{ChapterID: e.ChapterID, VolumeID: e.VolumeID, Page: e.Page, TotalPages: e.TotalPages, ReadAt: readAt})
+	}
+	if err := a.svc.ApplyReadMarks(r.Context(), marks); err != nil {
+		v1err(w, http.StatusInternalServerError, "internal", err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"applied": applied, "received": len(body.Entries), "skipped": skipped,
+		"applied": len(marks), "received": len(body.Entries), "skipped": skipped,
 	})
+}
+
+func (a *apiV1) readMarkSkip(ctx context.Context, chapterID, volumeID int64) string {
+	var titleID int64
+	if chapterID > 0 {
+		status, err := a.svc.ChapterReadStatus(ctx, chapterID)
+		if err != nil {
+			return "unknown_chapter"
+		}
+		titleID = status.TitleID
+	} else {
+		vol, err := a.svc.GetVolume(ctx, volumeID)
+		if err != nil {
+			return "unknown_volume"
+		}
+		titleID = vol.TitleID
+	}
+	if !titleAllowed(ctx, a.svc, titleID) {
+		return "blocked_title"
+	}
+	return ""
 }

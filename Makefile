@@ -16,7 +16,7 @@ GOCACHE         ?= $(CURDIR)/.cache/go-build
 VERSION         := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LD_FLAGS        := -X 'github.com/brogergvhs/kaodoku/cmd.Version=$(VERSION)'
 
-.PHONY: all build install run fmt vet test test-race lint check clean package
+.PHONY: all build install run fmt vet test test-race lint check clean package bench-seed bench-serve bench-serve-docker bench
 
 all: build
 
@@ -52,6 +52,27 @@ lint:
 	$(STATICCHECK) ./...
 
 check: fmt vet test lint
+
+BENCH_DATA      := $(CURDIR)/bench/data
+BENCH_CBZ       ?= $(BENCH_DATA)/cbz
+BENCH_ENV       := XDG_CONFIG_HOME=$(BENCH_DATA)/config KAODOKU_DOWNLOAD_DIR=$(BENCH_DATA) KAODOKU_ADMIN_USER=bench KAODOKU_ADMIN_PASSWORD=bench
+CPUS            ?= 1
+MEM             ?= 2g
+
+bench-seed:
+	$(GORUN) ./bench/seed -dir $(BENCH_DATA) -cbz "$(BENCH_CBZ)" $(ARGS)
+
+bench-serve: build
+	$(BENCH_ENV) $(BIN)/$(APP) serve --db $(BENCH_DATA)/kaodoku.db --addr 127.0.0.1:8090
+
+bench-serve-docker:
+	docker build -t kaodoku-bench .
+	docker run --rm --cpus=$(CPUS) --memory=$(MEM) --memory-swap=$(MEM) -p 127.0.0.1:8090:8090 \
+	-v $(BENCH_DATA):$(BENCH_DATA) -v "$(BENCH_CBZ):$(BENCH_CBZ)" $(addprefix -e ,$(BENCH_ENV)) \
+	kaodoku-bench serve --db $(BENCH_DATA)/kaodoku.db --addr 0.0.0.0:8090
+
+bench:
+	k6 run -e USERNAME=bench -e PASSWORD=bench $(ARGS) bench/load.js
 
 clean:
 	@echo "Cleaning..."

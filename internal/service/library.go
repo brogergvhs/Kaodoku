@@ -2,14 +2,12 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 	"unicode"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
@@ -67,7 +65,7 @@ func OpenLibrary(ctx context.Context, dbPath string) (*LibraryService, func(), e
 	return svc, func() { _ = db.Close() }, nil
 }
 
-func newLibraryService(db *sql.DB) *LibraryService {
+func newLibraryService(db database.Handle) *LibraryService {
 	return &LibraryService{repo: library.NewRepository(db), sources: sources.NewRepository(db)}
 }
 
@@ -122,14 +120,6 @@ func (s *LibraryService) DeleteScreen(ctx context.Context, id int64) error {
 	return s.repo.DeleteScreen(ctx, id)
 }
 
-func (s *LibraryService) LastReadAt(ctx context.Context) (map[int64]time.Time, error) {
-	return s.repo.LastReadAt(ctx)
-}
-
-func (s *LibraryService) LatestArrivals(ctx context.Context) (map[int64]library.Arrival, error) {
-	return s.repo.LatestArrivals(ctx)
-}
-
 func (s *LibraryService) MarkVolumePageRead(ctx context.Context, volumeID int64, page, totalPages int) (library.Volume, error) {
 	return s.repo.MarkVolumePageRead(ctx, volumeID, page, totalPages)
 }
@@ -162,8 +152,8 @@ func (s *LibraryService) ToggleFavourite(ctx context.Context, titleID int64) (bo
 	return s.repo.ToggleFavourite(ctx, titleID)
 }
 
-func (s *LibraryService) SetFavourite(ctx context.Context, userID, titleID int64) error {
-	return s.repo.SetFavourite(ctx, userID, titleID)
+func (s *LibraryService) SetFavourite(ctx context.Context, userID, titleID int64, on bool) error {
+	return s.repo.SetFavourite(ctx, userID, titleID, on)
 }
 
 func (s *LibraryService) SetLanguageMode(ctx context.Context, id int64, mode string) error {
@@ -209,10 +199,6 @@ func (s *LibraryService) ListTitleSources(ctx context.Context, titleID int64) ([
 	return s.repo.ListTitleSources(ctx, titleID)
 }
 
-func (s *LibraryService) TitleIDsForSource(ctx context.Context, sourceID string) (map[int64]bool, error) {
-	return s.repo.TitleIDsForSource(ctx, sourceID)
-}
-
 // UnlinkSource removes a linked source from a title.
 func (s *LibraryService) UnlinkSource(ctx context.Context, titleID int64, url string) error {
 	return s.repo.UnlinkSource(ctx, titleID, url)
@@ -238,9 +224,8 @@ func (s *LibraryService) MarkPageRead(ctx context.Context, chapterID int64, page
 	return s.repo.MarkPageRead(ctx, chapterID, page, totalPages)
 }
 
-// MarkPageReadAt marks a page read at an explicit time (offline replay).
-func (s *LibraryService) MarkPageReadAt(ctx context.Context, chapterID int64, page, totalPages int, readAt string) (library.ChapterReadStatus, error) {
-	return s.repo.MarkPageReadAt(ctx, chapterID, page, totalPages, readAt)
+func (s *LibraryService) ApplyReadMarks(ctx context.Context, marks []library.ReadMark) error {
+	return s.repo.ApplyReadMarks(ctx, marks)
 }
 
 // ChaptersReadSince returns chapter progress touched after since.
@@ -315,7 +300,7 @@ func (s *LibraryService) TitleOwners(ctx context.Context) (map[int64]int64, erro
 }
 
 // MarkChapterRangeRead marks downloaded chapters in a title range read.
-// MarkChaptersReadThrough marks chapters up to a number read (AniList pull).
+// MarkChaptersReadThrough marks chapters up to a number read (tracker pull).
 func (s *LibraryService) MarkChaptersReadThrough(ctx context.Context, titleID int64, maxNumber int) (int, error) {
 	return s.repo.MarkChaptersReadThrough(ctx, titleID, maxNumber)
 }
@@ -377,7 +362,7 @@ func (s *LibraryService) RefreshTitle(
 	if err != nil {
 		msg = err.Error()
 		if len(msg) > 500 {
-			msg = msg[:500] + "…"
+			msg = msg[:500] + "..."
 		}
 	}
 	if serr := s.repo.SetFetchError(context.WithoutCancel(ctx), title.ID, msg); serr != nil {
@@ -435,7 +420,7 @@ func (s *LibraryService) RefreshMonitored(
 	cfg *config.Config,
 	logSvc ui.Log,
 ) ([]RefreshResult, error) {
-	titles, err := s.repo.ListTitles(ctx)
+	titles, err := s.repo.PageTitles(ctx, library.TitleQuery{Monitored: "on"})
 	if err != nil {
 		return nil, err
 	}
@@ -443,9 +428,6 @@ func (s *LibraryService) RefreshMonitored(
 	results := make([]RefreshResult, 0, len(titles))
 	var errs []error
 	for _, title := range titles {
-		if !title.Monitored {
-			continue
-		}
 		result, err := s.RefreshTitle(ctx, cfg, logSvc, title)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("refresh %s: %w", title.DisplayTitle, err))
@@ -571,6 +553,10 @@ func (s *LibraryService) ScanDownloads(ctx context.Context, cfg *config.Config, 
 	}
 
 	for _, v := range found {
+		d := v.download
+		if d.Status == "completed" && d.OutputFile == v.file && d.Bytes == v.size && d.Pages > 0 {
+			continue
+		}
 		if err := s.repo.MarkDownloadCompleted(ctx, v.download.ChapterID, v.file, v.size, cbzPageCount(v.file)); err != nil {
 			return result, err
 		}
@@ -646,7 +632,7 @@ func (s *LibraryService) DownloadMonitoredMissing(
 	cfg *config.Config,
 	logSvc ui.Log,
 ) ([]ChapterDownloadResult, error) {
-	titles, err := s.repo.ListTitles(ctx)
+	titles, err := s.repo.PageTitles(ctx, library.TitleQuery{Monitored: "on"})
 	if err != nil {
 		return nil, err
 	}
@@ -654,9 +640,6 @@ func (s *LibraryService) DownloadMonitoredMissing(
 	var results []ChapterDownloadResult
 	var errs []error
 	for _, title := range titles {
-		if !title.Monitored {
-			continue
-		}
 		titleResults, err := s.DownloadMissing(ctx, cfg, logSvc, title.ID, nil)
 		results = append(results, titleResults...)
 		if err != nil {
@@ -830,10 +813,10 @@ func (s *LibraryService) listSources(ctx context.Context) ([]sources.Source, err
 		}
 		return out, nil
 	}
-	// Built-in profiles only change with the binary; one sync per process.
+
 	var syncErr error
 	s.syncOnce.Do(func() {
-		syncErr = s.sources.Sync(ctx, profiles, sources.OriginBuiltin)
+		syncErr = s.sources.Sync(ctx, profiles, sources.OriginBuiltin, true)
 	})
 	if syncErr != nil {
 		return nil, syncErr
