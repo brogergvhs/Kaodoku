@@ -166,6 +166,14 @@ func (e mangaBakaEntry) entry() Entry {
 }
 
 func (c *MangaBakaClient) ListEntries(ctx context.Context) ([]Entry, error) {
+	return c.listEntries(ctx, "")
+}
+
+func (c *MangaBakaClient) ChangedEntries(ctx context.Context, since time.Time) ([]Entry, error) {
+	return c.listEntries(ctx, "&updated_after="+url.QueryEscape(since.UTC().Format(time.RFC3339)))
+}
+
+func (c *MangaBakaClient) listEntries(ctx context.Context, filter string) ([]Entry, error) {
 	ctx = asCall(ctx, "List")
 	var out []Entry
 	for page := 1; page <= 100; page++ {
@@ -175,7 +183,7 @@ func (c *MangaBakaClient) ListEntries(ctx context.Context) ([]Entry, error) {
 				Next string `json:"next"`
 			} `json:"pagination"`
 		}
-		if err := c.do(ctx, http.MethodGet, "/my/library?limit=100&page="+strconv.Itoa(page), nil, &resp); err != nil {
+		if err := c.do(ctx, http.MethodGet, "/my/library?limit=100&page="+strconv.Itoa(page)+filter, nil, &resp); err != nil {
 			return nil, err
 		}
 		for _, e := range resp.Data {
@@ -205,6 +213,45 @@ func (c *MangaBakaClient) GetEntry(ctx context.Context, id string) (Entry, bool,
 // SaveEntry updates only what u sets, creating the entry when MangaBaka has none.
 func (c *MangaBakaClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) error {
 	ctx = asCall(ctx, "Entry write")
+	body := mangaBakaBody(u)
+	path := "/my/library/" + url.PathEscape(id)
+	err := c.do(ctx, http.MethodPatch, path, body, nil)
+	if !IsNotFound(err) {
+		return err
+	}
+	if body["state"] == nil {
+		body["state"] = newState(u)
+	}
+	return c.do(ctx, http.MethodPost, path, body, nil)
+}
+
+// SaveEntries creates or updates entries in one call; an entry not read before gets a state, as SaveEntry would.
+func (c *MangaBakaClient) SaveEntries(ctx context.Context, updates map[string]EntryUpdate) error {
+	ctx = asCall(ctx, "Entry write")
+	items := make([]map[string]any, 0, len(updates))
+	for id, u := range updates {
+		n, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			return ErrNotFound
+		}
+		body := mangaBakaBody(u)
+		body["series_id"] = n
+		if u.Remote == nil && body["state"] == nil {
+			body["state"] = newState(u)
+		}
+		items = append(items, body)
+	}
+	return c.do(ctx, http.MethodPost, "/my/library/batch", items, nil)
+}
+
+func newState(u EntryUpdate) string {
+	if u.Progress > 0 {
+		return "reading"
+	}
+	return "plan_to_read"
+}
+
+func mangaBakaBody(u EntryUpdate) map[string]any {
 	body := map[string]any{}
 	for state, status := range mangaBakaStates {
 		if status == u.Status && state != "considering" {
@@ -226,18 +273,7 @@ func (c *MangaBakaClient) SaveEntry(ctx context.Context, id string, u EntryUpdat
 	if !u.Finished.IsZero() {
 		body["finish_date"] = u.Finished.Format(time.DateOnly)
 	}
-	path := "/my/library/" + url.PathEscape(id)
-	err := c.do(ctx, http.MethodPatch, path, body, nil)
-	if !IsNotFound(err) {
-		return err
-	}
-	if body["state"] == nil {
-		body["state"] = "plan_to_read"
-		if u.Progress > 0 {
-			body["state"] = "reading"
-		}
-	}
-	return c.do(ctx, http.MethodPost, path, body, nil)
+	return body
 }
 
 func (c *MangaBakaClient) DeleteEntry(ctx context.Context, id string) error {

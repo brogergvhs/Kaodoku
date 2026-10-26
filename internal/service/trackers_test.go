@@ -536,6 +536,59 @@ func TestScheduledSyncCallsTrackersOnlyForChanges(t *testing.T) {
 	kitsu.want(t, 2, 1, 3)
 }
 
+type batchingTracker struct {
+	*cappedTracker
+	batches [][]string
+	changes int
+}
+
+func (b *batchingTracker) SaveEntries(ctx context.Context, updates map[string]catalog.EntryUpdate) error {
+	var ids []string
+	for id, u := range updates {
+		ids = append(ids, id)
+		_ = b.fakeProvider.SaveEntry(ctx, id, u)
+	}
+	b.batches = append(b.batches, ids)
+	return nil
+}
+
+func (b *batchingTracker) ChangedEntries(ctx context.Context, _ time.Time) ([]catalog.Entry, error) {
+	b.changes++
+	return b.fakeProvider.ListEntries(ctx)
+}
+
+func TestSyncPullsChangesAndBatchesWrites(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	tr := &batchingTracker{cappedTracker: &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider)}}
+	svc.catalog.providers[catalog.KitsuProvider] = tr
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	var titles []int64
+	for _, pid := range []string{"1", "2", "3"} {
+		id, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: pid, TitleRomaji: "T" + pid, Status: "RELEASING"}, 3, 1)
+		titles = append(titles, id)
+	}
+	sync := func(full bool, lists, changes, batches int) {
+		t.Helper()
+		if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, full, nil); err != nil {
+			t.Fatal(err)
+		}
+		if tr.lists != lists || tr.changes != changes || len(tr.batches) != batches || tr.gets != 0 {
+			t.Fatalf("lists = %d, change pulls = %d, batches = %v, reads = %d", tr.lists, tr.changes, tr.batches, tr.gets)
+		}
+	}
+	sync(false, 1, 0, 1)
+	for _, id := range titles {
+		if _, err := svc.db.ExecContext(ctx, `INSERT INTO chapter_read_progress (user_id, chapter_id, completed) SELECT 1, id, 1 FROM chapters WHERE title_id = ? AND number_main = 2`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync(false, 1, 1, 2)
+	if len(tr.batches[0]) != 3 || len(tr.batches[1]) != 3 || len(tr.savesCopy()) != 6 {
+		t.Fatalf("batches = %v, saves = %v", tr.batches, tr.savesCopy())
+	}
+	sync(true, 2, 1, 2)
+}
+
 func TestPushesSettleSoSyncsStayQuiet(t *testing.T) {
 	svc, ctx := openTestJobs(t)
 	kitsu := &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider)}

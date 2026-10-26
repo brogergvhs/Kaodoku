@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -499,7 +500,7 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 			}
 		}
 	} else {
-		entries, err := p.ListEntries(actx)
+		entries, err := s.listEntries(ctx, actx, user.ID, p, full)
 		if err != nil {
 			return err
 		}
@@ -534,6 +535,12 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 		}
 	}
 	failed, writes := map[int64]bool{}, map[string]*catalog.EntryUpdate{}
+	writer := p
+	queue := &queuedWrites{Provider: p, updates: map[string]catalog.EntryUpdate{}}
+	batch, batched := p.(catalog.BatchSaver)
+	if batched {
+		writer = queue
+	}
 	handle := progress.Register(p.Name() + " sync")
 	handle.SetTotal(len(tracked))
 	defer handle.MarkDone()
@@ -579,10 +586,23 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 				continue
 			}
 		}
-		if sent, err := s.writeEntry(ctx, actx, p, pid, user.ID, titleID, e, listed, push, false, score); err != nil {
+		if sent, err := s.writeEntry(ctx, actx, writer, pid, user.ID, titleID, e, listed, push, false, score); err != nil {
 			errs, failed[titleID] = append(errs, fmt.Errorf("push %s: %w", pid, err)), true
 		} else {
 			writes[pid] = &sent
+		}
+	}
+	for chunk := range slices.Chunk(slices.Collect(maps.Keys(queue.updates)), catalog.BatchLimit) {
+		part := map[string]catalog.EntryUpdate{}
+		for _, pid := range chunk {
+			part[pid] = queue.updates[pid]
+		}
+		if err := batch.SaveEntries(actx, part); err != nil {
+			errs = append(errs, fmt.Errorf("batch write: %w", err))
+			for _, pid := range chunk {
+				failed[tracked[pid]] = true
+				delete(writes, pid)
+			}
 		}
 	}
 	s.patchList(ctx, user.ID, p.Name(), writes, tracked)
@@ -595,6 +615,22 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 }
 
 const maxEntryLookups = 2
+
+// queuedWrites holds a sync's writes for a tracker that saves them in batches.
+type queuedWrites struct {
+	catalog.Provider
+	updates map[string]catalog.EntryUpdate
+}
+
+func (q *queuedWrites) SaveEntry(_ context.Context, id string, u catalog.EntryUpdate) error {
+	q.updates[id] = u
+	return nil
+}
+
+func (q *queuedWrites) TracksDates() bool {
+	d, ok := q.Provider.(catalog.DateTracker)
+	return ok && d.TracksDates()
+}
 
 const (
 	progressPart = iota
@@ -1474,6 +1510,29 @@ func (s *JobService) fetchList(ctx context.Context, uid int64, provider string) 
 		return nil, err
 	}
 	s.storeList(ctx, uid, provider, entries)
+	return entries, nil
+}
+
+// listEntries downloads a list; for a tracker that lists changes, a sync that isn't full merges just those into the
+// stored copy (a deletion on the tracker shows on the next full sync).
+func (s *JobService) listEntries(ctx, actx context.Context, uid int64, p catalog.Provider, full bool) ([]catalog.Entry, error) {
+	cl, ok := p.(catalog.ChangeLister)
+	c, stored := s.cachedList(ctx, uid, p.Name())
+	if full || !ok || !stored {
+		return p.ListEntries(actx)
+	}
+	changed, err := cl.ChangedEntries(actx, c.fetched.Add(-time.Hour))
+	if err != nil {
+		return nil, err
+	}
+	entries := slices.Clone(c.entries)
+	for _, e := range changed {
+		if i := slices.IndexFunc(entries, func(x catalog.Entry) bool { return x.Manga.ProviderID == e.Manga.ProviderID }); i >= 0 {
+			entries[i] = e
+		} else {
+			entries = append(entries, e)
+		}
+	}
 	return entries, nil
 }
 

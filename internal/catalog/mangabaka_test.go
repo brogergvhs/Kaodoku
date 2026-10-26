@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMangaBakaTracksWithAnAccessToken(t *testing.T) {
@@ -53,5 +55,49 @@ func TestMangaBakaTracksWithAnAccessToken(t *testing.T) {
 	}
 	if saved["state"] != "reading" || saved["progress_chapter"] != float64(3) || saved["rating"] != float64(70) {
 		t.Fatalf("created entry = %v after %v", saved, calls)
+	}
+}
+
+func TestMangaBakaPullsChangesAndBatchesWrites(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	var batch []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, r.Method+" "+r.URL.RequestURI())
+		if r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&batch)
+		}
+		_, _ = w.Write([]byte(`{"status":200,"data":[],"pagination":{"next":null}}`))
+	}))
+	defer srv.Close()
+	c := NewMangaBakaClient(nil, nil)
+	c.base = srv.URL
+	ctx := WithAccount(context.Background(), Account{Token: "mb-tok"})
+
+	if _, err := c.ChangedEntries(ctx, time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)); err != nil || !strings.Contains(calls[0], "updated_after=2026-10-01T12%3A00%3A00Z") {
+		t.Fatalf("changes = %v, %v", calls, err)
+	}
+	err := c.SaveEntries(ctx, map[string]EntryUpdate{
+		"34798": {Progress: 4, Status: "CURRENT", Remote: &Entry{}},
+		"2553":  {Progress: 0, Score: 7},
+	})
+	if err != nil || len(calls) != 2 || calls[1] != "POST /my/library/batch" || len(batch) != 2 {
+		t.Fatalf("batch = %v %v, %v", calls, batch, err)
+	}
+	for _, item := range batch {
+		switch item["series_id"] {
+		case float64(34798):
+			if item["state"] != "reading" || item["progress_chapter"] != float64(4) {
+				t.Fatalf("known entry = %v", item)
+			}
+		case float64(2553):
+			if item["state"] != "plan_to_read" || item["rating"] != float64(70) {
+				t.Fatalf("new entry = %v", item)
+			}
+		default:
+			t.Fatalf("unexpected item %v", item)
+		}
 	}
 }

@@ -229,6 +229,18 @@ func (u EntryUpdate) Empty() bool {
 // DateTracker marks providers whose lists store start and finish dates.
 type DateTracker interface{ TracksDates() bool }
 
+// ChangeLister lists only the entries changed since a time; deleted entries don't show.
+type ChangeLister interface {
+	ChangedEntries(ctx context.Context, since time.Time) ([]Entry, error)
+}
+
+// BatchSaver writes up to BatchLimit entries in one call.
+type BatchSaver interface {
+	SaveEntries(ctx context.Context, updates map[string]EntryUpdate) error
+}
+
+const BatchLimit = 100
+
 type Account struct{ Token, UserID string }
 
 type ctxAccountKey struct{}
