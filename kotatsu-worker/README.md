@@ -12,25 +12,25 @@ Browser worker like the main server does.
 
 ## Setup
 
-The worker runs as a container in the Compose stack. The wiring is in the
-repo's [`docker-compose.example.yml`](../docker-compose.example.yml); the
-relevant piece:
+The worker runs as a container in the Compose stack. It's commented out in the
+repo's [`docker-compose.example.yml`](../docker-compose.example.yml); uncomment
+it there. The relevant piece:
 
 ```yaml
 kotatsu-worker:
   build: ./kotatsu-worker
   environment:
-    WORKER_KEY: change-me            # required; must match Kaodoku's API key
+    WORKER_KEY: ${KAODOKU_KOTATSU_WORKER_API_KEY}   # required; taken from .env
     FLARESOLVERR_URL: http://flaresolverr:8191   # optional
     BROWSER_WORKER_URL: http://browser-worker:8192  # optional
 ```
 
-Then point Kaodoku at it:
+Then uncomment its variables in Kaodoku's `.env`:
 
-```yaml
-KAODOKU_KOTATSU_WORKER_ENABLED: "true"
-KAODOKU_KOTATSU_WORKER_ENDPOINT: http://kotatsu-worker:8484
-KAODOKU_KOTATSU_WORKER_API_KEY: change-me   # must equal WORKER_KEY
+```bash
+KAODOKU_KOTATSU_WORKER_ENABLED=true
+KAODOKU_KOTATSU_WORKER_ENDPOINT=http://kotatsu-worker:8484
+KAODOKU_KOTATSU_WORKER_API_KEY=change-me   # also becomes the worker's WORKER_KEY
 ```
 
 Once both are up, open **Sources** in Kaodoku and import the kotatsu sources you
