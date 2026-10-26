@@ -2187,7 +2187,7 @@ func (s *JobService) run(ctx context.Context, cfg *config.Config, logSvc ui.Log,
 		return s.expandDetectCrops(ctx, job.ID)
 	case jobs.TypeSyncTrackers:
 		if payload.UserID > 0 {
-			return s.runTrackerSync(ctx, payload.UserID, payload.Provider, progress)
+			return s.runTrackerSync(ctx, payload.UserID, payload.Provider, payload.Force, progress)
 		}
 		return s.expandTrackerSync(ctx, job.ID)
 	case jobs.TypeCatalogRefresh:

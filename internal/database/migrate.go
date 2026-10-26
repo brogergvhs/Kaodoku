@@ -346,6 +346,14 @@ CREATE TABLE IF NOT EXISTS tracker_ratings (
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
+CREATE TABLE IF NOT EXISTS tracker_pushed (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
+	state TEXT NOT NULL,
+	PRIMARY KEY (user_id, title_id, provider)
+);
+
 DROP TABLE IF EXISTS tracker_favourites;
 
 CREATE TABLE IF NOT EXISTS catalog_external_ids (

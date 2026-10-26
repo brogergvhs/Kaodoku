@@ -380,7 +380,7 @@ func (s *JobService) EnqueueTrackerSync(ctx context.Context, userID int64, provi
 	} else if len(s.connectedTrackers(ctx, userID)) == 0 {
 		return fmt.Errorf("no tracker account connected")
 	}
-	_, err := s.enqueueExact(ctx, jobs.TypeSyncTrackers, JobPayload{UserID: userID, Provider: provider}, time.Now())
+	_, err := s.enqueueExact(ctx, jobs.TypeSyncTrackers, JobPayload{UserID: userID, Provider: provider, Force: true}, time.Now())
 	return err
 }
 
@@ -410,7 +410,8 @@ func (s *JobService) expandTrackerSync(ctx context.Context, parentID int64) erro
 }
 
 // runTrackerSync: remote > local pulls read marks down, local > remote pushes up, missing entries get added.
-func (s *JobService) runTrackerSync(ctx context.Context, userID int64, provider string, progress ProgressManager) error {
+// Unless full, an account kaodoku leads only syncs titles changed since their last sync.
+func (s *JobService) runTrackerSync(ctx context.Context, userID int64, provider string, full bool, progress ProgressManager) error {
 	ctx = catalog.WithReason(ctx, "Tracker sync")
 	user, err := s.auth.GetUser(ctx, userID)
 	if err != nil || user == nil {
@@ -420,7 +421,7 @@ func (s *JobService) runTrackerSync(ctx context.Context, userID int64, provider 
 	if provider == "" {
 		var errs []error
 		for _, name := range s.connectedTrackers(ctx, userID) {
-			errs = append(errs, s.runTrackerSync(ctx, userID, name, progress))
+			errs = append(errs, s.runTrackerSync(ctx, userID, name, full, progress))
 		}
 		return errors.Join(errs...)
 	}
@@ -431,9 +432,8 @@ func (s *JobService) runTrackerSync(ctx context.Context, userID int64, provider 
 	if progress == nil {
 		progress = noopProgress{}
 	}
-	err = s.trackerAuthError(ctx, userID, provider, s.syncTracker(ctx, actx, user, p, progress))
+	err = s.trackerAuthError(ctx, userID, provider, s.syncTracker(ctx, actx, user, p, full, progress))
 	_, _ = s.db.ExecContext(ctx, `UPDATE tracker_accounts SET last_error = ? WHERE user_id = ? AND provider = ?`, errText(err), userID, provider)
-	s.invalidateRecs(userID)
 	return err
 }
 
@@ -449,16 +449,7 @@ func errText(err error) string {
 	return err.Error()
 }
 
-func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p catalog.Provider, progress ProgressManager) error {
-	entries, err := p.ListEntries(actx)
-	if err != nil {
-		return err
-	}
-	s.storeList(ctx, user.ID, p.Name(), entries)
-	remote := make(map[string]catalog.Entry, len(entries))
-	for _, e := range entries {
-		remote[e.Manga.ProviderID] = e
-	}
+func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p catalog.Provider, full bool, progress ProgressManager) error {
 	a, _ := s.trackerAccount(ctx, user.ID, p.Name())
 	if a.AutoLink {
 		s.resolveLibrary(ctx, p, 100)
@@ -487,19 +478,48 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	if err != nil {
 		return err
 	}
-	fav, canFav := p.(catalog.Favouriter)
-	remoteFav := map[string]bool{}
-	if canFav {
-		ids, err := fav.Favourites(actx)
-		canFav = err == nil
-		for _, id := range ids {
-			remoteFav[id] = true
-		}
-	}
 	localFav, err := s.localFavouriteIDs(ctx, user.ID, p.Name())
 	if err != nil {
 		return err
 	}
+	states := map[int64]string{}
+	if a.Source == SourceKaodoku {
+		pushed := s.pushedStates(ctx, user.ID, p.Name())
+		for pid, titleID := range tracked {
+			on, t := enabled(titleID), byID[titleID]
+			local, _ := s.localUpdate(ctx, p, user.ID, titleID)
+			r, rated := s.userRating(ctx, user.ID, titleID)
+			states[titleID] = fmt.Sprint(pid, on, a.ratingFor(on), ContentAllowed(user, t.IsAdult, t.ContentTags), ownsTitle(user.ID, owners[titleID]), local, r, rated, localFav[pid])
+			if !full && pushed[titleID] == states[titleID] {
+				delete(tracked, pid)
+			}
+		}
+		if !full && len(tracked) == 0 {
+			return nil
+		}
+	}
+	defer s.invalidateRecs(user.ID)
+	entries, err := p.ListEntries(actx)
+	if err != nil {
+		return err
+	}
+	s.storeList(ctx, user.ID, p.Name(), entries)
+	remote := make(map[string]catalog.Entry, len(entries))
+	for _, e := range entries {
+		remote[e.Manga.ProviderID] = e
+	}
+	fav, canFav := p.(catalog.Favouriter)
+	remoteFav := map[string]bool{}
+	if canFav {
+		ids, err := fav.Favourites(actx)
+		if canFav = err == nil; !canFav {
+			clear(states)
+		}
+		for _, id := range ids {
+			remoteFav[id] = true
+		}
+	}
+	failed := map[int64]bool{}
 	handle := progress.Register(p.Name() + " sync")
 	handle.SetTotal(len(tracked))
 	defer handle.MarkDone()
@@ -517,7 +537,7 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 		case !canFav || localFav[pid] == remoteFav[pid]:
 		case push:
 			if err := fav.ToggleFavourite(actx, pid); err != nil {
-				errs = append(errs, fmt.Errorf("favourite %s: %w", pid, err))
+				errs, failed[titleID] = append(errs, fmt.Errorf("favourite %s: %w", pid, err)), true
 			}
 		case pull && s.sourceLeader(ctx, user.ID, titleID) == p.Name():
 			errs = append(errs, s.lib.SetFavourite(ctx, user.ID, titleID, remoteFav[pid]))
@@ -546,10 +566,34 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 			}
 		}
 		if err := s.pushEntry(ctx, actx, p, pid, user.ID, titleID, e, listed, push, false, score); err != nil {
-			errs = append(errs, fmt.Errorf("push %s: %w", pid, err))
+			errs, failed[titleID] = append(errs, fmt.Errorf("push %s: %w", pid, err)), true
+		}
+	}
+	for _, titleID := range tracked {
+		if st, ok := states[titleID]; ok && !failed[titleID] {
+			_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_pushed (user_id, title_id, provider, state) VALUES (?, ?, ?, ?)
+				ON CONFLICT (user_id, title_id, provider) DO UPDATE SET state = excluded.state`, user.ID, titleID, p.Name(), st)
 		}
 	}
 	return errs2err(errs)
+}
+
+// pushedStates is each title's local state as of its last sync with provider.
+func (s *JobService) pushedStates(ctx context.Context, userID int64, provider string) map[int64]string {
+	out := map[int64]string{}
+	rows, err := s.db.QueryContext(ctx, `SELECT title_id, state FROM tracker_pushed WHERE user_id = ? AND provider = ?`, userID, provider)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var st string
+		if rows.Scan(&id, &st) == nil {
+			out[id] = st
+		}
+	}
+	return out
 }
 
 // localUpdate dates count only reading done in kaodoku and go only to backends that store them.
@@ -779,9 +823,10 @@ func (s *JobService) pushFavourite(ctx context.Context, userID, titleID int64, w
 	})
 }
 
-// forgetTrackerState drops the ratings last seen on a tracker, so a (re)connected account starts fresh.
+// forgetTrackerState drops the ratings last seen on, and states synced to, a tracker, so a (re)connected account starts fresh.
 func (s *JobService) forgetTrackerState(ctx context.Context, userID int64, provider string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM tracker_ratings WHERE user_id = ? AND provider = ?`, userID, provider)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM tracker_ratings WHERE user_id = ? AND provider = ?;
+		DELETE FROM tracker_pushed WHERE user_id = ? AND provider = ?`, userID, provider, userID, provider)
 	return err
 }
 

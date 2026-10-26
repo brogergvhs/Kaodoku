@@ -197,7 +197,7 @@ func TestUnauthorizedTrackerDisconnectsOnlyItself(t *testing.T) {
 	connect(t, svc, ctx, catalog.AniListProvider, time.Now())
 	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
 
-	err := svc.runTrackerSync(ctx, 1, catalog.AniListProvider, nil)
+	err := svc.runTrackerSync(ctx, 1, catalog.AniListProvider, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "reconnect AniList") {
 		t.Fatalf("sync error = %v", err)
 	}
@@ -224,7 +224,7 @@ func TestProgressFlowsFromTheSourceSide(t *testing.T) {
 	}
 	mal.entries["10"] = catalog.Entry{Progress: 5, Status: "CURRENT"}
 	sync := func(name string) {
-		if err := svc.runTrackerSync(ctx, 1, name, nil); err != nil {
+		if err := svc.runTrackerSync(ctx, 1, name, false, nil); err != nil {
 			t.Fatalf("%s sync: %v", name, err)
 		}
 	}
@@ -259,7 +259,7 @@ func TestUnconfirmedMatchIsNeverPushed(t *testing.T) {
 		t.Fatalf("mapping = %+v, want unconfirmed suggestion 55", e)
 	}
 	connect(t, svc, ctx, catalog.MangaUpdatesProvider, time.Now())
-	if err := svc.runTrackerSync(ctx, 1, catalog.MangaUpdatesProvider, nil); err != nil {
+	if err := svc.runTrackerSync(ctx, 1, catalog.MangaUpdatesProvider, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := mu.savesCopy(); len(got) != 0 {
@@ -464,18 +464,58 @@ func TestSyncPushesReadingDatesOnlyWhenRemoteHasNone(t *testing.T) {
 	if _, err := svc.db.ExecContext(ctx, `UPDATE chapter_read_progress SET started_at = '2024-03-06 10:00:00', completed_at = '2024-03-09 10:00:00' WHERE chapter_id IN (SELECT id FROM chapters WHERE title_id = ? AND number_main = 2)`, titleID); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil {
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := kitsu.savesCopy(); len(got) != 1 || got[0] != "9:2:COMPLETED:2024-03-01:2024-03-09" {
 		t.Fatalf("saves = %v, want first-start and last-completion dates", got)
 	}
-	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil {
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := kitsu.savesCopy(); len(got) != 1 {
 		t.Fatalf("dates re-pushed though remote has them: %v", got)
 	}
+}
+
+type cappedTracker struct {
+	*fakeProvider
+	lists int
+}
+
+func (c *cappedTracker) ListEntries(ctx context.Context) ([]catalog.Entry, error) {
+	c.lists++
+	return c.fakeProvider.ListEntries(ctx)
+}
+
+func (c *cappedTracker) SaveEntry(ctx context.Context, id string, u catalog.EntryUpdate) error {
+	u.Progress = min(u.Progress, 2)
+	return c.fakeProvider.SaveEntry(ctx, id, u)
+}
+
+func TestScheduledSyncCallsTrackersOnlyForChanges(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	kitsu := &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider)}
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Capped", Status: "FINISHED"}, 3, 3)
+	sync := func(full bool, lists, saves int) {
+		t.Helper()
+		if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, full, nil); err != nil {
+			t.Fatal(err)
+		}
+		if kitsu.lists != lists || len(kitsu.savesCopy()) != saves {
+			t.Fatalf("list downloads = %d, saves = %v; want %d and %d", kitsu.lists, kitsu.savesCopy(), lists, saves)
+		}
+	}
+	sync(false, 1, 1)
+	sync(false, 1, 1)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE chapter_read_progress SET completed = 0 WHERE chapter_id IN (SELECT id FROM chapters WHERE title_id = ? AND number_main = 3)`, titleID); err != nil {
+		t.Fatal(err)
+	}
+	sync(false, 2, 1)
+	sync(false, 2, 1)
+	sync(true, 3, 1)
 }
 
 func TestLinkedTitleSyncsOnlyWhenAsked(t *testing.T) {
@@ -489,7 +529,7 @@ func TestLinkedTitleSyncsOnlyWhenAsked(t *testing.T) {
 		t.Fatal(err)
 	}
 	uctx := asUser(svc, ctx, t)
-	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil {
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if links, _ := svc.TitleLinks(uctx, titleID); len(kitsu.savesCopy()) != 0 || len(links) != 1 || links[0].Syncing {
@@ -532,7 +572,7 @@ func TestTrackerPrefsDriveLinkingSyncAndRelated(t *testing.T) {
 	if err := svc.SetTrackerPrefs(uctx, catalog.KitsuProvider, TrackerPrefs{AutoProgressive: true, Relations: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil {
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if id := svc.confirmedID(ctx, unlinked, catalog.KitsuProvider); id != "" || len(svc.mappings(ctx, unlinked)) != 1 {
@@ -706,7 +746,7 @@ func TestFavouritesFlowFromTheSourceSide(t *testing.T) {
 		_ = svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_favourites WHERE user_id = 1 AND title_id = ?`, titleID).Scan(&n)
 		return n > 0
 	}
-	sync := func(name string) { _ = svc.runTrackerSync(ctx, 1, name, nil) }
+	sync := func(name string) { _ = svc.runTrackerSync(ctx, 1, name, false, nil) }
 
 	sync(catalog.KitsuProvider)
 	if local() || kitsu.favs["9"] {
@@ -927,7 +967,7 @@ func TestRatingsFollowEachTrackersLeadAndOrder(t *testing.T) {
 	}
 	sync := func(names ...string) {
 		for _, name := range names {
-			if err := svc.runTrackerSync(ctx, 1, name, nil); err != nil {
+			if err := svc.runTrackerSync(ctx, 1, name, false, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -960,7 +1000,7 @@ func TestKaodokuLedRatingsPushOnlyWhatWasSet(t *testing.T) {
 	kitsu.entries["9"] = catalog.Entry{Progress: 1, Status: "CURRENT", Score: 7}
 	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Rated"}, 3, 1)
 	uctx := asUser(svc, ctx, t)
-	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil || len(kitsu.savesCopy()) != 0 {
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, false, nil); err != nil || len(kitsu.savesCopy()) != 0 {
 		t.Fatalf("an unrated title cleared the tracker's rating: %v %v", kitsu.savesCopy(), err)
 	}
 	if _, err := svc.db.ExecContext(ctx, `DELETE FROM tracker_title_sync`); err != nil {
@@ -995,7 +1035,7 @@ func TestMissingRatingsAreAskedUntilAnswered(t *testing.T) {
 		t.Fatal(err)
 	}
 	sync := func() {
-		if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, nil); err != nil {
+		if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, false, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
