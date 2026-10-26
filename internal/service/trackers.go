@@ -458,39 +458,21 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	if err != nil {
 		return err
 	}
-	enabled, err := s.progressiveTitles(ctx, user.ID, p.Name())
-	if err != nil {
-		return err
-	}
-	trackedIDs := make([]int64, 0, len(tracked))
+	ids := make([]int64, 0, len(tracked))
 	for _, id := range tracked {
-		trackedIDs = append(trackedIDs, id)
+		ids = append(ids, id)
 	}
-	titles, err := s.lib.repo.TitlesByIDs(ctx, trackedIDs)
+	v, err := s.syncView(ctx, user, p.Name(), ids)
 	if err != nil {
 		return err
 	}
-	byID := make(map[int64]library.Title, len(titles))
-	for _, t := range titles {
-		byID[t.ID] = t
-	}
-	owners, err := s.lib.TitleOwners(ctx)
-	if err != nil {
-		return err
-	}
-	localFav, err := s.localFavouriteIDs(ctx, user.ID, p.Name())
-	if err != nil {
-		return err
-	}
-	states := map[int64]string{}
+	enabled, byID, owners, localFav := v.enabled, v.titles, v.owners, v.localFav
+	states, saved := map[int64][3]string{}, map[int64]syncedRow{}
 	if a.Source == SourceKaodoku {
-		pushed := s.pushedStates(ctx, user.ID, p.Name())
+		saved = s.syncedRows(ctx, user.ID, p.Name(), 0)
 		for pid, titleID := range tracked {
-			on, t := enabled(titleID), byID[titleID]
-			local, _ := s.localUpdate(ctx, p, user.ID, titleID)
-			r, rated := s.userRating(ctx, user.ID, titleID)
-			states[titleID] = fmt.Sprint(pid, on, a.ratingFor(on), ContentAllowed(user, t.IsAdult, t.ContentTags), ownsTitle(user.ID, owners[titleID]), local, r, rated, localFav[pid])
-			if !full && pushed[titleID] == states[titleID] {
+			states[titleID] = s.syncParts(ctx, v, p, pid, titleID)
+			if !full && (saved[titleID].parts == states[titleID] || s.pushPending(user.ID, titleID)) {
 				delete(tracked, pid)
 			}
 		}
@@ -499,21 +481,48 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 		}
 	}
 	defer s.invalidateRecs(user.ID)
-	entries, err := p.ListEntries(actx)
-	if err != nil {
-		return err
+	lookup := a.Source == SourceKaodoku && !full && len(tracked) <= maxEntryLookups
+	remote := map[string]catalog.Entry{}
+	if lookup {
+		for pid := range tracked {
+			e, found, err := p.GetEntry(actx, pid)
+			if err != nil {
+				return err
+			}
+			if found {
+				remote[pid] = e
+			}
+		}
+	} else {
+		entries, err := p.ListEntries(actx)
+		if err != nil {
+			return err
+		}
+		s.storeList(ctx, user.ID, p.Name(), entries)
+		for _, e := range entries {
+			remote[e.Manga.ProviderID] = e
+		}
 	}
-	s.storeList(ctx, user.ID, p.Name(), entries)
-	remote := make(map[string]catalog.Entry, len(entries))
-	for _, e := range entries {
-		remote[e.Manga.ProviderID] = e
-	}
+	settled := []int{progressPart, ratingPart, favouritePart}
 	fav, canFav := p.(catalog.Favouriter)
 	remoteFav := map[string]bool{}
-	if canFav {
+	switch {
+	case canFav && lookup:
+		for pid, titleID := range tracked {
+			remoteFav[pid] = localFav[pid]
+			if saved[titleID].parts[favouritePart] != states[titleID][favouritePart] {
+				on, err := fav.IsFavourite(actx, pid)
+				if canFav = err == nil; !canFav {
+					settled = settled[:2]
+					break
+				}
+				remoteFav[pid] = on
+			}
+		}
+	case canFav:
 		ids, err := fav.Favourites(actx)
 		if canFav = err == nil; !canFav {
-			clear(states)
+			settled = settled[:2]
 		}
 		for _, id := range ids {
 			remoteFav[id] = true
@@ -571,29 +580,118 @@ func (s *JobService) syncTracker(ctx, actx context.Context, user *auth.User, p c
 	}
 	for _, titleID := range tracked {
 		if st, ok := states[titleID]; ok && !failed[titleID] {
-			_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_pushed (user_id, title_id, provider, state) VALUES (?, ?, ?, ?)
-				ON CONFLICT (user_id, title_id, provider) DO UPDATE SET state = excluded.state`, user.ID, titleID, p.Name(), st)
+			s.settle(ctx, user.ID, titleID, p.Name(), st, settled...)
 		}
 	}
 	return errs2err(errs)
 }
 
-// pushedStates is each title's local state as of its last sync with provider.
-func (s *JobService) pushedStates(ctx context.Context, userID int64, provider string) map[int64]string {
-	out := map[int64]string{}
-	rows, err := s.db.QueryContext(ctx, `SELECT title_id, state FROM tracker_pushed WHERE user_id = ? AND provider = ?`, userID, provider)
+const maxEntryLookups = 2
+
+const (
+	progressPart = iota
+	ratingPart
+	favouritePart
+)
+
+var syncedColumns = [3]string{"progress", "rating", "favourite"}
+
+type syncView struct {
+	user     *auth.User
+	account  TrackerAccount
+	enabled  func(int64) bool
+	titles   map[int64]library.Title
+	owners   map[int64]int64
+	localFav map[string]bool
+}
+
+func (s *JobService) syncView(ctx context.Context, user *auth.User, provider string, titleIDs []int64) (syncView, error) {
+	v := syncView{user: user}
+	v.account, _ = s.trackerAccount(ctx, user.ID, provider)
+	var err error
+	if v.enabled, err = s.progressiveTitles(ctx, user.ID, provider); err != nil {
+		return v, err
+	}
+	titles, err := s.lib.repo.TitlesByIDs(ctx, titleIDs)
+	if err != nil {
+		return v, err
+	}
+	v.titles = make(map[int64]library.Title, len(titles))
+	for _, t := range titles {
+		v.titles[t.ID] = t
+	}
+	if v.owners, err = s.lib.TitleOwners(ctx); err != nil {
+		return v, err
+	}
+	v.localFav, err = s.localFavouriteIDs(ctx, user.ID, provider)
+	return v, err
+}
+
+// syncParts is a title's local state as a tracker is sent it, split into the progress, rating and favourite parts.
+func (s *JobService) syncParts(ctx context.Context, v syncView, p catalog.Provider, pid string, titleID int64) [3]string {
+	on, t := v.enabled(titleID), v.titles[titleID]
+	allowed := ContentAllowed(v.user, t.IsAdult, t.ContentTags)
+	local, _ := s.localUpdate(ctx, p, v.user.ID, titleID)
+	r, rated := s.userRating(ctx, v.user.ID, titleID)
+	return [3]string{
+		fmt.Sprint(pid, on, allowed, ownsTitle(v.user.ID, v.owners[titleID]), local),
+		fmt.Sprint(pid, v.account.ratingFor(on), allowed, r, rated),
+		favPart(v, pid, titleID, v.localFav[pid]),
+	}
+}
+
+func favPart(v syncView, pid string, titleID int64, fav bool) string {
+	t := v.titles[titleID]
+	return fmt.Sprint(pid, v.enabled(titleID), ContentAllowed(v.user, t.IsAdult, t.ContentTags), fav)
+}
+
+// syncedRow is what a title last settled at on a tracker.
+type syncedRow struct {
+	parts [3]string
+}
+
+func (s *JobService) syncedRows(ctx context.Context, userID int64, provider string, titleID int64) map[int64]syncedRow {
+	out := map[int64]syncedRow{}
+	rows, err := s.db.QueryContext(ctx, `SELECT title_id, progress, rating, favourite FROM tracker_synced WHERE user_id = ? AND provider = ? AND ? IN (0, title_id)`, userID, provider, titleID)
 	if err != nil {
 		return out
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id int64
-		var st string
-		if rows.Scan(&id, &st) == nil {
-			out[id] = st
+		var r syncedRow
+		if rows.Scan(&id, &r.parts[0], &r.parts[1], &r.parts[2]) == nil {
+			out[id] = r
 		}
 	}
 	return out
+}
+
+// titleState loads one title's view, current parts and settled row on a tracker, for a push.
+func (s *JobService) titleState(ctx context.Context, userID, titleID int64, p catalog.Provider, pid string) (syncView, [3]string, syncedRow, error) {
+	user, err := s.auth.GetUser(ctx, userID)
+	if err != nil || user == nil {
+		user = &auth.User{ID: userID}
+	}
+	v, err := s.syncView(ctx, user, p.Name(), []int64{titleID})
+	if err != nil {
+		return v, [3]string{}, syncedRow{}, err
+	}
+	return v, s.syncParts(ctx, v, p, pid, titleID), s.syncedRows(ctx, userID, p.Name(), titleID)[titleID], nil
+}
+
+func (s *JobService) settle(ctx context.Context, userID, titleID int64, provider string, st [3]string, parts ...int) {
+	for _, i := range parts {
+		col := syncedColumns[i]
+		_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_synced (user_id, title_id, provider, `+col+`) VALUES (?, ?, ?, ?)
+			ON CONFLICT (user_id, title_id, provider) DO UPDATE SET `+col+` = excluded.`+col, userID, titleID, provider, st[i])
+	}
+}
+
+func (s *JobService) pushPending(userID, titleID int64) bool {
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	return s.pushes[[2]int64{userID, titleID}] != nil
 }
 
 // localUpdate dates count only reading done in kaodoku and go only to backends that store them.
@@ -759,12 +857,27 @@ func (s *JobService) pushTitle(ctx context.Context, userID, titleID int64, progr
 		if id == "" {
 			return nil
 		}
+		_, st, _, err := s.titleState(ctx, userID, titleID, p, id)
+		if err != nil {
+			return err
+		}
 		remote, found, err := p.GetEntry(actx, id)
 		if err != nil {
 			return err
 		}
 		score := s.syncRating(ctx, userID, titleID, p.Name(), ratings[p.Name()], remote.Score)
-		return s.pushEntry(ctx, actx, p, id, userID, titleID, remote, found, progress, exact, score)
+		if err := s.pushEntry(ctx, actx, p, id, userID, titleID, remote, found, progress, exact, score); err != nil {
+			return err
+		}
+		settled := []int{ratingPart}
+		if progress {
+			settled = append(settled, progressPart)
+		}
+		if _, ok := p.(catalog.Favouriter); !ok {
+			settled = append(settled, favouritePart)
+		}
+		s.settle(ctx, userID, titleID, p.Name(), st, settled...)
+		return nil
 	})
 }
 
@@ -815,18 +928,28 @@ func (s *JobService) pushFavourite(ctx context.Context, userID, titleID int64, w
 		if !ok || id == "" {
 			return nil
 		}
-		remote, err := fav.IsFavourite(actx, id)
-		if err == nil && remote != want {
-			err = fav.ToggleFavourite(actx, id)
+		v, _, _, err := s.titleState(ctx, userID, titleID, p, id)
+		if err != nil {
+			return err
 		}
-		return err
+		remote, err := fav.IsFavourite(actx, id)
+		if err != nil {
+			return err
+		}
+		if remote != want {
+			if err := fav.ToggleFavourite(actx, id); err != nil {
+				return err
+			}
+		}
+		s.settle(ctx, userID, titleID, p.Name(), [3]string{favouritePart: favPart(v, id, titleID, want)}, favouritePart)
+		return nil
 	})
 }
 
 // forgetTrackerState drops the ratings last seen on, and states synced to, a tracker, so a (re)connected account starts fresh.
 func (s *JobService) forgetTrackerState(ctx context.Context, userID int64, provider string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM tracker_ratings WHERE user_id = ? AND provider = ?;
-		DELETE FROM tracker_pushed WHERE user_id = ? AND provider = ?`, userID, provider, userID, provider)
+		DELETE FROM tracker_synced WHERE user_id = ? AND provider = ?`, userID, provider, userID, provider)
 	return err
 }
 

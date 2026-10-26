@@ -346,11 +346,15 @@ CREATE TABLE IF NOT EXISTS tracker_ratings (
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
-CREATE TABLE IF NOT EXISTS tracker_pushed (
+DROP TABLE IF EXISTS tracker_pushed;
+
+CREATE TABLE IF NOT EXISTS tracker_synced (
 	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
 	provider TEXT NOT NULL,
-	state TEXT NOT NULL,
+	progress TEXT NOT NULL DEFAULT '',
+	rating TEXT NOT NULL DEFAULT '',
+	favourite TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (user_id, title_id, provider)
 );
 

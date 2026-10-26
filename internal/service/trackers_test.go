@@ -480,7 +480,7 @@ func TestSyncPushesReadingDatesOnlyWhenRemoteHasNone(t *testing.T) {
 
 type cappedTracker struct {
 	*fakeProvider
-	lists int
+	limit, lists, gets int
 }
 
 func (c *cappedTracker) ListEntries(ctx context.Context) ([]catalog.Entry, error) {
@@ -488,34 +488,76 @@ func (c *cappedTracker) ListEntries(ctx context.Context) ([]catalog.Entry, error
 	return c.fakeProvider.ListEntries(ctx)
 }
 
+func (c *cappedTracker) GetEntry(ctx context.Context, id string) (catalog.Entry, bool, error) {
+	c.gets++
+	return c.fakeProvider.GetEntry(ctx, id)
+}
+
 func (c *cappedTracker) SaveEntry(ctx context.Context, id string, u catalog.EntryUpdate) error {
-	u.Progress = min(u.Progress, 2)
+	if c.limit > 0 {
+		u.Progress = min(u.Progress, c.limit)
+	}
 	return c.fakeProvider.SaveEntry(ctx, id, u)
+}
+
+func (c *cappedTracker) want(t *testing.T, lists, gets, saves int) {
+	t.Helper()
+	if c.lists != lists || c.gets != gets || len(c.savesCopy()) != saves {
+		t.Fatalf("list downloads = %d, entry reads = %d, saves = %v; want %d, %d and %d", c.lists, c.gets, c.savesCopy(), lists, gets, saves)
+	}
 }
 
 func TestScheduledSyncCallsTrackersOnlyForChanges(t *testing.T) {
 	svc, ctx := openTestJobs(t)
-	kitsu := &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider)}
+	kitsu := &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider), limit: 2}
 	svc.catalog.providers[catalog.KitsuProvider] = kitsu
 	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
 	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Capped", Status: "FINISHED"}, 3, 3)
-	sync := func(full bool, lists, saves int) {
+	seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "10", TitleRomaji: "Other"}, 1, 0)
+	seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "11", TitleRomaji: "Third"}, 1, 0)
+	sync := func(full bool) {
 		t.Helper()
 		if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, full, nil); err != nil {
 			t.Fatal(err)
 		}
-		if kitsu.lists != lists || len(kitsu.savesCopy()) != saves {
-			t.Fatalf("list downloads = %d, saves = %v; want %d and %d", kitsu.lists, kitsu.savesCopy(), lists, saves)
-		}
 	}
-	sync(false, 1, 1)
-	sync(false, 1, 1)
+	sync(false)
+	kitsu.want(t, 1, 0, 3)
+	sync(false)
+	kitsu.want(t, 1, 0, 3)
 	if _, err := svc.db.ExecContext(ctx, `UPDATE chapter_read_progress SET completed = 0 WHERE chapter_id IN (SELECT id FROM chapters WHERE title_id = ? AND number_main = 3)`, titleID); err != nil {
 		t.Fatal(err)
 	}
-	sync(false, 2, 1)
-	sync(false, 2, 1)
-	sync(true, 3, 1)
+	sync(false)
+	kitsu.want(t, 1, 1, 3)
+	sync(false)
+	kitsu.want(t, 1, 1, 3)
+	sync(true)
+	kitsu.want(t, 2, 1, 3)
+}
+
+func TestPushesSettleSoSyncsStayQuiet(t *testing.T) {
+	svc, ctx := openTestJobs(t)
+	kitsu := &cappedTracker{fakeProvider: newFake(catalog.KitsuProvider)}
+	svc.catalog.providers[catalog.KitsuProvider] = kitsu
+	connect(t, svc, ctx, catalog.KitsuProvider, time.Now())
+	titleID, _ := seedTitle(t, svc, ctx, catalog.Manga{Provider: catalog.KitsuProvider, ProviderID: "9", TitleRomaji: "Read", Status: "RELEASING"}, 4, 1)
+	kitsu.entries["9"] = catalog.Entry{Progress: 0, Status: "CURRENT"}
+	uctx := asUser(svc, ctx, t)
+	read := func(n int) {
+		t.Helper()
+		if _, err := svc.db.ExecContext(ctx, `INSERT INTO chapter_read_progress (user_id, chapter_id, completed) SELECT 1, id, 1 FROM chapters WHERE title_id = ? AND number_main = ?`, titleID, n); err != nil {
+			t.Fatal(err)
+		}
+		svc.PushTrackers(uctx, 1, titleID)
+		svc.FlushPushes(time.Second)
+	}
+	read(2)
+	kitsu.want(t, 0, 1, 1)
+	if err := svc.runTrackerSync(ctx, 1, catalog.KitsuProvider, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	kitsu.want(t, 0, 1, 1)
 }
 
 func TestLinkedTitleSyncsOnlyWhenAsked(t *testing.T) {
