@@ -1522,21 +1522,9 @@ func (r *Repository) titlesIn(ctx context.Context, scope, order string, scopeArg
 	args = append(args, uid)
 	args = append(args, scopeArgs...)
 	args = append(args, scopeArgs...)
-	rows, err := r.db.QueryContext(ctx, r.titleSelectQuery(scope)+` WHERE t.id IN (`+scope+`)`+order, args...)
+	out, err := database.Collect(ctx, r.db, scanTitle, r.titleSelectQuery(scope)+` WHERE t.id IN (`+scope+`)`+order, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list titles: %w", err)
-	}
-	defer rows.Close()
-	var out []Title
-	for rows.Next() {
-		title, err := scanTitle(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan title: %w", err)
-		}
-		out = append(out, title)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate titles: %w", err)
 	}
 	return out, nil
 }

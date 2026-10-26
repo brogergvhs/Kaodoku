@@ -121,20 +121,9 @@ func (r *Repository) SetExternalID(ctx context.Context, catalogID int64, e Exter
 }
 
 func (r *Repository) ExternalIDs(ctx context.Context, catalogID int64) ([]ExternalID, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT provider, provider_id, method, confirmed, checked_at FROM catalog_external_ids WHERE catalog_manga_id = ? ORDER BY provider`, catalogID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []ExternalID
-	for rows.Next() {
-		var e ExternalID
-		if err := rows.Scan(&e.Provider, &e.ProviderID, &e.Method, &e.Confirmed, &e.CheckedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return database.Collect(ctx, r.db, func(row database.Scanner) (e ExternalID, err error) {
+		return e, row.Scan(&e.Provider, &e.ProviderID, &e.Method, &e.Confirmed, &e.CheckedAt)
+	}, `SELECT provider, provider_id, method, confirmed, checked_at FROM catalog_external_ids WHERE catalog_manga_id = ? ORDER BY provider`, catalogID)
 }
 
 func (r *Repository) CopyExternalIDs(ctx context.Context, fromID, toID int64) error {
@@ -303,24 +292,21 @@ func (r *Repository) MangaByIDs(ctx context.Context, ids []int64) (map[int64]Man
 // MangaAuthors loads only ID, Provider, ProviderID and Authors for the given manga.
 func (r *Repository) MangaAuthors(ctx context.Context, ids []int64) (map[int64]Manga, error) {
 	raw, _ := json.Marshal(ids)
-	rows, err := r.db.QueryContext(ctx, `SELECT id, provider, provider_id, authors_json FROM catalog_manga WHERE id IN (SELECT value FROM json_each(?))`, string(raw))
+	out := make(map[int64]Manga, len(ids))
+	err := database.Each(ctx, r.db, `SELECT id, provider, provider_id, authors_json FROM catalog_manga WHERE id IN (SELECT value FROM json_each(?))`, []any{string(raw)}, func(row database.Scanner) error {
+		var m Manga
+		var authors string
+		if err := row.Scan(&m.ID, &m.Provider, &m.ProviderID, &authors); err != nil {
+			return err
+		}
+		err := json.Unmarshal([]byte(authors), &m.Authors)
+		out[m.ID] = m
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("load manga authors: %w", err)
 	}
-	defer rows.Close()
-	out := make(map[int64]Manga, len(ids))
-	for rows.Next() {
-		var m Manga
-		var authors string
-		if err := rows.Scan(&m.ID, &m.Provider, &m.ProviderID, &authors); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal([]byte(authors), &m.Authors); err != nil {
-			return nil, fmt.Errorf("decode authors: %w", err)
-		}
-		out[m.ID] = m
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (r *Repository) GetManga(ctx context.Context, id int64) (Manga, error) {
@@ -352,20 +338,15 @@ func (r *Repository) MangaByProvider(ctx context.Context, provider, providerID s
 // MangaByProviderIDs returns stored manga of one provider keyed by provider id, in one query.
 func (r *Repository) MangaByProviderIDs(ctx context.Context, provider string, ids []string) (map[string]Manga, error) {
 	raw, _ := json.Marshal(ids)
-	rows, err := r.db.QueryContext(ctx, mangaSelect()+` WHERE provider = ? AND provider_id IN (SELECT value FROM json_each(?))`, provider, string(raw))
+	list, err := database.Collect(ctx, r.db, scanManga, mangaSelect()+` WHERE provider = ? AND provider_id IN (SELECT value FROM json_each(?))`, provider, string(raw))
 	if err != nil {
 		return nil, fmt.Errorf("load manga by provider ids: %w", err)
 	}
-	defer rows.Close()
-	out := make(map[string]Manga, len(ids))
-	for rows.Next() {
-		m, err := scanManga(rows)
-		if err != nil {
-			return nil, err
-		}
+	out := make(map[string]Manga, len(list))
+	for _, m := range list {
 		out[m.ProviderID] = m
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ListWanted returns wanted canonical titles.
@@ -494,7 +475,7 @@ func matchSelect() string {
 		FROM title_source_matches`
 }
 
-func scanManga(row interface{ Scan(...any) error }) (Manga, error) {
+func scanManga(row database.Scanner) (Manga, error) {
 	var m Manga
 	var chapters, volumes sql.NullInt64
 	var synonymsJSON, genresJSON, authorsJSON, tagsJSON string
@@ -537,7 +518,7 @@ func scanManga(row interface{ Scan(...any) error }) (Manga, error) {
 	return m, nil
 }
 
-func scanMatch(row interface{ Scan(...any) error }) (Match, error) {
+func scanMatch(row database.Scanner) (Match, error) {
 	var m Match
 	var updated string
 	if err := row.Scan(&m.ID, &m.CatalogMangaID, &m.SourceID, &m.SourceURL, &m.Title,

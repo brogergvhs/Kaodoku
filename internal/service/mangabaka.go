@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
+	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
 	"github.com/brogergvhs/kaodoku/internal/mangabaka"
@@ -217,18 +218,10 @@ func (s *JobService) setSuggestion(ctx context.Context, catalogID int64, provide
 
 // linkLibrary links every library work from MangaBaka and refreshes its details from it.
 func (s *JobService) linkLibrary(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT catalog_manga_id FROM titles WHERE catalog_manga_id IS NOT NULL`)
+	ids, err := database.Column[int64](ctx, s.db, `SELECT DISTINCT catalog_manga_id FROM titles WHERE catalog_manga_id IS NOT NULL`)
 	if err != nil {
 		return err
 	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
 	var works []catalog.Manga
 	for _, id := range ids {
 		if m, err := s.catalog.GetManga(ctx, id); err == nil {
@@ -262,20 +255,18 @@ type MangaBakaLink struct {
 // MangaBakaLinks lists a tracker's links made from MangaBaka and its open suggestions, over library titles.
 func (s *JobService) MangaBakaLinks(ctx context.Context, provider string) (links, suggestions []MangaBakaLink, err error) {
 	scan := func(q string) ([]MangaBakaLink, error) {
-		rows, err := s.db.QueryContext(ctx, q, provider)
-		if err != nil {
-			return nil, err
-		}
 		byTitle := map[int64]MangaBakaLink{}
 		var ids []int64
-		for rows.Next() {
+		if err := database.Each(ctx, s.db, q, []any{provider}, func(r database.Scanner) error {
 			var l MangaBakaLink
-			if rows.Scan(&l.Title.ID, &l.ID, &l.Current) == nil {
+			if r.Scan(&l.Title.ID, &l.ID, &l.Current) == nil {
 				l.URL = catalog.MangaURL(provider, l.ID)
 				byTitle[l.Title.ID], ids = l, append(ids, l.Title.ID)
 			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
-		rows.Close()
 		titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
 		out := make([]MangaBakaLink, 0, len(titles))
 		for _, t := range titles {

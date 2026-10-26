@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brogergvhs/kaodoku/internal/database"
 	_ "modernc.org/sqlite"
 )
 
@@ -93,15 +94,10 @@ func (s *Store) Meta(ctx context.Context) Meta {
 	if s.db == nil {
 		return m
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM meta`)
-	if err != nil {
-		return m
-	}
-	defer rows.Close()
-	for rows.Next() {
+	_ = database.Each(ctx, s.db, `SELECT key, value FROM meta`, nil, func(r database.Scanner) error {
 		var k, v string
-		if rows.Scan(&k, &v) != nil {
-			continue
+		if r.Scan(&k, &v) != nil {
+			return nil
 		}
 		switch k {
 		case "sha1":
@@ -113,7 +109,8 @@ func (s *Store) Meta(ctx context.Context) Meta {
 		case "series":
 			m.Series, _ = strconv.Atoi(v)
 		}
-	}
+		return nil
+	})
 	if info, err := os.Stat(s.path); err == nil {
 		m.Size = info.Size()
 	}

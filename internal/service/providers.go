@@ -171,20 +171,11 @@ func (s *JobService) FlushRequests(ctx context.Context) { s.catalog.FlushRequest
 func (s *JobService) trackerCallRows(ctx context.Context) []trackerCallRow {
 	s.catalog.FlushRequests(ctx)
 	now := time.Now().UTC()
-	rows, err := s.db.QueryContext(ctx, `SELECT provider, reason, kind,
+	out, _ := database.Collect(ctx, s.db, func(r database.Scanner) (c trackerCallRow, err error) {
+		return c, r.Scan(&c.provider, &c.Reason, &c.Kind, &c.Today, &c.Month, &c.Total)
+	}, `SELECT provider, reason, kind,
 		COALESCE(SUM(CASE WHEN day = ? THEN count END), 0), COALESCE(SUM(CASE WHEN day > ? THEN count END), 0), SUM(count)
 		FROM tracker_calls GROUP BY provider, reason, kind ORDER BY SUM(count) DESC, reason, kind`, now.Format(time.DateOnly), now.AddDate(0, 0, -30).Format(time.DateOnly))
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var out []trackerCallRow
-	for rows.Next() {
-		var r trackerCallRow
-		if rows.Scan(&r.provider, &r.Reason, &r.Kind, &r.Today, &r.Month, &r.Total) == nil {
-			out = append(out, r)
-		}
-	}
 	return out
 }
 
@@ -530,23 +521,12 @@ func (s *JobService) takenByOther(ctx context.Context, catalogID int64, provider
 }
 
 func (s *JobService) resolveLibrary(ctx context.Context, p catalog.Provider, limit int) {
-	rows, err := s.db.QueryContext(ctx, `
+	ids, _ := database.Column[int64](ctx, s.db, `
 		SELECT DISTINCT cm.id FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id
 		WHERE cm.provider != ? AND NOT EXISTS (
 			SELECT 1 FROM catalog_external_ids e WHERE e.catalog_manga_id = cm.id AND e.provider = ?
 			AND (e.confirmed = 1 OR e.method = 'user' OR e.checked_at > ?))
 		LIMIT ?`, p.Name(), p.Name(), database.FormatTime(time.Now().Add(-mappingRecheck)), limit)
-	if err != nil {
-		return
-	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
 	for _, id := range ids {
 		if m, err := s.catalog.GetManga(ctx, id); err == nil && ctx.Err() == nil {
 			s.resolveID(ctx, m, p)
@@ -762,24 +742,13 @@ func fillBlanks(dst *catalog.Manga, src catalog.Manga) {
 }
 
 func (s *JobService) recentWorks(ctx context.Context, userID int64, limit int) []int64 {
-	rows, err := s.db.QueryContext(ctx, `
+	ids, _ := database.Column[int64](ctx, s.db, `
 		SELECT t.catalog_manga_id FROM chapter_read_progress rp
 		JOIN chapters c ON c.id = rp.chapter_id
 		JOIN titles t ON t.id = c.title_id
 		WHERE rp.user_id = ? AND t.catalog_manga_id IS NOT NULL
 		GROUP BY t.catalog_manga_id ORDER BY MAX(rp.last_read_at) DESC LIMIT ?`, userID, limit)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var out []int64
-	for rows.Next() {
-		var id int64
-		if rows.Scan(&id) == nil {
-			out = append(out, id)
-		}
-	}
-	return out
+	return ids
 }
 
 func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog.Manga, bool, error) {
@@ -842,18 +811,10 @@ func (s *JobService) runCatalogRefresh(ctx context.Context, progress ProgressMan
 			errs = append(errs, err)
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT cm.id FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id WHERE cm.status NOT IN ('FINISHED', 'CANCELLED')`)
+	ids, err := database.Column[int64](ctx, s.db, `SELECT DISTINCT cm.id FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id WHERE cm.status NOT IN ('FINISHED', 'CANCELLED')`)
 	if err != nil {
 		return err
 	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
 	handle := progress.Register("catalog refresh")
 	handle.SetTotal(len(ids))
 	defer handle.MarkDone()

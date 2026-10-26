@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/brogergvhs/kaodoku/internal/database"
 )
 
 type Series struct {
@@ -205,18 +207,7 @@ func (s *Store) TagNames(ctx context.Context) (genres, tags []string) {
 		return nil, nil
 	}
 	names := func(col string) []string {
-		var out []string
-		rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT j.value FROM series s, json_each(s.`+col+`) j WHERE s.merged_into IS NULL`)
-		if err != nil {
-			return nil
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var n string
-			if rows.Scan(&n) == nil {
-				out = append(out, n)
-			}
-		}
+		out, _ := database.Column[string](ctx, s.db, `SELECT DISTINCT j.value FROM series s, json_each(s.`+col+`) j WHERE s.merged_into IS NULL`)
 		return out
 	}
 	return names("genres"), names("tags")

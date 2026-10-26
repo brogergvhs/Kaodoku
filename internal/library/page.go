@@ -190,51 +190,36 @@ func (r *Repository) pageIDs(ctx context.Context, q TitleQuery) ([]int64, error)
 	if q.Limit > 0 {
 		query += fmt.Sprintf(` LIMIT %d OFFSET %d`, q.Limit, max(q.Offset, 0))
 	}
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	ids, err := database.Column[int64](ctx, r.db, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("page titles: %w", err)
 	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return ids, nil
 }
 
 // TitleBasics returns matching titles by name with only their own columns set, no per-chapter aggregates.
 func (r *Repository) TitleBasics(ctx context.Context, q TitleQuery) ([]Title, error) {
 	where, args := r.titleWhere(q, auth.UserID(ctx))
-	rows, err := r.db.QueryContext(ctx, `SELECT t.id, t.catalog_manga_id, COALESCE(t.source_id, ''), t.source_url, t.display_title, t.output_path, t.monitored, t.refresh_interval, t.last_refreshed_at`+titleFrom+` WHERE `+where+` ORDER BY t.display_title COLLATE NOCASE, t.id`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list title basics: %w", err)
-	}
-	defer rows.Close()
-	var out []Title
-	for rows.Next() {
-		var t Title
+	out, err := database.Collect(ctx, r.db, func(row database.Scanner) (t Title, err error) {
 		var catalogID sql.NullInt64
 		var lastRefreshed sql.NullString
-		if err := rows.Scan(&t.ID, &catalogID, &t.SourceID, &t.SourceURL, &t.DisplayTitle, &t.OutputPath, &t.Monitored, &t.RefreshInterval, &lastRefreshed); err != nil {
-			return nil, err
+		if err := row.Scan(&t.ID, &catalogID, &t.SourceID, &t.SourceURL, &t.DisplayTitle, &t.OutputPath, &t.Monitored, &t.RefreshInterval, &lastRefreshed); err != nil {
+			return t, err
 		}
 		if catalogID.Valid {
 			t.CatalogMangaID = &catalogID.Int64
 		}
 		if lastRefreshed.Valid {
 			at, err := database.ParseTime(lastRefreshed.String)
-			if err != nil {
-				return nil, err
-			}
 			t.LastRefreshedAt = &at
+			return t, err
 		}
-		out = append(out, t)
+		return t, nil
+	}, `SELECT t.id, t.catalog_manga_id, COALESCE(t.source_id, ''), t.source_url, t.display_title, t.output_path, t.monitored, t.refresh_interval, t.last_refreshed_at`+titleFrom+` WHERE `+where+` ORDER BY t.display_title COLLATE NOCASE, t.id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list title basics: %w", err)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (r *Repository) TitlesByIDs(ctx context.Context, ids []int64) ([]Title, error) {
@@ -288,41 +273,23 @@ func (r *Repository) TopGenre(ctx context.Context, q TitleQuery) (string, error)
 
 func (r *Repository) TitleNames(ctx context.Context, q TitleQuery) ([]string, error) {
 	where, args := r.titleWhere(q, auth.UserID(ctx))
-	rows, err := r.db.QueryContext(ctx, `SELECT t.display_title`+titleFrom+` WHERE `+where, args...)
+	names, err := database.Column[string](ctx, r.db, `SELECT t.display_title`+titleFrom+` WHERE `+where, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list title names: %w", err)
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
+	return names, nil
 }
 
 func (r *Repository) ReadTitleIDs(ctx context.Context) ([]int64, error) {
 	uid := auth.UserID(ctx)
-	rows, err := r.db.QueryContext(ctx, `
+	ids, err := database.Column[int64](ctx, r.db, `
 		SELECT c.title_id FROM chapter_read_progress rp JOIN chapters c ON c.id = rp.chapter_id WHERE rp.user_id = ? AND rp.completed = 1
 		UNION
 		SELECT v.title_id FROM volume_read_progress vr JOIN volumes v ON v.id = vr.volume_id WHERE vr.user_id = ? AND vr.completed = 1`, uid, uid)
 	if err != nil {
 		return nil, fmt.Errorf("list read titles: %w", err)
 	}
-	defer rows.Close()
-	ids := []int64{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return append([]int64{}, ids...), nil
 }
 
 func (r *Repository) FailingTitles(ctx context.Context, sourceID string) ([]Title, error) {

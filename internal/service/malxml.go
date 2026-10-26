@@ -11,6 +11,7 @@ import (
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
+	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
 )
@@ -65,22 +66,20 @@ func (s *JobService) ExportMALXML(ctx context.Context, w io.Writer) (exported, u
 	for id, tid := range byMAL {
 		malOf[tid] = id
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT t.id, e.method IS NOT NULL FROM titles t
-		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id AND e.provider = ? AND e.method = 'user' AND e.provider_id = ''
-		WHERE t.catalog_manga_id IS NOT NULL`, catalog.MALProvider)
-	if err != nil {
-		return 0, 0, 0, err
-	}
 	var ids []int64
 	notOnMAL := map[int64]bool{}
-	for rows.Next() {
+	if err := database.Each(ctx, s.db, `SELECT t.id, e.method IS NOT NULL FROM titles t
+		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id AND e.provider = ? AND e.method = 'user' AND e.provider_id = ''
+		WHERE t.catalog_manga_id IS NOT NULL`, []any{catalog.MALProvider}, func(r database.Scanner) error {
 		var id int64
 		var none bool
-		if rows.Scan(&id, &none) == nil {
+		if r.Scan(&id, &none) == nil {
 			ids, notOnMAL[id] = append(ids, id), none
 		}
+		return nil
+	}); err != nil {
+		return 0, 0, 0, err
 	}
-	rows.Close()
 	titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
 	if err != nil {
 		return 0, 0, 0, err

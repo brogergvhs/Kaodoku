@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/catalog"
+	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/util"
 )
 
@@ -121,22 +122,18 @@ func (s *JobService) trimImages(limit int64) {
 
 // trimRows drops rows past the newest ones that fit limit bytes; query yields two key columns and a size, newest first.
 func (s *JobService) trimRows(ctx context.Context, limit int64, query string, drop func(a, b any)) {
-	rows, err := s.db.QueryContext(ctx, query)
-	if err != nil {
-		return
-	}
 	var total int64
 	var old [][2]any
-	for rows.Next() {
+	_ = database.Each(ctx, s.db, query, nil, func(r database.Scanner) error {
 		var a, b any
 		var size int64
-		if rows.Scan(&a, &b, &size) == nil {
+		if r.Scan(&a, &b, &size) == nil {
 			if total += size; total > limit {
 				old = append(old, [2]any{a, b})
 			}
 		}
-	}
-	rows.Close()
+		return nil
+	})
 	for _, k := range old {
 		drop(k[0], k[1])
 	}

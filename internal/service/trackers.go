@@ -58,27 +58,23 @@ func (p TrackerPrefs) ratingFor(progressive bool) string {
 }
 
 func (s *JobService) TrackerAccounts(ctx context.Context, userID int64) []TrackerAccount {
-	rows, err := s.db.QueryContext(ctx, `SELECT provider, remote_name, expires_at, last_error, refresh_token = '', auto_link, auto_progressive, use_relations, use_recommendations, rating_sync, source, position, exclusive FROM tracker_accounts WHERE user_id = ? ORDER BY created_at, rowid`, userID)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
 	var out []TrackerAccount
-	for rows.Next() {
+	_ = database.Each(ctx, s.db, `SELECT provider, remote_name, expires_at, last_error, refresh_token = '', auto_link, auto_progressive, use_relations, use_recommendations, rating_sync, source, position, exclusive FROM tracker_accounts WHERE user_id = ? ORDER BY created_at, rowid`, []any{userID}, func(r database.Scanner) error {
 		var a TrackerAccount
 		var noRefresh bool
-		if rows.Scan(&a.Provider, &a.Name, &a.ExpiresAt, &a.LastError, &noRefresh, &a.AutoLink, &a.AutoProgressive, &a.Relations, &a.Recommendations, &a.RatingSync, &a.Source, &a.Position, &a.Exclusive) != nil {
-			continue
+		if r.Scan(&a.Provider, &a.Name, &a.ExpiresAt, &a.LastError, &noRefresh, &a.AutoLink, &a.AutoProgressive, &a.Relations, &a.Recommendations, &a.RatingSync, &a.Source, &a.Position, &a.Exclusive) != nil {
+			return nil
 		}
 		if _, known := s.catalog.providers[a.Provider]; !known {
-			continue
+			return nil
 		}
 		a.Label = s.ProviderLabel(a.Provider)
 		if t, err := database.ParseTime(a.ExpiresAt); err == nil && a.ExpiresAt != "" && noRefresh {
 			a.ExpiringSoon = time.Until(t) < 30*24*time.Hour
 		}
 		out = append(out, a)
-	}
+		return nil
+	})
 	return out
 }
 
@@ -134,24 +130,22 @@ type UnlinkedTitle struct {
 
 // UnlinkedTitles lists library titles with no confirmed link to provider, skipping ones marked as not on it.
 func (s *JobService) UnlinkedTitles(ctx context.Context, provider string) ([]UnlinkedTitle, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	found := map[int64]UnlinkedTitle{}
+	var ids []int64
+	if err := database.Each(ctx, s.db, `
 		SELECT t.id, COALESCE(e.provider_id, '') != '', cm.provider, cm.format, cm.year FROM titles t
 		JOIN catalog_manga cm ON cm.id = t.catalog_manga_id
 		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = cm.id AND e.provider = ?
-		WHERE cm.provider != ? AND COALESCE(e.confirmed, 0) = 0 AND COALESCE(e.method, '') != 'user'`, provider, provider)
-	if err != nil {
-		return nil, err
-	}
-	found := map[int64]UnlinkedTitle{}
-	var ids []int64
-	for rows.Next() {
+		WHERE cm.provider != ? AND COALESCE(e.confirmed, 0) = 0 AND COALESCE(e.method, '') != 'user'`, []any{provider, provider}, func(r database.Scanner) error {
 		var id int64
 		var u UnlinkedTitle
-		if rows.Scan(&id, &u.Suggested, &u.Provider, &u.Format, &u.Year) == nil {
+		if r.Scan(&id, &u.Suggested, &u.Provider, &u.Format, &u.Year) == nil {
 			ids, found[id] = append(ids, id), u
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	rows.Close()
 	titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
@@ -392,19 +386,9 @@ func (s *JobService) EnqueueTrackerSync(ctx context.Context, userID int64, provi
 }
 
 func (s *JobService) expandTrackerSync(ctx context.Context, parentID int64) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id, provider FROM tracker_accounts`)
-	if err != nil {
-		return err
-	}
-	var payloads []JobPayload
-	for rows.Next() {
-		var p JobPayload
-		if rows.Scan(&p.UserID, &p.Provider) == nil {
-			payloads = append(payloads, p)
-		}
-	}
-	err = rows.Err()
-	rows.Close()
+	payloads, err := database.Collect(ctx, s.db, func(r database.Scanner) (p JobPayload, err error) {
+		return p, r.Scan(&p.UserID, &p.Provider)
+	}, `SELECT user_id, provider FROM tracker_accounts`)
 	if err != nil {
 		return err
 	}
@@ -697,18 +681,14 @@ type syncedRow struct {
 
 func (s *JobService) syncedRows(ctx context.Context, userID int64, provider string, titleID int64) map[int64]syncedRow {
 	out := map[int64]syncedRow{}
-	rows, err := s.db.QueryContext(ctx, `SELECT title_id, progress, rating, favourite, remote FROM tracker_synced WHERE user_id = ? AND provider = ? AND ? IN (0, title_id)`, userID, provider, titleID)
-	if err != nil {
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
+	_ = database.Each(ctx, s.db, `SELECT title_id, progress, rating, favourite, remote FROM tracker_synced WHERE user_id = ? AND provider = ? AND ? IN (0, title_id)`, []any{userID, provider, titleID}, func(row database.Scanner) error {
 		var id int64
 		var r syncedRow
-		if rows.Scan(&id, &r.parts[0], &r.parts[1], &r.parts[2], &r.remote) == nil {
+		if row.Scan(&id, &r.parts[0], &r.parts[1], &r.parts[2], &r.remote) == nil {
 			out[id] = r
 		}
-	}
+		return nil
+	})
 	return out
 }
 
@@ -1062,7 +1042,7 @@ func (s *JobService) forgetTrackerState(ctx context.Context, userID int64, provi
 }
 
 func (s *JobService) localFavouriteIDs(ctx context.Context, userID int64, provider string) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	ids, err := database.Column[string](ctx, s.db, `
 		SELECT cm.provider_id FROM user_favourites uf
 		JOIN titles t ON t.id = uf.title_id JOIN catalog_manga cm ON cm.id = t.catalog_manga_id
 		WHERE uf.user_id = ? AND cm.provider = ?
@@ -1070,18 +1050,11 @@ func (s *JobService) localFavouriteIDs(ctx context.Context, userID int64, provid
 		SELECT e.provider_id FROM user_favourites uf
 		JOIN titles t ON t.id = uf.title_id JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id
 		WHERE uf.user_id = ? AND e.provider = ? AND e.confirmed = 1 AND e.provider_id != ''`, userID, provider, userID, provider)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	out := map[string]bool{}
-	for rows.Next() {
-		var pid string
-		if rows.Scan(&pid) == nil {
-			out[pid] = true
-		}
+	for _, id := range ids {
+		out[id] = true
 	}
-	return out, rows.Err()
+	return out, err
 }
 
 // SyncTrackersTitle is a one-off sync of a title; an empty provider means every connected tracker.
@@ -1219,21 +1192,19 @@ type MissingRating struct {
 // MissingRatings lists titles rated in Kaodoku that a tracker leading their ratings has none for.
 func (s *JobService) MissingRatings(ctx context.Context, provider string) ([]MissingRating, error) {
 	uid := auth.UserID(ctx)
-	rows, err := s.db.QueryContext(ctx, `SELECT ur.title_id, ur.rating FROM tracker_ratings tr JOIN user_ratings ur ON ur.user_id = tr.user_id AND ur.title_id = tr.title_id
-		WHERE tr.user_id = ? AND tr.provider = ? AND tr.rating = 0 AND tr.choice = '' AND ur.rating > 0`, uid, provider)
-	if err != nil {
-		return nil, err
-	}
 	ratings := map[int64]int{}
 	var ids []int64
-	for rows.Next() {
+	if err := database.Each(ctx, s.db, `SELECT ur.title_id, ur.rating FROM tracker_ratings tr JOIN user_ratings ur ON ur.user_id = tr.user_id AND ur.title_id = tr.title_id
+		WHERE tr.user_id = ? AND tr.provider = ? AND tr.rating = 0 AND tr.choice = '' AND ur.rating > 0`, []any{uid, provider}, func(row database.Scanner) error {
 		var id int64
 		var r int
-		if rows.Scan(&id, &r) == nil {
+		if row.Scan(&id, &r) == nil {
 			ids, ratings[id] = append(ids, id), r
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	rows.Close()
 	titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
 	var out []MissingRating
 	for _, t := range titles {
@@ -1361,26 +1332,22 @@ func (s *JobService) setTrackerRating(ctx context.Context, userID, titleID int64
 
 func (s *JobService) progressiveTitles(ctx context.Context, userID int64, provider string) (func(int64) bool, error) {
 	a, _ := s.trackerAccount(ctx, userID, provider)
-	rows, err := s.db.QueryContext(ctx, `SELECT title_id, enabled FROM tracker_title_sync WHERE user_id = ? AND provider = ?`, userID, provider)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	explicit := map[int64]bool{}
-	for rows.Next() {
+	if err := database.Each(ctx, s.db, `SELECT title_id, enabled FROM tracker_title_sync WHERE user_id = ? AND provider = ?`, []any{userID, provider}, func(r database.Scanner) error {
 		var id int64
 		var on bool
-		if err := rows.Scan(&id, &on); err != nil {
-			return nil, err
-		}
+		err := r.Scan(&id, &on)
 		explicit[id] = on
+		return err
+	}); err != nil {
+		return nil, err
 	}
 	return func(id int64) bool {
 		if on, ok := explicit[id]; ok {
 			return on
 		}
 		return a.AutoProgressive
-	}, rows.Err()
+	}, nil
 }
 
 func (s *JobService) syncTitle(ctx, actx context.Context, p catalog.Provider, id string, userID, titleID int64, source, rating string) error {
@@ -1651,22 +1618,20 @@ func (s *JobService) ProviderSuggestions(ctx context.Context, provider string, f
 }
 
 func (s *JobService) encryptLegacyTokens(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id, provider, access_token FROM tracker_accounts`)
-	if err != nil {
-		return err
-	}
 	type row struct {
 		id              int64
 		provider, token string
 	}
 	var legacy []row
-	for rows.Next() {
+	if err := database.Each(ctx, s.db, `SELECT user_id, provider, access_token FROM tracker_accounts`, nil, func(sc database.Scanner) error {
 		var r row
-		if rows.Scan(&r.id, &r.provider, &r.token) == nil && r.token != "" && !strings.HasPrefix(r.token, encPrefix) {
+		if sc.Scan(&r.id, &r.provider, &r.token) == nil && r.token != "" && !strings.HasPrefix(r.token, encPrefix) {
 			legacy = append(legacy, r)
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	rows.Close()
 	for _, r := range legacy {
 		enc, err := s.secrets.Encrypt(r.token)
 		if err != nil {
