@@ -211,7 +211,7 @@ struct MangaDetailSheet: View {
                 Label("In library", systemImage: "checkmark.circle.fill")
                   .font(.caption).foregroundStyle(Theme.success)
               } else if canAdd {
-                Button(busy ? "Adding…" : "Add to library") { add() }
+                Button(busy ? "Adding..." : "Add to library") { add() }
                   .buttonStyle(.borderedProminent)
                   .disabled(busy)
               }
@@ -243,7 +243,7 @@ struct MangaDetailSheet: View {
                 .disabled(match.chaptersFound == 0 || busy)
               }
             } else {
-              Button("Choose source manually…") { findMatches() }
+              Button("Choose source manually...") { findMatches() }
                 .disabled(busy)
             }
           }
@@ -413,7 +413,7 @@ struct TagFilterSection: View {
   var body: some View {
     Section {
       HStack {
-        TextField("Filter tags…", text: $filter)
+        TextField("Filter tags...", text: $filter)
         Button("Reset") { include = []; exclude = [] }
           .buttonStyle(.borderless)
           .disabled(include.isEmpty && exclude.isEmpty)

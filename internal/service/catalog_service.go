@@ -35,7 +35,7 @@ type cachedSearch struct {
 
 const searchTTL = 10 * time.Minute
 
-var providerOrder = []string{catalog.AniListProvider, catalog.MALProvider, catalog.KitsuProvider, catalog.MangaUpdatesProvider}
+var providerOrder = []string{catalog.AniListProvider, catalog.MALProvider, catalog.KitsuProvider, catalog.MangaUpdatesProvider, catalog.MangaBakaProvider}
 
 var ErrContentBlocked = errors.New("content blocked")
 
@@ -106,19 +106,23 @@ func (s *CatalogService) Search(ctx context.Context, p catalog.Provider, query s
 
 // FlushRequests adds each tracker's calls since the last flush to today's rows.
 func (s *CatalogService) FlushRequests(ctx context.Context) {
-	day := time.Now().UTC().Format(time.DateOnly)
 	for name, p := range s.providers {
 		c, ok := p.(callCounter)
 		if !ok {
 			continue
 		}
 		for call, n := range c.TakeCalls() {
-			if _, err := s.db.ExecContext(ctx, `INSERT INTO tracker_calls (provider, day, kind, reason, count) VALUES (?, ?, ?, ?, ?)
-				ON CONFLICT (provider, day, kind, reason) DO UPDATE SET count = count + excluded.count`, name, day, call.Kind, call.Reason, n); err != nil {
+			if s.saveCalls(ctx, name, call, n) != nil {
 				c.Count(call, n)
 			}
 		}
 	}
+}
+
+func (s *CatalogService) saveCalls(ctx context.Context, name string, call catalog.Call, n int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tracker_calls (provider, day, kind, reason, count) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (provider, day, kind, reason) DO UPDATE SET count = count + excluded.count`, name, time.Now().UTC().Format(time.DateOnly), call.Kind, call.Reason, n)
+	return err
 }
 
 func (s *CatalogService) searchCached(ctx context.Context, p catalog.Provider, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {

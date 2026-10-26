@@ -62,7 +62,7 @@ struct SettingsView: View {
                   .font(.caption).foregroundStyle(.secondary)
               }
             } else {
-              LabeledContent("Status", value: "…")
+              LabeledContent("Status", value: "...")
             }
           }
           if app.me?.can("jobs.view") == true {
@@ -149,6 +149,15 @@ struct TrackerSettingsView: View {
           Text(settings.source == "kaodoku"
             ? "Kaodoku sends progress, favourites and ratings to \(tracker.label)."
             : "Kaodoku takes progress, favourites and ratings from \(tracker.label).")
+        }
+        Section {
+          Toggle("Only Kaodoku updates \(tracker.label)", isOn: Binding(
+            get: { settings.exclusive ?? false },
+            set: { settings.exclusive = $0 }
+          ))
+        } footer: {
+          Text("Skips reading an entry from \(tracker.label) before each update. "
+            + "Leave off if you also update \(tracker.label) from another app or its website.")
         }
         Section {
           Button("Sync \(tracker.label) now", action: sync).disabled(tracker.unavailable != nil)

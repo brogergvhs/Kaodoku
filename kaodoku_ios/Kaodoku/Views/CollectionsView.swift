@@ -198,7 +198,7 @@ struct CollectionCard: View {
     }
   }
 
-  /// Web card rules: 2 stack vertically; 2×2 grid; >4 → three covers + "+N".
+  /// Web card rules: 2 stack vertically; 2×2 grid; >4 -> three covers + "+N".
   @ViewBuilder private var collage: some View {
     let n = entry.titleIds.count
     if n == 2 {

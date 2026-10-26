@@ -325,7 +325,8 @@ CREATE TABLE IF NOT EXISTS tracker_related (
 	provider_id TEXT NOT NULL,
 	relations_json TEXT NOT NULL,
 	recommendations_json TEXT NOT NULL,
-	fetched_at TEXT NOT NULL,
+	relations_fetched_at TEXT NOT NULL DEFAULT '',
+	recommendations_fetched_at TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (provider, provider_id)
 );
 
@@ -345,6 +346,17 @@ CREATE TABLE IF NOT EXISTS tracker_ratings (
 	PRIMARY KEY (user_id, title_id, provider)
 );
 
+CREATE TABLE IF NOT EXISTS tracker_synced (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
+	progress TEXT NOT NULL DEFAULT '',
+	rating TEXT NOT NULL DEFAULT '',
+	favourite TEXT NOT NULL DEFAULT '',
+	remote TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (user_id, title_id, provider)
+);
+
 DROP TABLE IF EXISTS tracker_favourites;
 
 CREATE TABLE IF NOT EXISTS catalog_external_ids (
@@ -357,6 +369,14 @@ CREATE TABLE IF NOT EXISTS catalog_external_ids (
 	PRIMARY KEY (catalog_manga_id, provider)
 );
 CREATE INDEX IF NOT EXISTS idx_catalog_external_lookup ON catalog_external_ids(provider, provider_id) WHERE confirmed = 1;
+
+CREATE TABLE IF NOT EXISTS mangabaka_suggestions (
+	catalog_manga_id INTEGER NOT NULL REFERENCES catalog_manga(id) ON DELETE CASCADE,
+	provider TEXT NOT NULL,
+	provider_id TEXT NOT NULL,
+	dismissed INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (catalog_manga_id, provider)
+);
 
 CREATE TABLE IF NOT EXISTS api_tokens (
 	token_hash TEXT PRIMARY KEY,
@@ -480,6 +500,15 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+	if oldRelated, _, err := txHasColumn(ctx, tx, "tracker_related", "fetched_at"); err != nil {
+		return err
+	} else if oldRelated {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE tracker_related RENAME COLUMN fetched_at TO relations_fetched_at;
+			ALTER TABLE tracker_related ADD COLUMN recommendations_fetched_at TEXT NOT NULL DEFAULT '';
+			UPDATE tracker_related SET recommendations_fetched_at = relations_fetched_at`); err != nil {
+			return err
+		}
+	}
 	for _, col := range []struct{ table, name, def string }{
 		{"jobs", "parent_id", "INTEGER"},
 		{"catalog_manga", "is_adult", "INTEGER NOT NULL DEFAULT 0"},
@@ -495,6 +524,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"tracker_accounts", "rating_sync", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "source", "TEXT NOT NULL DEFAULT 'kaodoku'"},
 		{"tracker_accounts", "position", "INTEGER NOT NULL DEFAULT 0"},
+		{"tracker_accounts", "exclusive", "INTEGER NOT NULL DEFAULT 0"},
 		{"tracker_ratings", "choice", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_json", "TEXT NOT NULL DEFAULT ''"},
 		{"tracker_accounts", "list_fetched_at", "TEXT NOT NULL DEFAULT ''"},

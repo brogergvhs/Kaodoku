@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/brogergvhs/kaodoku/internal/auth"
 	"github.com/brogergvhs/kaodoku/internal/catalog"
+	"github.com/brogergvhs/kaodoku/internal/database"
 	"github.com/brogergvhs/kaodoku/internal/jobs"
 	"github.com/brogergvhs/kaodoku/internal/library"
 )
@@ -64,22 +66,20 @@ func (s *JobService) ExportMALXML(ctx context.Context, w io.Writer) (exported, u
 	for id, tid := range byMAL {
 		malOf[tid] = id
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT t.id, e.method IS NOT NULL FROM titles t
-		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id AND e.provider = ? AND e.method = 'user' AND e.provider_id = ''
-		WHERE t.catalog_manga_id IS NOT NULL`, catalog.MALProvider)
-	if err != nil {
-		return 0, 0, 0, err
-	}
 	var ids []int64
 	notOnMAL := map[int64]bool{}
-	for rows.Next() {
+	if err := database.Each(ctx, s.db, `SELECT t.id, e.method IS NOT NULL FROM titles t
+		LEFT JOIN catalog_external_ids e ON e.catalog_manga_id = t.catalog_manga_id AND e.provider = ? AND e.method = 'user' AND e.provider_id = ''
+		WHERE t.catalog_manga_id IS NOT NULL`, []any{catalog.MALProvider}, func(r database.Scanner) error {
 		var id int64
 		var none bool
-		if rows.Scan(&id, &none) == nil {
+		if r.Scan(&id, &none) == nil {
 			ids, notOnMAL[id] = append(ids, id), none
 		}
+		return nil
+	}); err != nil {
+		return 0, 0, 0, err
 	}
-	rows.Close()
 	titles, err := s.lib.repo.TitlesByIDs(ctx, ids)
 	if err != nil {
 		return 0, 0, 0, err
@@ -92,7 +92,7 @@ func (s *JobService) ExportMALXML(ctx context.Context, w io.Writer) (exported, u
 	doc.Info.UserName, doc.Info.ExportType = user.Username, 2
 	for _, t := range titles {
 		u, err := s.localUpdate(ctx, s.catalog.providers[catalog.MALProvider], uid, t.ID)
-		if err != nil || !contentAllowedFor(user, t.IsAdult, t.ContentTags) || u.Status == "PLANNING" && !ownsTitle(uid, owners[t.ID]) {
+		if err != nil || !ContentAllowed(user, t.IsAdult, t.ContentTags) || u.Status == "PLANNING" && !ownsTitle(uid, owners[t.ID]) {
 			continue
 		}
 		if malOf[t.ID] == "" {
@@ -175,12 +175,15 @@ func (s *JobService) ImportMALXML(ctx context.Context, r io.Reader, opts ListImp
 			res.Ignored++
 		}
 		e := ListEntry{MALID: strings.TrimSpace(m.ID), Chapters: m.ReadChapters, Score: m.Score}
+		if e.Chapters == 0 && m.Status == "Completed" {
+			e.Chapters = cmp.Or(m.Chapters, s.mbFinalChapters(ctx, e.MALID))
+		}
 		tid, ok := byMAL[e.MALID]
 		switch {
 		case !ok:
 			res.NotInLibrary++
 			missing = append(missing, e)
-		case contentAllowedFor(user, byID[tid].IsAdult, byID[tid].ContentTags):
+		case ContentAllowed(user, byID[tid].IsAdult, byID[tid].ContentTags):
 			res.InLibrary++
 			if apply {
 				raised, rated := s.applyListEntry(ctx, uid, tid, e, opts)
@@ -196,6 +199,21 @@ func (s *JobService) ImportMALXML(ctx context.Context, r io.Reader, opts ListImp
 		res.Queued = len(missing)
 	}
 	return res, nil
+}
+
+// aniListFor finds the AniList id of a MyAnimeList id, from MangaBaka before asking AniList.
+func (s *JobService) aniListFor(ctx context.Context, malID string) string {
+	if s.mbOn(ctx) {
+		if sr, _ := s.mb.ByProvider(ctx, catalog.MALProvider, malID); sr.IDs[catalog.AniListProvider] != "" {
+			return sr.IDs[catalog.AniListProvider]
+		}
+	}
+	if r, ok := s.catalog.providers[catalog.AniListProvider].(catalog.Resolver); ok {
+		if id, found, err := r.Resolve(ctx, catalog.MALProvider, malID); found && err == nil {
+			return id
+		}
+	}
+	return ""
 }
 
 func (s *JobService) applyListEntry(ctx context.Context, uid, titleID int64, e ListEntry, opts ListImport) (raised, rated int) {
@@ -227,15 +245,10 @@ func (s *JobService) runListImport(ctx context.Context, userID int64, opts *List
 		handle.Update(i+1, len(opts.Entries), 0)
 		provider, id := catalog.MALProvider, e.MALID
 		if !s.providerEnabled(ctx, provider) {
-			found := false
-			if r, ok := s.catalog.providers[catalog.AniListProvider].(catalog.Resolver); ok {
-				id, found, err = r.Resolve(ctx, catalog.MALProvider, e.MALID)
-			}
-			if !found || err != nil {
+			if provider, id = catalog.AniListProvider, s.aniListFor(ctx, e.MALID); id == "" {
 				errs = append(errs, fmt.Errorf("MyAnimeList %s: not found on AniList", e.MALID))
 				continue
 			}
-			provider = catalog.AniListProvider
 		}
 		title, err := s.AddCatalogTitle(ctx, provider, id)
 		if err != nil {

@@ -3,7 +3,7 @@
 {{define "addToCollection"}}
 <div class="grid gap-4">
   <form class="flex gap-2" hx-post="/ui/library/{{.TitleID}}/collections/add" hx-target="#toast" hx-swap="innerHTML" hx-on::after-request="if(event.detail.successful){add_to_collection_modal.close()}">
-    <input class="input input-sm w-full" name="name" required placeholder="New collection name…">
+    <input class="input input-sm w-full" name="name" required placeholder="New collection name...">
     <button class="btn btn-sm btn-primary shrink-0">Create &amp; add</button>
   </form>
   {{if .Custom}}
@@ -156,7 +156,7 @@
     </div>
     <form id="kotatsu-filters" class="mt-3 grid gap-2" hx-get="/ui/sources/kotatsu/list" hx-target="#kotatsu-browse" hx-swap="outerHTML"
       hx-trigger="submit, change target:select, keyup changed delay:300ms from:input[name='q']">
-      <input class="input input-sm w-full" name="q" value="{{.Filter.Q}}" placeholder="Search by name, id, or domain…">
+      <input class="input input-sm w-full" name="q" value="{{.Filter.Q}}" placeholder="Search by name, id, or domain...">
       <div class="grid grid-cols-4 gap-2">
         <select class="select select-sm" name="lang">
           <option value="">Any language</option>
@@ -566,6 +566,9 @@
   <button type="submit" class="btn btn-xs btn-outline">Retry</button>
 </form>
 {{else}}
+{{with .FetchFrom}}<div class="mt-4 -mb-2 flex flex-wrap items-center gap-2 text-sm text-base-content/60">From MangaBaka and what {{.}} sent before.
+  <button type="button" class="btn btn-xs btn-outline" hx-post="/ui/search" hx-include="#search-form" hx-vals='{"fetch": "1"}' hx-target="#search-results" hx-indicator="#search-spin">Fetch from {{.}}</button>
+</div>{{end}}
 {{if .Results.Items}}{{template "mangaResults" .Results}}
 {{else if and (not .Append) (not .NextPage)}}{{template "mangaResults" .Results}}
 {{else if not .Append}}<p class="py-2 text-sm text-base-content/60">No matches on the first pages — “Show more” keeps scanning.</p>
@@ -591,21 +594,27 @@
 {{end}}
 
 {{define "relatedSections"}}
-{{with .Relations.Items}}
+<div id="related-sections">{{range .}}{{template "relatedSection" .}}{{end}}</div>
+{{end}}
+
+{{define "relatedSection"}}
+<div id="related-{{.Kind}}">{{if or .Results.Items .Fetch}}
 <div class="collapse collapse-arrow bg-base-100 mt-4">
-  <input type="checkbox">
-  <div class="collapse-title font-semibold">Related manga <span class="badge badge-sm badge-ghost ml-1">{{len .}}</span></div>
-  <div class="collapse-content">{{template "mangaResults" $.Relations}}</div>
+  <input type="checkbox"{{if .Open}} checked{{end}}>
+  <div class="collapse-title font-semibold">{{.Heading}} <span class="badge badge-sm badge-ghost ml-1">{{len .Results.Items}}</span></div>
+  <div class="collapse-content">
+    {{with .Fetch}}<form class="mb-3 flex flex-wrap items-center gap-2 text-sm" hx-post="/ui/library/{{$.TitleID}}/related/fetch" hx-vals='{"kind":"{{$.Kind}}"}' hx-target="#related-{{$.Kind}}" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <span class="text-base-content/60">Fetch from</span>
+      {{if eq (len .) 1}}{{with index . 0}}<input type="hidden" name="provider" value="{{.Name}}"><button class="btn btn-xs btn-outline">{{.Label}}</button>{{end}}
+      {{else}}<select class="select select-xs w-auto" name="provider" aria-label="Tracker">{{range .}}<option value="{{.Name}}">{{.Label}}</option>{{end}}</select><button class="btn btn-xs btn-outline">Fetch</button>{{end}}
+    </form>{{end}}
+    {{template "mangaResults" .Results}}
+  </div>
 </div>
+{{end}}</div>
 {{end}}
-{{with .Recommendations.Items}}
-<div class="collapse collapse-arrow bg-base-100 mt-4">
-  <input type="checkbox">
-  <div class="collapse-title font-semibold">Recommended manga <span class="badge badge-sm badge-ghost ml-1">{{len .}}</span></div>
-  <div class="collapse-content">{{template "mangaResults" $.Recommendations}}</div>
-</div>
-{{end}}
-{{end}}
+
+{{define "mangaOrigin"}}{{if .APIs}}<span class="mr-1 inline-flex align-middle [&>svg]:size-3" role="img" title="{{.Note}}" aria-label="{{.Note}}">{{template "iconCloud"}}</span>{{end}}{{end}}
 
 {{define "mangaResults"}}
 {{if .Heading}}<h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-base-content/60">{{.Heading}}</h2>{{end}}
@@ -620,7 +629,7 @@
         <td class="w-12"><a href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}"><img class="h-14 w-10 rounded object-cover bg-base-300" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a></td>
         <td class="min-w-0">
           <a class="font-medium link-hover" href="{{if .TitleID}}/library/{{.TitleID}}{{else}}{{mangaURL .Manga}}{{end}}">{{mangaTitle .Manga}}</a>
-          <div class="text-xs text-base-content/50">{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
+          <div class="text-xs text-base-content/50">{{template "mangaOrigin" .Origin}}{{if .Origin.Local}}Local DB · {{end}}{{if $.ShowProvider}}{{providerLabel .Provider}} · {{end}}{{.Format}}{{if .Status}} · {{.Status}}{{end}}{{if .Chapters}} · {{.Chapters}} ch{{end}}{{if .AverageScore}} · ★ {{.AverageScore}}%{{end}}</div>
         </td>
         <td class="whitespace-nowrap text-right">
           {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
@@ -642,7 +651,7 @@
       </figure>
       <div class="flex min-w-0 flex-1 flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}{{if $.ShowProvider}} <span class="badge badge-ghost badge-sm align-middle">{{providerLabel .Provider}}</span>{{end}}</h3>
+          <h3 class="text-lg font-semibold text-balance">{{mangaTitle .Manga}}{{if $.ShowProvider}} <span class="badge badge-ghost badge-sm align-middle">{{providerLabel .Provider}}</span>{{end}}{{if .Origin.Local}} <span class="badge badge-ghost badge-sm align-middle">Local DB</span>{{end}}{{if .Origin.APIs}} <span class="text-base-content/50 align-middle">{{template "mangaOrigin" .Origin}}</span>{{end}}</h3>
           <div class="shrink-0">
             {{if .TitleID}}<a class="btn btn-sm btn-success btn-soft" href="/library/{{.TitleID}}">✓ In library</a>
             {{else if $canAdd}}<button class="btn btn-sm btn-outline" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}"}' hx-target="this" hx-swap="outerHTML">Add</button>{{end}}
@@ -661,7 +670,7 @@
     <div class="relative aspect-[5/7] w-full overflow-hidden rounded-lg bg-base-300{{if .IsAdult}} outline outline-2 -outline-offset-2 outline-error{{end}}">
       {{if .TitleID}}<a href="/library/{{.TitleID}}"><img class="h-full w-full object-cover" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>
       {{else}}<a href="{{mangaURL .Manga}}"><img class="h-full w-full object-cover" src="{{img (coverURL .Manga)}}" alt="" loading="lazy"></a>{{end}}
-      {{if $.ShowProvider}}<span class="pointer-events-none badge badge-sm absolute left-2 top-2 bg-base-100">{{providerLabel .Provider}}</span>{{end}}
+      {{if or $.ShowProvider .Origin.Local}}<div class="pointer-events-none absolute left-2 top-2 flex flex-wrap gap-1">{{if $.ShowProvider}}<span class="badge badge-sm bg-base-100">{{providerLabel .Provider}}</span>{{end}}{{if .Origin.Local}}<span class="badge badge-sm bg-base-100">Local DB</span>{{end}}</div>{{end}}
       {{if $.ShowRelations}}<div class="pointer-events-none absolute inset-x-2 bottom-2 flex">
         <span class="badge badge-sm max-w-full whitespace-normal bg-base-100 text-info">{{.RelationLabel}}</span>
       </div>{{end}}
@@ -669,7 +678,7 @@
     <div class="mt-1.5 min-h-[2.5em] line-clamp-2 text-sm font-medium leading-tight">{{mangaTitle .Manga}}</div>
     <div class="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-base-content/50">
       <span class="truncate">{{.Format}}{{if .Chapters}} · {{.Chapters}} ch{{end}}</span>
-      <span class="shrink-0">{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
+      <span class="shrink-0">{{template "mangaOrigin" .Origin}}{{if .AverageScore}}★ {{.AverageScore}}%{{end}}</span>
     </div>
     {{if .TitleID}}<a class="btn btn-xs btn-success btn-soft mt-auto w-full pt-0.5" href="/library/{{.TitleID}}">✓ In library</a>
     {{else if $canAdd}}<button class="btn btn-xs btn-outline mt-auto w-full" hx-post="/ui/library/add" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ProviderID}}","card":"1"}' hx-target="this" hx-swap="outerHTML">Add</button>
@@ -772,7 +781,7 @@
 
   {{if eq .Tab "volumes"}}
   {{if .Attaching}}
-  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Attaching volumes…</div>
+  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Attaching volumes...</div>
   {{end}}
   {{if .Volumes}}
   <div class="divide-y divide-line/25 rounded-xl bg-base-100 px-4">
@@ -810,7 +819,7 @@
   <form class="mb-2 flex items-center gap-2"
     hx-get="/ui/library/{{.Title.ID}}/chapters" hx-target="#chapters-table" hx-swap="outerHTML"
     hx-trigger="change, keyup changed delay:300ms from:input[name='q']">
-    <input class="input input-sm w-full" name="q" placeholder="Filter chapters…">
+    <input class="input input-sm w-full" name="q" placeholder="Filter chapters...">
     <select class="select select-sm shrink-0" name="order" aria-label="Sort chapters">
       <option value="number-asc">Oldest first</option>
       <option value="number-desc">Newest first</option>
@@ -826,14 +835,14 @@
   <dialog id="chapter_rename_modal" class="modal">
     <div class="modal-box max-w-sm">
       <h3 class="text-lg font-bold mb-3">Rename chapter</h3>
-      <div id="chapter-rename-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+      <div id="chapter-rename-body"><p class="text-sm text-base-content/60">Loading...</p></div>
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>
   <dialog id="bulk_rename_modal" class="modal">
     <div class="modal-box max-w-2xl">
       <h3 class="text-lg font-bold mb-3">Bulk rename chapters</h3>
-      <div id="bulk-rename-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+      <div id="bulk-rename-body"><p class="text-sm text-base-content/60">Loading...</p></div>
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>
@@ -858,6 +867,7 @@
             <div class="flex gap-1">
               {{with .Outage}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Temporarily unavailable: {{.}}" aria-label="Temporarily unavailable">{{template "iconPower"}}</span>{{end}}
               {{if .Primary}}<span class="badge badge-sm badge-primary badge-soft tip" tabindex="0" data-tip="Metadata source" aria-label="Metadata source">{{template "iconDatabase"}}</span>{{end}}
+              {{if eq .Method "mangabaka"}}<span class="badge badge-sm badge-info badge-soft tip" tabindex="0" data-tip="Linked from MangaBaka. Confirm or relink it." aria-label="Linked from MangaBaka">{{template "iconDatabase"}}</span>{{end}}
               {{if $linked}}{{if .Syncing}}<span class="badge badge-sm badge-success badge-soft tip" tabindex="0" data-tip="Progressive sync" aria-label="Progressive sync">{{template "iconRefresh"}}</span>{{else if not .Primary}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Linked" aria-label="Linked">{{template "iconLink"}}</span>{{end}}
               {{else if .ID}}<span class="badge badge-sm badge-warning badge-soft tip" tabindex="0" data-tip="Suggested match" aria-label="Suggested match">{{template "iconAlert"}}</span>
               {{else if eq .Method "user"}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Not on {{.Label}}" aria-label="Not on {{.Label}}">{{template "iconBan"}}</span>
@@ -865,7 +875,6 @@
             </div>
           </div>
           {{if .URL}}<a class="text-xs text-base-content/50 link-hover" href="{{.URL}}" target="_blank" rel="noreferrer noopener">#{{.ID}} ↗</a>{{end}}
-          {{if and $linked (not .Connected)}}<div class="text-xs text-base-content/50"><a class="link" href="/me">Connect {{.Label}}</a> to sync your progress</div>{{end}}
         </div>
         {{$sync := and $linked .Connected}}
         {{if .Outage}}<button type="button" class="btn btn-ghost btn-sm btn-square shrink-0" disabled aria-label="{{.Label}} is temporarily unavailable">{{template "iconDots"}}</button>
@@ -878,7 +887,7 @@
             <li><button hx-post="/ui/library/{{$.TitleID}}/providers/progressive" hx-vals='{"provider":"{{.Provider}}","on":"1"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconPower"}}Start progressive sync</button></li>
             {{end}}
             {{if $.CanManage}}
-            {{if and .ID (not .Confirmed)}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconCheckCircle"}}Confirm match</button></li>{{end}}
+            {{if and .ID (or (not .Confirmed) (eq .Method "mangabaka"))}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}"}' hx-target="#providers-{{$.TitleID}}" hx-swap="outerHTML">{{template "iconCheckCircle"}}{{if .Confirmed}}Confirm link{{else}}Confirm match{{end}}</button></li>{{end}}
             <li><button hx-post="/ui/library/{{$.TitleID}}/providers/search" hx-include="#picker-form-{{$.TitleID}}-{{.Provider}}" hx-target="#picker-results-{{$.TitleID}}-{{.Provider}}" onclick="openPicker('{{$.TitleID}}-{{.Provider}}')">{{if or .Primary $linked}}{{template "iconRefresh"}}Relink{{else}}{{template "iconLink"}}Link{{end}}</button></li>
             {{if and $linked (not .Primary)}}<li><button hx-post="/ui/library/{{$.TitleID}}/providers/set" hx-vals='{"provider":"{{.Provider}}","provider_id":"{{.ID}}","mode":"primary"}' hx-confirm="Use {{.Label}} for this title's metadata?">{{template "iconDatabase"}}Use for metadata</button></li>{{end}}
             {{end}}
@@ -972,6 +981,7 @@
             {{if ne .RatingSync "off"}}{{$when := "same as progressive sync"}}{{if eq .RatingSync "on"}}{{$when = "always"}}{{end}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Ratings sync, {{$when}}" aria-label="Ratings sync, {{$when}}">{{template "iconStar"}}</span>{{end}}
             {{if .Relations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its related manga" aria-label="Uses its related manga">{{template "iconLayers"}}</span>{{end}}
             {{if .Recommendations}}<span class="badge badge-sm badge-ghost tip" tabindex="0" data-tip="Uses its recommendations" aria-label="Uses its recommendations">{{template "iconUsers"}}</span>{{end}}
+            {{with $c.MangaBaka}}<span class="badge badge-sm badge-info tip" tabindex="0" data-tip="MangaBaka links to check" aria-label="MangaBaka links to check" data-mangabaka-item="{{$c.Provider}}"><span data-mangabaka-count="{{$c.Provider}}">{{capCount .}}</span></span>{{end}}
           </div>
         </div>
         {{if .ExpiresAt}}<div class="text-xs {{if .ExpiringSoon}}text-warning{{else}}text-base-content/50{{end}}">Token valid until {{.ExpiresAt}}</div>{{end}}
@@ -983,6 +993,7 @@
         <ul class="dropdown-content menu bg-base-100 rounded-box z-30 w-max whitespace-nowrap p-2 shadow-lg border border-base-300">
           <li><button hx-get="/ui/trackers/{{.Provider}}/settings" hx-target="#tracker-prefs-body" onclick="tracker_prefs_modal.showModal()">{{template "iconEdit"}}Edit</button></li>
           {{if and $.CanManage (not $c.Outage) $c.Unlinked}}<li data-unlinked-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/unlinked" hx-target="#tracker-unlinked-body" onclick="openLoading('tracker_unlinked_modal')">{{template "iconUnlink"}}Unlinked titles<span class="badge badge-sm badge-ghost" data-unlinked-count="{{.Provider}}">{{$c.Unlinked}}</span></button></li>{{end}}
+          {{if and $.CanManage $c.MangaBaka}}<li data-mangabaka-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/mangabaka" hx-target="#tracker-mangabaka-body" onclick="openLoading('tracker_mangabaka_modal')">{{template "iconDatabase"}}MangaBaka links<span class="badge badge-sm badge-ghost" data-mangabaka-count="{{.Provider}}">{{capCount $c.MangaBaka}}</span></button></li>{{end}}
           {{if $c.Missing}}<li data-missing-item="{{.Provider}}"><button hx-get="/ui/trackers/{{.Provider}}/missing-ratings" hx-target="#tracker-missing-body" onclick="openLoading('tracker_missing_modal')">{{template "iconStar"}}Missing ratings<span class="badge badge-sm badge-ghost" data-missing-count="{{.Provider}}">{{$c.Missing}}</span></button></li>{{end}}
           {{if not $c.Outage}}<li><button hx-post="/ui/trackers/{{.Provider}}/sync" hx-target="#toast">{{template "iconRefresh"}}Sync now</button></li>{{end}}
           {{if and .ExpiringSoon (eq $c.Login "oauth")}}<li><a href="/trackers/{{.Provider}}/connect">{{template "iconLink"}}Reconnect</a></li>{{end}}
@@ -1015,7 +1026,7 @@
       <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
     </div>
     <select class="select select-sm w-full" aria-label="Tracker" onchange="trackerConnectPick(this)">
-      <option value="" selected disabled>Pick a tracker…</option>
+      <option value="" selected disabled>Pick a tracker...</option>
       {{range .Cards}}{{if and (not .Account) .Login}}<option value="{{.Provider}}"{{with .Outage}} disabled title="Temporarily unavailable: {{.}}"{{end}}>{{.Label}}{{if .Outage}} (unavailable){{end}}</option>{{end}}{{end}}
     </select>
     {{range .Cards}}{{if and (not .Account) .Login (not .Outage)}}
@@ -1023,6 +1034,12 @@
       {{if eq .Login "oauth"}}
       <p class="text-sm text-base-content/60">You'll approve access on {{.Label}}, then come back here.</p>
       <a class="btn btn-sm btn-primary" href="/trackers/{{.Provider}}/connect">Continue to {{.Label}}</a>
+      {{else if eq .Login "token"}}
+      <form class="grid gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
+        <input class="input input-sm w-full" type="password" name="password" placeholder="mb-..." aria-label="{{.Label}} personal access token" autocomplete="off" required>
+        <span class="text-xs text-base-content/50">Create a personal access token with library access in your {{.Label}} account settings.</span>
+        <button class="btn btn-sm btn-primary">Connect</button>
+      </form>
       {{else}}
       <form class="grid gap-2" hx-post="/ui/trackers/{{.Provider}}/login" hx-swap="none">
         <input class="input input-sm w-full" name="username" placeholder="{{.Label}} username or email" aria-label="{{.Label}} username or email" autocomplete="off" required>
@@ -1039,7 +1056,7 @@
 {{end}}
 <dialog id="tracker_prefs_modal" class="modal">
   <div class="modal-box max-w-lg">
-    <div id="tracker-prefs-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+    <div id="tracker-prefs-body"><p class="text-sm text-base-content/60">Loading...</p></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
@@ -1056,6 +1073,12 @@
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 {{if .CanManage}}
+<dialog id="tracker_mangabaka_modal" class="modal">
+  <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
+    <div id="tracker-mangabaka-body" class="contents" data-loading></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
 <dialog id="tracker_unlinked_modal" class="modal">
   <div class="modal-box flex w-[min(48rem,calc(100vw_-_2rem))] flex-col gap-3 overflow-hidden">
     <div id="tracker-unlinked-body" class="contents" data-loading></div>
@@ -1075,7 +1098,7 @@
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2">
   {{if .Titles}}
-  <input class="input input-sm w-full shrink-0" aria-label="Filter titles" placeholder="Filter titles…" data-tag-filter form="">
+  <input class="input input-sm w-full shrink-0" aria-label="Filter titles" placeholder="Filter titles..." data-tag-filter form="">
   <div class="min-h-0 flex-1 divide-y divide-line/25 overflow-y-auto rounded-lg border border-line/40">
     {{range .Titles}}
     <details class="group" data-unlinked data-filter-row>
@@ -1190,6 +1213,43 @@
 {{with .Error}}<p class="text-sm text-error">{{.}}</p>{{end}}
 {{end}}
 
+{{define "trackerMangaBaka"}}
+<div class="flex items-start justify-between gap-2">
+  <div>
+    <h3 class="text-lg font-bold">MangaBaka links on {{.Label}}</h3>
+    <p class="text-sm text-base-content/60">Links Kaodoku made from MangaBaka. Confirm the ones that look right, or open a title to relink it.</p>
+  </div>
+  <button type="button" class="btn btn-ghost btn-sm btn-square -mr-2 -mt-1" aria-label="Close" onclick="this.closest('dialog').close()">✕</button>
+</div>
+<div class="min-h-0 flex-1 divide-y divide-line/25 overflow-y-auto rounded-lg border border-line/40">
+  {{range .Links}}
+  <div class="flex items-center gap-3 p-2">
+    {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+    <div class="min-w-0 flex-1">
+      <a class="block truncate text-sm font-medium hover:underline" href="/library/{{.Title.ID}}">{{.DisplayTitle}}</a>
+      <a class="text-xs text-base-content/60 hover:underline" href="{{.URL}}" target="_blank" rel="noopener">{{$.Label}} {{.ID}}</a>
+    </div>
+    <button class="btn btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"confirm","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Confirm</button>
+  </div>
+  {{end}}
+  {{range .Suggestions}}
+  <div class="flex items-center gap-3 p-2">
+    {{if .CoverImage}}<img class="h-12 w-9 shrink-0 rounded object-cover bg-base-300" src="{{img .CoverImage}}" alt="" loading="lazy">{{end}}
+    <div class="min-w-0 flex-1">
+      <a class="block truncate text-sm font-medium hover:underline" href="/library/{{.Title.ID}}">{{.DisplayTitle}}</a>
+      <div class="text-xs text-base-content/60">{{if .Current}}Linked to {{.Current}}{{else}}Marked as not on {{$.Label}}{{end}}, MangaBaka says <a class="link" href="{{.URL}}" target="_blank" rel="noopener">{{.ID}}</a></div>
+    </div>
+    <button class="btn btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"use","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Use it</button>
+    <button class="btn btn-ghost btn-sm" hx-post="/ui/trackers/{{$.Provider}}/mangabaka" hx-vals='{"action":"dismiss","title":"{{.Title.ID}}"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Dismiss</button>
+  </div>
+  {{end}}
+  <p class="hidden px-3 py-2 text-sm text-base-content/60 first:block">Nothing left to check.</p>
+</div>
+{{if .Links}}<div class="flex justify-end"><button class="btn btn-primary btn-sm" hx-post="/ui/trackers/{{.Provider}}/mangabaka" hx-vals='{"action":"confirm"}' hx-target="#tracker-mangabaka-body" hx-disabled-elt="this">Confirm all</button></div>{{end}}
+{{$n := .Total}}<span hx-swap-oob="innerHTML:[data-mangabaka-count={{.Provider}}]">{{capCount $n}}</span>
+{{if not $n}}<div hx-swap-oob="delete:[data-mangabaka-item={{.Provider}}]"></div>{{end}}
+{{end}}
+
 {{define "missingLeft"}}<span hx-swap-oob="innerHTML:[data-missing-count={{.Provider}}]">{{len .Titles}}</span>
 {{if not .Titles}}<div hx-swap-oob="delete:[data-missing-item={{.Provider}}]"></div>{{end}}{{end}}
 
@@ -1218,6 +1278,7 @@
     </select>
   </div>
   {{template "trackerPrefToggle" (pref "kaodoku_leads" "Kaodoku is the source of truth" (printf "On: Kaodoku sends progress, favourites and ratings to %s. Off: Kaodoku takes them from %s." .Label .Label) (eq .Source "kaodoku"))}}
+  {{template "trackerPrefToggle" (pref "exclusive" (printf "Only Kaodoku updates %s" .Label) (printf "Skips reading an entry from %s before each update and trusts what Kaodoku last sent, halving the calls. Leave off if you also update %s from another app or its website, or progress made there may be overwritten." .Label .Label) .Exclusive)}}
   <button class="btn btn-sm btn-primary mt-3">Save</button>
 </form>
 {{end}}
@@ -1230,5 +1291,24 @@
   </div>
   <input type="hidden" name="{{.Key}}" value="false">
   <input type="checkbox" class="toggle shrink-0" id="tp-{{.Key}}" name="{{.Key}}" value="true" {{if .On}}checked{{end}}>
+</div>
+{{end}}
+
+{{define "mangaBakaStatus"}}
+<div id="mangabaka-status" class="flex items-start justify-between gap-4 py-3 max-sm:flex-col max-sm:gap-1"{{if .Running}} hx-get="/ui/settings/mangabaka/status" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
+  <div class="min-w-0">
+    <div class="font-medium">Database</div>
+    <div class="text-sm text-base-content/60 max-w-prose">{{.Note}} Data from <a class="link" href="https://mangabaka.org" target="_blank" rel="noopener">MangaBaka</a>, CC BY-NC-SA 4.0.</div>
+    {{if .Running}}<p class="mt-1 flex items-center gap-2 text-sm"><span class="loading loading-spinner loading-xs"></span>{{.Progress}}</p>
+    {{else}}{{with .Error}}<p class="mt-1 text-sm text-error">Last refresh failed: {{.}}</p>{{end}}{{end}}
+    {{with .Message}}<p class="mt-1 text-sm">{{.}}</p>{{end}}
+    {{if .Confirm}}<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">The published database is the one already imported. Re-import it anyway?
+      <button type="button" class="btn btn-xs btn-warning" hx-post="/ui/settings/mangabaka/refresh" hx-vals='{"force": "1", "confirm": "1"}' hx-target="#mangabaka-status" hx-swap="outerHTML">Re-import</button>
+    </div>{{end}}
+  </div>
+  <div class="flex shrink-0 items-center gap-3">
+    <label class="flex items-center gap-2 text-sm tip" data-tip="Re-import even if the database didn't change"><input type="checkbox" class="checkbox checkbox-sm" name="force" value="1" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>Force</label>
+    <button class="btn btn-sm" form="mangabaka-refresh"{{if .Running}} disabled{{end}}>{{if .Running}}Refreshing...{{else}}Refresh now{{end}}</button>
+  </div>
 </div>
 {{end}}

@@ -47,7 +47,7 @@ func TestImageCacheSignsServesAndTrims(t *testing.T) {
 	}
 
 	for i, id := range []string{"1", "2"} {
-		if _, err := svc.db.ExecContext(ctx, `INSERT INTO tracker_related (provider, provider_id, relations_json, recommendations_json, fetched_at) VALUES ('anilist', ?, ?, '[]', ?)`, id, strings.Repeat("x", 600_000), time.Now().Add(time.Duration(i)*time.Hour).Format(time.DateTime)); err != nil {
+		if _, err := svc.db.ExecContext(ctx, `INSERT INTO tracker_related (provider, provider_id, relations_json, recommendations_json, relations_fetched_at) VALUES ('anilist', ?, ?, '[]', ?)`, id, strings.Repeat("x", 600_000), time.Now().Add(time.Duration(i)*time.Hour).Format(time.DateTime)); err != nil {
 			t.Fatal(err)
 		}
 	}

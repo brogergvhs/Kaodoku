@@ -52,7 +52,7 @@
 <section class="mt-8">
   <h2 class="mb-3 flex items-center gap-2 text-lg font-bold"><span class="h-5 w-1 rounded-full bg-primary"></span>Suggested for you</h2>
   <div hx-get="/ui/search/trending" hx-trigger="load" hx-swap="outerHTML">
-    <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading suggestions…</div>
+    <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading suggestions...</div>
   </div>
 </section>
 {{end}}
@@ -68,13 +68,13 @@
 {{if .User.Can "services.view"}}
 <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60 mb-2">Services</h2>
 <div id="services-health" hx-get="/ui/health" hx-trigger="load" hx-swap="outerHTML">
-  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Checking services…</div>
+  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Checking services...</div>
 </div>
 {{end}}
 {{if .User.Can "sessions.view"}}
 <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60 mt-6 mb-2">Sessions</h2>
 <div id="sessions-card" hx-get="/ui/sessions" hx-trigger="load" hx-swap="outerHTML">
-  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading sessions…</div>
+  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading sessions...</div>
 </div>
 {{end}}
 {{if .User.Can "jobs.view"}}
@@ -130,7 +130,7 @@
 <form id="search-form" class="filter-form mb-4 grid gap-3" hx-post="/ui/search" hx-target="#search-results" hx-swap="innerHTML" hx-indicator="#search-spin"
   hx-trigger="submit, change[event.target.name && event.target.name !== 'q'], keyup changed delay:400ms from:input[name='q']">
   <div class="filter-toolbar search-toolbar">
-    <input name="q" class="input filter-query w-full min-w-0" aria-label="Search manga" placeholder="Search manga…" value="{{.Controls.Q}}" autofocus>
+    <input name="q" class="input filter-query w-full min-w-0" aria-label="Search manga" placeholder="Search manga..." value="{{.Controls.Q}}" autofocus>
     <button type="button" class="filter-disclosure btn btn-outline" aria-haspopup="dialog" aria-controls="search-filters" onclick="document.getElementById('search-filters').showModal()">{{template "iconFilter"}}<span data-filter-count>Filters</span></button>
   </div>
   <dialog id="search-filters" class="modal filter-modal" aria-labelledby="search-filters-title">
@@ -181,7 +181,7 @@
 <div class="text-center"><span id="search-spin" class="htmx-indicator loading my-4"></span></div>
 <div hx-get="/ui/trackers/suggestions" hx-include="#search-form" hx-trigger="load, change from:#search-form select[name='provider']" hx-swap="innerHTML"></div>
 <div id="search-results"><div hx-post="/ui/search" hx-include="#search-form" hx-trigger="load" hx-swap="outerHTML">
-  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading…</div>
+  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Loading...</div>
 </div></div>
 {{end}}
 
@@ -234,7 +234,7 @@
 <dialog id="collection_manage_modal" class="modal">
   <div class="modal-box">
     <h3 class="text-lg font-bold mb-3">Manage members</h3>
-    <div id="collection-manage-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+    <div id="collection-manage-body"><p class="text-sm text-base-content/60">Loading...</p></div>
     <div class="modal-action"><button type="button" class="btn btn-ghost" onclick="collection_manage_modal.close()">Done</button></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
@@ -330,7 +330,7 @@
   {{if .Screen}}<input type="hidden" name="screen" value="{{.Screen.ID}}">{{end}}
   {{if .CollectionIDs}}<input type="hidden" name="ids" value="{{.CollectionIDs}}">{{end}}
   <div class="filter-toolbar">
-    <input name="q" class="input filter-query w-full min-w-0" aria-label="Search library" value="{{.Controls.Q}}" placeholder="Search library…" hx-trigger="keyup changed delay:300ms">
+    <input name="q" class="input filter-query w-full min-w-0" aria-label="Search library" value="{{.Controls.Q}}" placeholder="Search library..." hx-trigger="keyup changed delay:300ms">
     <div data-filter-desktop-controls>
       <div class="filter-display-controls">
         <div class="fieldset filter-sort"><span class="fieldset-legend filter-display-label">Sort</span>
@@ -378,7 +378,7 @@
             <details class="dropdown w-full" aria-label="Source" data-keep-open>
               <summary class="select w-full flex cursor-pointer items-center" data-tag-count data-empty-label="All">{{if $src}}{{len $src}} selected{{else}}All{{end}}</summary>
               <div class="filter-source-menu dropdown-content z-30 w-full rounded-lg border border-line bg-base-100 p-2">
-                <input class="input input-sm mb-2 w-full" aria-label="Filter sources" placeholder="Filter sources…" data-tag-filter form="">
+                <input class="input input-sm mb-2 w-full" aria-label="Filter sources" placeholder="Filter sources..." data-tag-filter form="">
                 <div class="grid max-h-52 gap-y-1 overflow-y-auto -mr-2 pr-2" data-tag-list>
                   <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="linked" {{if index $src "linked"}}checked{{end}}><span>Linked</span></label>
                   <label class="flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="checkbox checkbox-xs shrink-0" name="source" value="unlinked" {{if index $src "unlinked"}}checked{{end}}><span>Unlinked</span></label>
@@ -424,14 +424,14 @@
 {{if .Table.CanManage}}
 <dialog id="lib_title_dialog" class="modal">
   <div class="modal-box">
-    <div id="lib-title-dialog-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+    <div id="lib-title-dialog-body"><p class="text-sm text-base-content/60">Loading...</p></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
 <dialog id="add_to_collection_modal" class="modal">
   <div class="modal-box">
     <h3 class="text-lg font-bold mb-3">Add to collection</h3>
-    <div id="add-collection-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+    <div id="add-collection-body"><p class="text-sm text-base-content/60">Loading...</p></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
@@ -459,7 +459,7 @@
 {{else if eq .Mode "custom"}}
 <p class="py-3 text-base-content/60">No custom collections yet. Use “New collection” to group titles manually, or add a title to one from its actions menu.</p>
 {{else if and (eq .Mode "smart") (not .HasRelations)}}
-<p class="py-3 text-base-content/60">No connections stored yet. Run a Catalog refresh (Management → Recent jobs → Start new job) to fetch catalog relations, then check back.</p>
+<p class="py-3 text-base-content/60">No connections stored yet. Run a Catalog refresh (Management -> Recent jobs -> Start new job) to fetch catalog relations, then check back.</p>
 {{else}}
 <p class="py-3 text-base-content/60">Nothing to collect yet — you need two or more {{if eq .Mode "smart"}}connected titles{{else}}titles by the same author{{end}} in your library.</p>
 {{end}}
@@ -595,7 +595,7 @@
 <dialog id="add_to_collection_modal" class="modal">
   <div class="modal-box">
     <h3 class="text-lg font-bold mb-3">Add to collection</h3>
-    <div id="add-collection-body"><p class="text-sm text-base-content/60">Loading…</p></div>
+    <div id="add-collection-body"><p class="text-sm text-base-content/60">Loading...</p></div>
   </div>
   <form method="dialog" class="modal-backdrop"><button>close</button></form>
 </dialog>
@@ -687,7 +687,7 @@
           <span class="text-xs text-base-content/60">Paste a specific manga page URL — it is checked before linking</span>
           <div class="flex flex-wrap items-center gap-2">
             <select name="source_id" class="select select-sm shrink-0">{{range .LinkSources}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
-            <input name="url" class="input input-sm min-w-40 flex-1" placeholder="https://source/manga/…" required>
+            <input name="url" class="input input-sm min-w-40 flex-1" placeholder="https://source/manga/..." required>
             <button class="btn btn-sm btn-outline max-sm:w-full">Check &amp; link</button>
             <span id="verify-spin" class="htmx-indicator loading loading-sm"></span>
           </div>
@@ -728,7 +728,7 @@
 {{define "import"}}
 <p class="text-sm text-base-content/60 mb-4">Folders in your download directory that aren't tracked yet. Match each to a catalog title to import it and recognize its existing chapters.</p>
 <div hx-get="/ui/import/candidates" hx-trigger="load" hx-swap="outerHTML">
-  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Scanning download folder…</div>
+  <div class="flex items-center gap-2 py-3 text-sm text-base-content/60"><span class="loading loading-sm"></span> Scanning download folder...</div>
 </div>
 {{end}}
 
@@ -767,7 +767,7 @@
       hx-post="/ui/import/{{pathEscape .Folder}}/search" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML" hx-trigger="change">
       {{range .Providers}}<option value="{{.Name}}" {{if eq .Name $.Provider}}selected{{end}}{{with outage .Name}} disabled title="Temporarily unavailable: {{.}}"{{end}}>{{.Label}}{{if outage .Name}} (unavailable){{end}}</option>{{end}}</select>
     {{else}}<input type="hidden" name="provider" value="{{.Provider}}">{{end}}
-    <input name="q" class="input input-sm w-full" value="{{.Query}}" placeholder="Refine search…"
+    <input name="q" class="input input-sm w-full" value="{{.Query}}" placeholder="Refine search..."
       hx-post="/ui/import/{{pathEscape .Folder}}/search" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML" hx-trigger="keyup changed delay:500ms">
   </div>
   <div class="grid gap-1">
@@ -930,6 +930,7 @@
       <button type="button" class="btn btn-sm {{if .Configured}}btn-outline{{else}}btn-primary{{end}} shrink-0" onclick="document.getElementById('app-{{.Provider}}').showModal()">{{if .Configured}}{{template "iconEdit"}}Edit{{else}}{{template "iconPlus"}}Connect{{end}}</button>
     </div>
     {{end}}
+    {{with .MangaBaka}}{{template "mangaBakaStatus" .}}{{end}}
   </div>
   {{end}}
   {{end}}
@@ -937,6 +938,7 @@
     <button class="w-full btn btn-primary btn-sm">Save settings</button>
   </div>
 </form>
+<form id="mangabaka-refresh" hx-post="/ui/settings/mangabaka/refresh" hx-target="#mangabaka-status" hx-swap="outerHTML"></form>
 {{range .Groups}}{{range .Apps}}
 <dialog id="app-{{.Provider}}" class="modal">
   <form class="modal-box grid max-w-md gap-3" hx-put="/ui/settings" hx-target="#toast" hx-on::after-request="if (event.detail.successful) location.reload()">
@@ -1184,7 +1186,7 @@
   <details class="dropdown w-full">
     <summary class="select select-sm w-full flex cursor-pointer items-center" data-tag-count>{{if .Selected}}{{len .Selected}} selected{{else}}None selected{{end}}</summary>
     <div class="dropdown-content z-30 mt-1 w-full rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
-      <input class="input input-sm mb-2 w-full" placeholder="Filter tags…" data-tag-filter form="">
+      <input class="input input-sm mb-2 w-full" placeholder="Filter tags..." data-tag-filter form="">
       <div class="grid max-h-52 grid-cols-2 gap-x-2 gap-y-1 overflow-y-auto -mr-2 pr-2" data-tag-list>
         {{range .SelectedOptions}}
         <label class="flex min-w-0 cursor-pointer items-center gap-2 text-sm">
@@ -1212,7 +1214,7 @@
   </details>
   {{if .Hint}}<span class="label">{{.Hint}}</span>{{end}}
   {{else}}
-  <input class="input w-full" name="{{.Name}}" value="{{range $i, $t := .Values}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="Gore, Horror, …">
+  <input class="input w-full" name="{{.Name}}" value="{{range $i, $t := .Values}}{{if $i}}, {{end}}{{$t}}{{end}}" placeholder="Gore, Horror, ...">
   <span class="label">Comma-separated (tag list unavailable).{{if .Hint}} {{.Hint}}{{end}}</span>
   {{end}}
 </div>
@@ -1227,7 +1229,7 @@
   <summary class="select w-full flex cursor-pointer items-center" data-tagfilter-summary data-empty-label="Any tags">{{template "tagFilterSummary" .}}</summary>
   <div class="filter-tag-menu dropdown-content z-30 overflow-hidden rounded-lg border border-line bg-base-100">
     <div class="flex items-center gap-2 border-b border-line/40 p-3">
-      <input class="input min-w-0 flex-1" aria-label="Filter tags" placeholder="Filter tags…" data-tag-filter form="">
+      <input class="input min-w-0 flex-1" aria-label="Filter tags" placeholder="Filter tags..." data-tag-filter form="">
       <button type="button" class="btn btn-ghost shrink-0" data-tagfilter-reset>Reset</button>
     </div>
     <div class="max-h-80 space-y-3 overflow-y-auto px-3 py-3">
@@ -1253,8 +1255,8 @@
 </details>
 {{else}}
 <div class="grid gap-2">
-  <input class="input input-sm w-full" name="include_tags" value="{{range $i, $t := .Include}}{{if $i}}, {{end}}{{$t}}{{end}}" aria-label="Include tags" placeholder="Include: Gore, Horror, …">
-  <input class="input input-sm w-full" name="exclude_tags" value="{{range $i, $t := .Exclude}}{{if $i}}, {{end}}{{$t}}{{end}}" aria-label="Exclude tags" placeholder="Exclude: …">
+  <input class="input input-sm w-full" name="include_tags" value="{{range $i, $t := .Include}}{{if $i}}, {{end}}{{$t}}{{end}}" aria-label="Include tags" placeholder="Include: Gore, Horror, ...">
+  <input class="input input-sm w-full" name="exclude_tags" value="{{range $i, $t := .Exclude}}{{if $i}}, {{end}}{{$t}}{{end}}" aria-label="Exclude tags" placeholder="Exclude: ...">
 </div>
 {{end}}
 </div>

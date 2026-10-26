@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,7 +104,7 @@ type outageRetry struct {
 	at   time.Time
 }
 
-// probeOutages re-checks each tracker in an outage 1, 2, 4… up to 30 minutes apart until it answers again.
+// probeOutages re-checks each tracker in an outage 1, 2, 4... up to 30 minutes apart until it answers again.
 func (s *JobService) probeOutages(ctx context.Context, retries map[string]outageRetry, now time.Time) {
 	for _, name := range providerOrder {
 		r, seen := retries[name]
@@ -170,20 +171,11 @@ func (s *JobService) FlushRequests(ctx context.Context) { s.catalog.FlushRequest
 func (s *JobService) trackerCallRows(ctx context.Context) []trackerCallRow {
 	s.catalog.FlushRequests(ctx)
 	now := time.Now().UTC()
-	rows, err := s.db.QueryContext(ctx, `SELECT provider, reason, kind,
+	out, _ := database.Collect(ctx, s.db, func(r database.Scanner) (c trackerCallRow, err error) {
+		return c, r.Scan(&c.provider, &c.Reason, &c.Kind, &c.Today, &c.Month, &c.Total)
+	}, `SELECT provider, reason, kind,
 		COALESCE(SUM(CASE WHEN day = ? THEN count END), 0), COALESCE(SUM(CASE WHEN day > ? THEN count END), 0), SUM(count)
 		FROM tracker_calls GROUP BY provider, reason, kind ORDER BY SUM(count) DESC, reason, kind`, now.Format(time.DateOnly), now.AddDate(0, 0, -30).Format(time.DateOnly))
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var out []trackerCallRow
-	for rows.Next() {
-		var r trackerCallRow
-		if rows.Scan(&r.provider, &r.Reason, &r.Kind, &r.Today, &r.Month, &r.Total) == nil {
-			out = append(out, r)
-		}
-	}
 	return out
 }
 
@@ -249,7 +241,7 @@ func (s *JobService) TrackerCallDetails(ctx context.Context) []TrackerCalls {
 
 func (s *JobService) providerConfigured(ctx context.Context, name string) bool {
 	p, ok := s.catalog.providers[name]
-	if !ok || slices.Contains(splitNames(s.Setting(ctx, SettingProvidersDisabled, "")), name) {
+	if !ok || slices.Contains(splitNames(s.Setting(ctx, SettingProvidersDisabled, "")), name) || name == catalog.MangaBakaProvider && !s.mbOn(ctx) {
 		return false
 	}
 	if m, ok := p.(interface{ SetClientID(string) }); ok {
@@ -313,11 +305,17 @@ func (s *JobService) DefaultProvider(ctx context.Context) string {
 	return available[0].Name()
 }
 
+// SearchManga searches a provider; in aggressive MangaBaka mode an empty-query browse stays on MangaBaka.
 func (s *JobService) SearchManga(ctx context.Context, provider, query string, limit int, filter catalog.SearchFilter) ([]catalog.Manga, bool, error) {
 	ctx = catalog.WithReason(ctx, "Search")
 	p, err := s.Provider(ctx, provider)
 	if err != nil {
 		return nil, false, err
+	}
+	if strings.TrimSpace(query) == "" && s.mbAggressive(ctx) {
+		if mb, err := s.Provider(ctx, catalog.MangaBakaProvider); err == nil {
+			p = mb
+		}
 	}
 	if tags, _ := s.catalog.repo.ProviderTags(ctx, p.Name()); len(tags) > 0 {
 		keys := map[string]string{}
@@ -376,6 +374,11 @@ func (s *JobService) CatalogManga(ctx context.Context, provider, id string) (cat
 	if m, ok, err := s.catalog.repo.MangaByProvider(ctx, p.Name(), id); err != nil || ok {
 		return m, err
 	}
+	if s.mbOn(ctx) {
+		if sr, ok := s.mb.ByProvider(ctx, p.Name(), id); ok {
+			return s.catalog.repo.UpsertManga(ctx, catalog.FromMangaBaka(sr, p.Name(), id))
+		}
+	}
 	return s.catalog.fetch(ctx, p, id)
 }
 
@@ -391,6 +394,9 @@ func (s *JobService) LibraryIndex(ctx context.Context) map[string]int64 {
 }
 
 func (s *JobService) TrendingManga(ctx context.Context, limit int) ([]catalog.Manga, error) {
+	if items := s.mbTrending(ctx, limit); len(items) > 0 {
+		return items, nil
+	}
 	ctx = catalog.WithReason(ctx, "Trending")
 	p, err := s.Provider(ctx, "")
 	if err != nil {
@@ -416,12 +422,25 @@ func (s *JobService) confirmedID(ctx context.Context, m catalog.Manga, provider 
 	return ""
 }
 
-// resolveID returns only confirmed ids: stored mapping, cross-links, then a scored title search.
+// resolveID returns only confirmed ids: stored mapping, MangaBaka, cross-links, then a scored title search.
+// Aggressive MangaBaka mode stops after MangaBaka.
 func (s *JobService) resolveID(ctx context.Context, m catalog.Manga, p catalog.Provider) string {
 	name := p.Name()
 	maps := s.mappings(ctx, m)
 	if e, ok := maps[name]; ok && (e.Confirmed || e.Method == "user") {
 		return e.ProviderID
+	}
+	if s.mbOn(ctx) {
+		s.mbLink(ctx, []catalog.Manga{m})
+		if id := s.confirmedID(ctx, m, name); id != "" {
+			return id
+		}
+		if s.mbAggressive(ctx) {
+			if _, ok := maps[name]; !ok {
+				_ = s.catalog.repo.SetExternalID(ctx, m.ID, catalog.ExternalID{Provider: name, Method: "miss"})
+			}
+			return ""
+		}
 	}
 	if e, ok := maps[name]; ok {
 		if t, err := database.ParseTime(e.CheckedAt); err == nil && time.Since(t) < mappingRecheck {
@@ -502,23 +521,12 @@ func (s *JobService) takenByOther(ctx context.Context, catalogID int64, provider
 }
 
 func (s *JobService) resolveLibrary(ctx context.Context, p catalog.Provider, limit int) {
-	rows, err := s.db.QueryContext(ctx, `
+	ids, _ := database.Column[int64](ctx, s.db, `
 		SELECT DISTINCT cm.id FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id
 		WHERE cm.provider != ? AND NOT EXISTS (
 			SELECT 1 FROM catalog_external_ids e WHERE e.catalog_manga_id = cm.id AND e.provider = ?
 			AND (e.confirmed = 1 OR e.method = 'user' OR e.checked_at > ?))
 		LIMIT ?`, p.Name(), p.Name(), database.FormatTime(time.Now().Add(-mappingRecheck)), limit)
-	if err != nil {
-		return
-	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
 	for _, id := range ids {
 		if m, err := s.catalog.GetManga(ctx, id); err == nil && ctx.Err() == nil {
 			s.resolveID(ctx, m, p)
@@ -526,36 +534,62 @@ func (s *JobService) resolveLibrary(ctx context.Context, p catalog.Provider, lim
 	}
 }
 
-// relatedCached keeps a work's relations and recommendations in the database for a week; a stale copy stands in while a refresh fails.
-func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id string) ([]catalog.Manga, []catalog.Manga, error) {
-	var relJSON, recJSON, fetched string
-	var rel, recs []catalog.Manga
-	err := s.db.QueryRowContext(ctx, `SELECT relations_json, recommendations_json, fetched_at FROM tracker_related WHERE provider = ? AND provider_id = ?`, p.Name(), id).Scan(&relJSON, &recJSON, &fetched)
-	stored := err == nil && json.Unmarshal([]byte(relJSON), &rel) == nil && json.Unmarshal([]byte(recJSON), &recs) == nil
-	if t, err := database.ParseTime(fetched); stored && err == nil && time.Since(t) < relatedTTL {
+// relatedStored is what a tracker last sent for a work, without asking it again; each list has its own fetch time.
+func (s *JobService) relatedStored(ctx context.Context, provider, id string) (rel, recs []catalog.Manga, relAt, recAt time.Time) {
+	var relJSON, recJSON, relTime, recTime string
+	if s.db.QueryRowContext(ctx, `SELECT relations_json, recommendations_json, relations_fetched_at, recommendations_fetched_at FROM tracker_related WHERE provider = ? AND provider_id = ?`, provider, id).Scan(&relJSON, &recJSON, &relTime, &recTime) != nil {
+		return nil, nil, time.Time{}, time.Time{}
+	}
+	_ = json.Unmarshal([]byte(relJSON), &rel)
+	_ = json.Unmarshal([]byte(recJSON), &recs)
+	relAt, _ = database.ParseTime(relTime)
+	recAt, _ = database.ParseTime(recTime)
+	return rel, recs, relAt, recAt
+}
+
+// relatedCached keeps a work's relations and recommendations in the database for a week, asking the tracker again
+// when a wanted list went stale and storing only the wanted ones; a stale copy stands in while a refresh fails.
+func (s *JobService) relatedCached(ctx context.Context, p catalog.Provider, id string, relations, recommendations bool) ([]catalog.Manga, []catalog.Manga, error) {
+	rel, recs, relAt, recAt := s.relatedStored(ctx, p.Name(), id)
+	if (!relations || !relatedStale(relAt)) && (!recommendations || !relatedStale(recAt)) {
 		return rel, recs, nil
 	}
 	freshRel, freshRecs, err := p.Related(ctx, id, 24)
 	if err != nil && !catalog.IsNotFound(err) {
-		if stored {
+		if (!relations || !relAt.IsZero()) && (!recommendations || !recAt.IsZero()) {
 			return rel, recs, nil
 		}
 		return nil, nil, err
 	}
-	relData, _ := json.Marshal(freshRel)
-	recData, _ := json.Marshal(freshRecs)
-	_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_related (provider, provider_id, relations_json, recommendations_json, fetched_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (provider, provider_id) DO UPDATE SET relations_json = excluded.relations_json, recommendations_json = excluded.recommendations_json, fetched_at = excluded.fetched_at`,
-		p.Name(), id, relData, recData, database.FormatTime(time.Now()))
+	now := time.Now()
+	if relations {
+		rel, relAt = freshRel, now
+	}
+	if recommendations {
+		recs, recAt = freshRecs, now
+	}
+	relData, _ := json.Marshal(rel)
+	recData, _ := json.Marshal(recs)
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO tracker_related (provider, provider_id, relations_json, recommendations_json, relations_fetched_at, recommendations_fetched_at) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (provider, provider_id) DO UPDATE SET relations_json = excluded.relations_json, recommendations_json = excluded.recommendations_json,
+			relations_fetched_at = excluded.relations_fetched_at, recommendations_fetched_at = excluded.recommendations_fetched_at`,
+		p.Name(), id, relData, recData, database.FormatTime(relAt), database.FormatTime(recAt))
 	s.trimRelated(ctx)
-	return freshRel, freshRecs, nil
+	return rel, recs, nil
 }
 
-func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, err error) {
+func relatedStale(at time.Time) bool { return time.Since(at) >= relatedTTL }
+
+// RelatedFetch lists the trackers to ask for each list on request.
+type RelatedFetch struct{ Relations, Recommendations []string }
+
+// RelatedManga merges a work's relations and recommendations from MangaBaka and its linked trackers. In aggressive
+// MangaBaka mode trackers aren't asked; what they sent before still shows, and fetch lists the connected ones to ask.
+func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit int) (relations, recommendations []catalog.Manga, fetch RelatedFetch, err error) {
 	ctx = catalog.WithReason(ctx, "Related titles")
 	m, err := s.catalog.GetManga(ctx, catalogID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fetch, err
 	}
 	maps := s.mappings(ctx, m)
 	self := map[string]bool{}
@@ -564,34 +598,74 @@ func (s *JobService) RelatedManga(ctx context.Context, catalogID int64, limit in
 			self[prov+":"+e.ProviderID] = true
 		}
 	}
+	work := s.mbUnify(ctx, []catalog.Manga{m})[0]
+	for _, k := range catalog.Keys(work) {
+		self[k] = true
+	}
+	var rels, recs [][]catalog.Manga
+	mbID := work.ExternalIDs[catalog.MangaBakaProvider]
+	if m.Provider == catalog.MangaBakaProvider && s.mbOn(ctx) {
+		mbID = m.ProviderID
+	}
+	if n, err := strconv.ParseInt(mbID, 10, 64); err == nil {
+		rel, rec := s.mb.Related(ctx, n, limit)
+		rels, recs = append(rels, s.mbMangas(ctx, rel)), append(recs, s.mbMangas(ctx, rec))
+	}
 	prefs := map[string]TrackerPrefs{}
 	for _, a := range s.TrackerAccounts(ctx, auth.UserID(ctx)) {
 		prefs[a.Provider] = a.TrackerPrefs
 	}
-	var rels, recs [][]catalog.Manga
+	aggressive := s.mbAggressive(ctx)
 	for _, p := range s.Providers(ctx) {
 		e := maps[p.Name()]
 		pref, connected := prefs[p.Name()]
-		if !e.Confirmed || e.ProviderID == "" || connected && !pref.Relations && !pref.Recommendations {
+		wantRel, wantRec := !connected || pref.Relations, !connected || pref.Recommendations
+		if !e.Confirmed || e.ProviderID == "" || !wantRel && !wantRec || p.Name() == catalog.MangaBakaProvider {
 			continue
 		}
-		rel, rec, rerr := s.relatedCached(ctx, p, e.ProviderID)
-		if rerr != nil {
-			err = rerr
+		var rel, rec []catalog.Manga
+		if aggressive {
+			var relAt, recAt time.Time
+			rel, rec, relAt, recAt = s.relatedStored(ctx, p.Name(), e.ProviderID)
+			if connected && wantRel && relatedStale(relAt) {
+				fetch.Relations = append(fetch.Relations, p.Name())
+			}
+			if connected && wantRec && relatedStale(recAt) {
+				fetch.Recommendations = append(fetch.Recommendations, p.Name())
+			}
+		} else if rel, rec, err = s.relatedCached(ctx, p, e.ProviderID, true, true); err != nil {
 			continue
 		}
-		if !connected || pref.Relations {
-			rels = append(rels, s.fillFromStore(ctx, p.Name(), rel))
+		if wantRel {
+			rels = append(rels, s.mbUnify(ctx, s.fillFromStore(ctx, p.Name(), rel)))
 		}
-		if !connected || pref.Recommendations {
-			recs = append(recs, s.fillFromStore(ctx, p.Name(), rec))
+		if wantRec {
+			recs = append(recs, s.mbUnify(ctx, s.fillFromStore(ctx, p.Name(), rec)))
 		}
 	}
 	relations, recommendations = mergeManga(rels, self, 0), mergeManga(recs, self, limit)
 	if len(relations)+len(recommendations) > 0 {
 		err = nil
 	}
-	return relations, recommendations, err
+	return relations, recommendations, fetch, err
+}
+
+// FetchRelated asks one linked tracker for a work's relations or recommendations, on a user's request.
+func (s *JobService) FetchRelated(ctx context.Context, catalogID int64, provider string, recommendations bool) error {
+	m, err := s.catalog.GetManga(ctx, catalogID)
+	if err != nil {
+		return err
+	}
+	p, err := s.Provider(ctx, provider)
+	if err != nil {
+		return err
+	}
+	id := s.confirmedID(ctx, m, provider)
+	if id == "" {
+		return fmt.Errorf("this title isn't linked to %s", p.Label())
+	}
+	_, _, err = s.relatedCached(catalog.WithReason(ctx, "Related titles"), p, id, !recommendations, recommendations)
+	return err
 }
 
 // mergeManga dedupes works across providers by any shared id, most-agreed first.
@@ -617,7 +691,15 @@ func mergeManga(lists [][]catalog.Manga, exclude map[string]bool, limit int) []c
 			}
 			if hit == nil {
 				hit = &ranked{m: m, order: len(out)}
+				hit.m.Sources = nil
 				out = append(out, hit)
+			} else {
+				fillBlanks(&hit.m, m)
+			}
+			for _, src := range m.Origins() {
+				if !slices.Contains(hit.m.Sources, src) {
+					hit.m.Sources = append(hit.m.Sources, src)
+				}
 			}
 			hit.votes++
 			for _, k := range keys {
@@ -641,25 +723,32 @@ func mergeManga(lists [][]catalog.Manga, exclude map[string]bool, limit int) []c
 	return items
 }
 
+// fillBlanks copies what a record lacks from another listing of the same work.
+func fillBlanks(dst *catalog.Manga, src catalog.Manga) {
+	dst.Description = cmp.Or(dst.Description, src.Description)
+	dst.CoverImage = cmp.Or(dst.CoverImage, src.CoverImage)
+	dst.TitleEnglish = cmp.Or(dst.TitleEnglish, src.TitleEnglish)
+	dst.TitleNative = cmp.Or(dst.TitleNative, src.TitleNative)
+	dst.RelationType = cmp.Or(dst.RelationType, src.RelationType)
+	if len(dst.Genres) == 0 {
+		dst.Genres = src.Genres
+	}
+	if len(dst.Authors) == 0 {
+		dst.Authors = src.Authors
+	}
+	if dst.Chapters == nil {
+		dst.Chapters = src.Chapters
+	}
+}
+
 func (s *JobService) recentWorks(ctx context.Context, userID int64, limit int) []int64 {
-	rows, err := s.db.QueryContext(ctx, `
+	ids, _ := database.Column[int64](ctx, s.db, `
 		SELECT t.catalog_manga_id FROM chapter_read_progress rp
 		JOIN chapters c ON c.id = rp.chapter_id
 		JOIN titles t ON t.id = c.title_id
 		WHERE rp.user_id = ? AND t.catalog_manga_id IS NOT NULL
 		GROUP BY t.catalog_manga_id ORDER BY MAX(rp.last_read_at) DESC LIMIT ?`, userID, limit)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var out []int64
-	for rows.Next() {
-		var id int64
-		if rows.Scan(&id) == nil {
-			out = append(out, id)
-		}
-	}
-	return out
+	return ids
 }
 
 func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog.Manga, bool, error) {
@@ -679,15 +768,19 @@ func (s *JobService) recommendedManga(ctx context.Context, limit int) ([]catalog
 		exclude[k] = true
 	}
 	for _, entries := range s.trackerLists(ctx, uid, s.connectedTrackers(ctx, uid)) {
-		for _, e := range entries {
-			for _, k := range catalog.Keys(e.Manga) {
+		listed := make([]catalog.Manga, len(entries))
+		for i, e := range entries {
+			listed[i] = e.Manga
+		}
+		for _, m := range s.mbUnify(ctx, listed) {
+			for _, k := range catalog.Keys(m) {
 				exclude[k] = true
 			}
 		}
 	}
 	var lists [][]catalog.Manga
 	for _, id := range seeds {
-		rel, recs, err := s.RelatedManga(ctx, id, limit)
+		rel, recs, _, err := s.RelatedManga(ctx, id, limit)
 		if err != nil {
 			continue
 		}
@@ -718,18 +811,10 @@ func (s *JobService) runCatalogRefresh(ctx context.Context, progress ProgressMan
 			errs = append(errs, err)
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT cm.id FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id WHERE cm.status NOT IN ('FINISHED', 'CANCELLED')`)
+	ids, err := database.Column[int64](ctx, s.db, `SELECT DISTINCT cm.id FROM titles t JOIN catalog_manga cm ON cm.id = t.catalog_manga_id WHERE cm.status NOT IN ('FINISHED', 'CANCELLED')`)
 	if err != nil {
 		return err
 	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
 	handle := progress.Register("catalog refresh")
 	handle.SetTotal(len(ids))
 	defer handle.MarkDone()
@@ -747,6 +832,10 @@ func (s *JobService) runCatalogRefresh(ctx context.Context, progress ProgressMan
 }
 
 func (s *JobService) refreshWork(ctx context.Context, m catalog.Manga) error {
+	if s.mbRefresh(ctx, &m) {
+		_, err := s.catalog.repo.UpsertManga(ctx, m)
+		return err
+	}
 	p, ok := s.catalog.providers[m.Provider]
 	if !ok || !s.providerEnabled(ctx, m.Provider) {
 		return nil
@@ -763,6 +852,7 @@ func (s *JobService) refreshWork(ctx context.Context, m catalog.Manga) error {
 			continue
 		}
 		if sec, _, err := s.catalog.providers[prov].Get(ctx, e.ProviderID); err == nil {
+			sec.Chapters = nil // another tracker's count may be a releasing series' latest
 			fillBlanks(&fresh, sec)
 		}
 	}
@@ -770,18 +860,6 @@ func (s *JobService) refreshWork(ctx context.Context, m catalog.Manga) error {
 		return err
 	}
 	return s.catalog.repo.ReplaceRelations(ctx, catalog.RelKey(m.Provider, m.ProviderID), relKeys(m.Provider, rels))
-}
-
-func fillBlanks(dst *catalog.Manga, src catalog.Manga) {
-	if dst.Description == "" {
-		dst.Description = src.Description
-	}
-	if len(dst.Authors) == 0 {
-		dst.Authors = src.Authors
-	}
-	if dst.CoverImage == "" {
-		dst.CoverImage = src.CoverImage
-	}
 }
 
 type ProviderLink struct {
@@ -809,7 +887,7 @@ func (s *JobService) TitleLinks(ctx context.Context, titleID int64) ([]ProviderL
 	primary.Cover = m.CoverImage
 	out := []ProviderLink{primary}
 	for _, p := range s.Trackers(ctx) {
-		if p.Name() == m.Provider {
+		if p.Name() == m.Provider || !slices.Contains(connected, p.Name()) {
 			continue
 		}
 		l := link(p.Name(), p.Label())

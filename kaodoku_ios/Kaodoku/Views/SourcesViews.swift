@@ -57,7 +57,7 @@ struct TitleSourcesSheet: View {
           }
           if let data {
             Section("Found sources") {
-              Button(data.finding ? "Searching sources…" : "Find sources") { find() }
+              Button(data.finding ? "Searching sources..." : "Find sources") { find() }
                 .disabled(data.finding || busy)
               if data.failed, let msg = data.error, !msg.isEmpty {
                 Text(msg).font(.caption).foregroundStyle(Theme.error)
@@ -82,10 +82,10 @@ struct TitleSourcesSheet: View {
             }
             Section("Link a page URL") {
               Picker("Source", selection: $linkSource) {
-                Text("Choose…").tag(SourcePick?.none)
+                Text("Choose...").tag(SourcePick?.none)
                 ForEach(data.sources) { Text($0.name).tag(Optional($0)) }
               }
-              TextField("https://…", text: $linkURL)
+              TextField("https://...", text: $linkURL)
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

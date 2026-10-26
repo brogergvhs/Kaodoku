@@ -164,10 +164,6 @@ func RotateEncryptionKey(ctx context.Context, dbPath string) (int, error) {
 		}
 	}()
 
-	rows, err := conn.QueryContext(ctx, `SELECT rowid, access_token, refresh_token FROM tracker_accounts`)
-	if err != nil {
-		return 0, err
-	}
 	type item struct {
 		id              int64
 		access, refresh string
@@ -183,24 +179,21 @@ func RotateEncryptionKey(ctx context.Context, dbPath string) (int, error) {
 		}
 		return newCipher.Encrypt(plain)
 	}
-	for rows.Next() {
+	if err := database.Each(ctx, conn, `SELECT rowid, access_token, refresh_token FROM tracker_accounts`, nil, func(r database.Scanner) error {
 		var it item
-		if err := rows.Scan(&it.id, &it.access, &it.refresh); err != nil {
-			rows.Close()
-			return 0, err
+		if err := r.Scan(&it.id, &it.access, &it.refresh); err != nil {
+			return err
 		}
 		var err error
 		if it.access, err = reenc(it.access); err == nil {
 			it.refresh, err = reenc(it.refresh)
 		}
 		if err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("re-encrypt tracker token %d: %w", it.id, err)
+			return fmt.Errorf("re-encrypt tracker token %d: %w", it.id, err)
 		}
 		items = append(items, it)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+		return nil
+	}); err != nil {
 		return 0, err
 	}
 	for _, it := range items {

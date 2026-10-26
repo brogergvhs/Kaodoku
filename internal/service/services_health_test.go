@@ -39,7 +39,7 @@ func TestServicesHealthIncludesKotatsuWorker(t *testing.T) {
 	})
 
 	got := svc.ServicesHealth(ctx)
-	if len(got) != 3+len(ProviderNames())-1 {
+	if len(got) != 3+len(ProviderNames())-2 { // MyAnimeList needs a client id, MangaBaka its database
 		t.Fatalf("services = %d, want 3 plus the configured trackers: %+v", len(got), got)
 	}
 	k := got[2]

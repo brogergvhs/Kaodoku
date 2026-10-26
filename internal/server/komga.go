@@ -936,8 +936,7 @@ func parseKomgaCondition(raw json.RawMessage) komgaCondition {
 }
 
 // recentBooks approximates a library-wide book query from the most recently
-// updated titles. ponytail: caps at 30 titles to bound the per-request
-// queries; a chapters-table index query would be exact.
+// updated titles.
 func (k *komga) recentBooks(r *http.Request) []komgaBook {
 	tq, ok := visibleTitles(r.Context())
 	if !ok {

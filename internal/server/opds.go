@@ -477,8 +477,7 @@ func (o *opds) volumeArchive(w http.ResponseWriter, r *http.Request) {
 }
 
 // chapterPage streams one 0-based PSE page and records it as read, so OPDS
-// readers sync progress back. ponytail: reader prefetch can run a few pages
-// ahead of what was actually read; an explicit progress API would be exact.
+// readers sync progress back.
 func (o *opds) chapterPage(w http.ResponseWriter, r *http.Request) {
 	id, err := parseInt64Path(r, "id")
 	if err != nil {

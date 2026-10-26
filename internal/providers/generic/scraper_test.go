@@ -449,7 +449,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // MangaThemesia sites list chapters under a different path root whose slug
-// embeds the series slug: /series/{slug} → /chapter/{slug}-chapter-N.
+// embeds the series slug: /series/{slug} -> /chapter/{slug}-chapter-N.
 func TestSameSeriesChapterLinkAcceptsEmbeddedSlug(t *testing.T) {
 	page := "https://rizzfables.com/series/r2311170-top-tier-providence"
 	cases := []struct {
@@ -470,7 +470,7 @@ func TestSameSeriesChapterLinkAcceptsEmbeddedSlug(t *testing.T) {
 }
 
 // MangaFire embeds the series slug as an exact path segment of chapter URLs:
-// /title/{slug} → /read/{slug}/en/chapter-N.
+// /title/{slug} -> /read/{slug}/en/chapter-N.
 func TestSameSeriesChapterLinkAcceptsSlugSegment(t *testing.T) {
 	page := "https://mangafire.to/title/k39vr-edens-last-stand"
 	if !sameSeriesChapterLink(page, "https://mangafire.to/read/k39vr-edens-last-stand/en/chapter-12") {
@@ -522,7 +522,7 @@ func TestGetChaptersExpandsSmallGapBehindShowAll(t *testing.T) {
 }
 
 // Some MangaThemesia sites hang chapters off the site root with the series
-// slug prefixed: /manga/{slug}/ → /{slug}-84/.
+// slug prefixed: /manga/{slug}/ -> /{slug}-84/.
 func TestSameSeriesChapterLinkAcceptsRootLevelSlugPrefix(t *testing.T) {
 	page := "https://arenascan.com/manga/wail-of-weakness/"
 	if !sameSeriesChapterLink(page, "https://arenascan.com/wail-of-weakness-84/") {

@@ -140,7 +140,7 @@
 <div class="mb-4 flex items-center gap-2">
   <label class="text-sm text-base-content/70">User</label>
   <select class="select select-sm w-56" name="user" hx-get="/ui/metrics?tab=users" hx-target="#metrics-body" hx-swap="outerHTML">
-    <option value="0">Select a user…</option>
+    <option value="0">Select a user...</option>
     {{range .Users}}<option value="{{.ID}}" {{if eq .ID $.SelectedUser}}selected{{end}}>{{.Username}}</option>{{end}}
   </select>
 </div>

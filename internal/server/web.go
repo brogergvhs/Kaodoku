@@ -191,9 +191,10 @@ type settingsView struct {
 	Content  *userEditView
 }
 type settingGroup struct {
-	Title  string
-	Fields []settingField
-	Apps   []settingApp
+	Title     string
+	Fields    []settingField
+	Apps      []settingApp
+	MangaBaka *mangaBakaStatusView
 }
 
 type settingApp struct {
@@ -227,6 +228,14 @@ func settingMeta(key string) (label, desc string) {
 		return "Search results", "Searches kept for 10 minutes."
 	case service.SettingCacheRecs:
 		return "Recommendations", "Home recommendations and list suggestions kept per user for 6 hours."
+	case service.SettingMangaBakaEnabled:
+		return "Use MangaBaka", "Downloads the MangaBaka database and uses it to link titles across trackers, fill in details and covers, and find related titles, saving calls to tracker APIs."
+	case service.SettingMangaBakaEvery:
+		return "Check for a new database", "How often to look for a newer MangaBaka database (e.g. 168h). It is rebuilt nightly, but titles change every few days. At least 24h; 0 only refreshes on Refresh now."
+	case service.SettingMangaBakaVariant:
+		return "Database download", "Full also keeps MangaUpdates recommendations, the only recommendations available without tracker calls. Default is about 300 MB smaller per download and has none."
+	case service.SettingMangaBakaAggressive:
+		return "Save tracker API calls aggressively", "Related titles, recommendations, trending, linking and title details use only MangaBaka and data trackers already sent. Tracker data loads only when someone clicks Fetch. Off, trackers are still asked when MangaBaka has nothing."
 	case service.SettingServeTrackerSyncEvery:
 		return "Tracker sync", "How often connected tracker accounts sync reading progress (e.g. 12h). Empty disables."
 	case service.SettingServeCatalogEvery:
@@ -371,6 +380,8 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("POST /ui/library/{id}/rating", u.libRating)
 	mux.HandleFunc("POST /ui/library/{id}/rating/missing", u.libRatingMissing)
 	mux.HandleFunc("GET /ui/trackers/{provider}/missing-ratings", u.trackerMissingRatings)
+	mux.HandleFunc("GET /ui/trackers/{provider}/mangabaka", u.trackerMangaBaka)
+	mux.HandleFunc("POST /ui/trackers/{provider}/mangabaka", u.trackerMangaBaka)
 	mux.HandleFunc("POST /ui/trackers/{provider}/missing-ratings", u.trackerMissingRatings)
 	mux.HandleFunc("POST /ui/library/{id}/language-mode", u.libLanguageMode)
 	mux.HandleFunc("POST /ui/library/{id}/refresh-interval", u.libRefreshInterval)
@@ -456,9 +467,14 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /ui/import/candidates", u.importCandidates)
 	mux.HandleFunc("GET /ui/import/titles", u.importTitleOptions)
 	mux.HandleFunc("GET /ui/library/{id}/related", u.relatedManga)
+	mux.HandleFunc("POST /ui/library/{id}/related/fetch", u.relatedFetch)
 	mux.HandleFunc("GET /ui/covers/{provider}/{id}", u.catalogCover)
 	mux.HandleFunc("GET /img/{sig}/{key}", u.image)
 	mux.HandleFunc("POST /ui/settings/caches/{key}/clear", u.clearCache)
+	mux.HandleFunc("POST /ui/settings/mangabaka/refresh", u.mangaBakaRefresh)
+	mux.HandleFunc("GET /ui/settings/mangabaka/status", func(w http.ResponseWriter, r *http.Request) {
+		u.frag(w, "mangaBakaStatus", u.mangaBakaStatus(r.Context(), "", false))
+	})
 	mux.HandleFunc("GET /ui/search/trending", u.trendingManga)
 	mux.HandleFunc("GET /anilist/connect", u.trackerConnect)
 	mux.HandleFunc("GET /anilist/callback", u.trackerCallback)
@@ -531,6 +547,38 @@ type mangaResults struct {
 	ShowProvider  bool
 }
 
+type originView struct {
+	Local bool     // listed by the local MangaBaka copy
+	APIs  []string // labels of the trackers whose APIs listed it
+}
+
+// origin marks listings from the local MangaBaka copy, and the tracker APIs behind the others when MangaBaka is on or
+// several sources merged.
+func (u *webUI) origin(origins []string, mangaBaka bool) originView {
+	var o originView
+	for _, p := range origins {
+		if p == catalog.MangaBakaProvider {
+			o.Local = true
+		} else if mangaBaka || len(origins) > 1 {
+			o.APIs = append(o.APIs, u.svc.ProviderLabel(p))
+		}
+	}
+	return o
+}
+
+func (o originView) Note() string {
+	var parts []string
+	if o.Local {
+		parts = append(parts, "the local MangaBaka database")
+	}
+	if n := len(o.APIs); n == 1 {
+		parts = append(parts, "the "+o.APIs[0]+" API")
+	} else if n > 1 {
+		parts = append(parts, "the "+strings.Join(o.APIs[:n-1], ", ")+" and "+o.APIs[n-1]+" APIs")
+	}
+	return "From " + strings.Join(parts, " and ")
+}
+
 // resultView picks the search results layout from the request.
 func resultView(r *http.Request) string {
 	switch v := r.FormValue("view"); v {
@@ -544,9 +592,10 @@ func resultView(r *http.Request) string {
 func (u *webUI) mangaResultsView(ctx context.Context, heading, view string, items []catalog.Manga) mangaResults {
 	user := userFrom(ctx)
 	views := u.stripItems(ctx, items)
-	mixed := false
-	for _, v := range views {
+	mixed, mangaBaka := false, u.svc.MangaBakaEnabled(ctx)
+	for i, v := range views {
 		mixed = mixed || v.Provider != views[0].Provider
+		views[i].Origin = u.origin(v.Origins(), mangaBaka)
 	}
 	return mangaResults{Heading: heading, View: view, Items: views, CanAdd: user.Can(auth.PermLibraryAdd), ShowProvider: mixed}
 }
@@ -609,21 +658,51 @@ func (u *webUI) relatedManga(w http.ResponseWriter, r *http.Request) {
 	}
 	title, err := u.svc.GetTitle(r.Context(), id)
 	if err != nil || title.CatalogMangaID == nil || !contentAllowed(r.Context(), title.IsAdult, title.ContentTags) {
-		u.frag(w, "relatedSections", relatedView{})
+		u.frag(w, "relatedSections", []relatedSection(nil))
 		return
 	}
-	relations, recs, _ := u.svc.RelatedManga(r.Context(), *title.CatalogMangaID, 24)
-	view := relatedView{
-		Relations:       u.mangaResultsView(r.Context(), "", "cards", relations),
-		Recommendations: u.mangaResultsView(r.Context(), "", "cards", recs),
+	relations, recs, fetch, _ := u.svc.RelatedManga(r.Context(), *title.CatalogMangaID, 24)
+	sections := []relatedSection{
+		{TitleID: id, Kind: "relations", Heading: "Related manga", Results: u.mangaResultsView(r.Context(), "", "cards", relations), Fetch: u.providerOptions(fetch.Relations)},
+		{TitleID: id, Kind: "recommendations", Heading: "Recommended manga", Results: u.mangaResultsView(r.Context(), "", "cards", recs), Fetch: u.providerOptions(fetch.Recommendations)},
 	}
-	view.Relations.ShowRelations = true
-	u.frag(w, "relatedSections", view)
+	sections[0].Results.ShowRelations = true
+	if r.Method == http.MethodPost {
+		section := sections[0]
+		if r.FormValue("kind") == "recommendations" {
+			section = sections[1]
+		}
+		section.Open = true
+		u.frag(w, "relatedSection", section)
+		return
+	}
+	u.frag(w, "relatedSections", sections)
 }
 
-type relatedView struct {
-	Relations       mangaResults
-	Recommendations mangaResults
+type relatedSection struct {
+	TitleID       int64
+	Kind, Heading string
+	Results       mangaResults
+	Fetch         []providerOption // trackers to ask on request, in aggressive MangaBaka mode
+	Open          bool
+}
+
+func (u *webUI) relatedFetch(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		u.fail(w, err)
+		return
+	}
+	title, err := u.svc.GetTitle(r.Context(), id)
+	if err != nil || title.CatalogMangaID == nil || !contentAllowed(r.Context(), title.IsAdult, title.ContentTags) {
+		http.NotFound(w, r)
+		return
+	}
+	if err := u.svc.FetchRelated(r.Context(), *title.CatalogMangaID, r.FormValue("provider"), r.FormValue("kind") == "recommendations"); err != nil {
+		u.fail(w, err)
+		return
+	}
+	u.relatedManga(w, r)
 }
 
 func (u *webUI) trendingManga(w http.ResponseWriter, r *http.Request) {
@@ -719,17 +798,7 @@ func filterNSFWSources(ctx context.Context, list []sources.Source) []sources.Sou
 // given adult flag and tag/genre set. Guards apply to every user; the env
 // admin's are simply unrestricted by default.
 func contentAllowed(ctx context.Context, isAdult bool, tags []string) bool {
-	u := auth.FromContext(ctx)
-	if u == nil {
-		return false
-	}
-	if isAdult && !u.AllowAdult {
-		return false
-	}
-	if len(u.AllowedTags) > 0 && !library.HasAnyTag(tags, u.AllowedTags) {
-		return false
-	}
-	return !library.HasAnyTag(tags, u.BlockedTags)
+	return service.ContentAllowed(auth.FromContext(ctx), isAdult, tags)
 }
 
 // mangaContentTags collects the tag/genre vocabulary a catalog entry carries.
@@ -2089,6 +2158,7 @@ var globalJobTypes = []string{
 	jobs.TypeCatalogRefresh,
 	jobs.TypeSyncTrackers,
 	jobs.TypeBackupUserData,
+	jobs.TypeMangaBakaRefresh,
 }
 
 func (u *webUI) jobStart(w http.ResponseWriter, r *http.Request) {
@@ -2996,7 +3066,7 @@ func (u *webUI) mePage(w http.ResponseWriter, r *http.Request) {
 	if user := userFrom(r.Context()); user.Can(auth.PermUsersManage) {
 		if me, err := u.svc.Auth().GetUser(r.Context(), user.ID); err == nil && me != nil {
 			opts, _ := u.svc.ContentTagOptions(r.Context())
-			view.Content = &userEditView{User: *me, TagOptions: opts, ProviderOptions: u.providerOptions()}
+			view.Content = &userEditView{User: *me, TagOptions: opts, ProviderOptions: u.providerOptions(service.ProviderNames())}
 		}
 	}
 	u.page(w, r, "settings", "My settings", view)
@@ -3019,6 +3089,7 @@ func (u *webUI) serverPage(w http.ResponseWriter, r *http.Request) {
 type searchResultView struct {
 	catalog.Manga
 	TitleID int64 // set when the manga is already in the library
+	Origin  originView
 }
 
 func (v searchResultView) RelationLabel() string {
@@ -3180,6 +3251,7 @@ type searchResultsView struct {
 	RetryPage int  // set with Error: the page to retry
 	Append    bool // page 2+: suppress the empty-state text
 	Error     bool
+	FetchFrom string // tracker whose suggestions load on request, in aggressive MangaBaka mode
 }
 
 const searchPerPage = 18
@@ -3203,13 +3275,16 @@ func (u *webUI) search(w http.ResponseWriter, r *http.Request) {
 	filter := searchFilter(r.Context(), options, c.Q, c.Sort, c.Dir, c.IncludeTags, c.ExcludeTags)
 	view := searchResultsView{Controls: c, View: c.View, Append: page > 1}
 	if c.Q == "" && !filtered && c.Sort == "" {
-		pool, _ := u.svc.ProviderSuggestions(r.Context(), c.Provider)
+		pool, fetchable, _ := u.svc.ProviderSuggestions(r.Context(), c.Provider, r.FormValue("fetch") != "")
 		if pool = allowedManga(r.Context(), pool); len(pool) > 0 {
 			start := min((page-1)*searchPerPage, len(pool))
 			end := min(start+searchPerPage, len(pool))
 			view.Results = u.mangaResultsView(r.Context(), "", view.View, pool[start:end])
 			if page == 1 {
 				view.Results.Heading = "Suggested from your " + u.svc.ProviderLabel(c.Provider) + " list"
+				if fetchable {
+					view.FetchFrom = u.svc.ProviderLabel(c.Provider)
+				}
 			}
 			if end < len(pool) {
 				view.NextPage = page + 1
@@ -4161,15 +4236,18 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 		case key == service.SettingBrowserSolverProvider:
 			f.Kind, f.Options = "select", []providerOption{{browserfetch.ProviderFlareSolverr, "FlareSolverr"}}
 		case key == service.SettingProvidersDefault:
-			f.Kind, f.Options = "select", u.providerOptions()
+			f.Kind, f.Options = "select", u.providerOptions(service.ProviderNames())
 		case multiSetting(key):
-			f.Kind, f.Options = "multi", u.providerOptions()
+			f.Kind, f.Options = "multi", u.providerOptions(service.ProviderNames())
 			for _, o := range f.Options {
 				if slices.Contains(strings.Split(value, ","), o.Name) {
 					f.Selected = append(f.Selected, o.Name)
 				}
 			}
-		case key == service.SettingBrowserSolverEnabled, key == service.SettingBrowserDownloaderEnabled, key == service.SettingRateLimitDisabled:
+		case key == service.SettingMangaBakaVariant:
+			f.Kind, f.Options = "select", []providerOption{{"full", "Full (about 850 MB)"}, {"default", "Default (about 550 MB)"}}
+		case key == service.SettingBrowserSolverEnabled, key == service.SettingBrowserDownloaderEnabled, key == service.SettingRateLimitDisabled,
+			key == service.SettingMangaBakaEnabled, key == service.SettingMangaBakaAggressive:
 			f.Kind = "bool"
 		case strings.HasPrefix(key, "ui.custom."):
 			f.Kind = "color"
@@ -4222,6 +4300,8 @@ func (u *webUI) settings(ctx context.Context) settingsView {
 				{Provider: catalog.AniListProvider, Label: "AniList", Fields: fields(service.SettingAniListClientID, service.SettingAniListClientSecret)},
 				{Provider: catalog.MALProvider, Label: "MyAnimeList", Fields: fields(service.SettingMALClientID, service.SettingMALClientSecret)},
 			}},
+			settingGroup{Title: "MangaBaka", Fields: fields(service.SettingMangaBakaEnabled, service.SettingMangaBakaEvery,
+				service.SettingMangaBakaVariant, service.SettingMangaBakaAggressive), MangaBaka: u.mangaBakaStatus(ctx, "", false)},
 		)
 	}
 	return settingsView{Groups: groups}
@@ -4268,6 +4348,77 @@ func (u *webUI) image(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyRemoteImage(w, r, u.svc, raw, "Web image")
+}
+
+type mangaBakaStatusView struct {
+	Note, Progress, Error, Message string
+	Running, Confirm               bool
+}
+
+// mangaBakaStatus describes the local copy and a running refresh; message and confirm answer a Refresh now click.
+func (u *webUI) mangaBakaStatus(ctx context.Context, message string, confirm bool) *mangaBakaStatusView {
+	st := u.svc.MangaBakaStatus(ctx)
+	v := &mangaBakaStatusView{Note: "Not downloaded yet.", Error: st.LastError, Running: st.Running, Message: message, Confirm: confirm && !st.Running}
+	if st.Series > 0 {
+		v.Note = fmt.Sprintf("%s series, %s variant, imported %s, %s on disk.", humanCount(st.Series), st.Variant, st.ImportedAt.Local().Format("2 Jan 2006 15:04"), util.Human(st.Size))
+	}
+	if !st.Next.IsZero() && !st.Running {
+		v.Note += " Next check " + st.Next.Local().Format("2 Jan 15:04") + "."
+	}
+	switch st.Progress.Step {
+	case "importing":
+		v.Progress = "Downloading and importing: " + humanCount(st.Progress.Read) + " series read..."
+		if st.Progress.Read == 0 {
+			v.Progress = "Downloading the database..."
+		}
+	case "linking":
+		v.Progress = "Linking library titles..."
+	case "checking":
+		v.Progress = "Checking for a newer database..."
+	default:
+		v.Progress = "Waiting to start..."
+	}
+	return v
+}
+
+func humanCount(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+// mangaBakaRefresh queues a refresh; a forced one of an unchanged dump asks first.
+func (u *webUI) mangaBakaRefresh(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !userFrom(ctx).Can(auth.PermSettingsManage) {
+		writeError(w, http.StatusForbidden, "refreshing MangaBaka needs the settings permission")
+		return
+	}
+	status := func(message string, confirm bool) {
+		u.frag(w, "mangaBakaStatus", u.mangaBakaStatus(ctx, message, confirm))
+	}
+	if !u.svc.MangaBakaEnabled(ctx) {
+		status("Turn on Use MangaBaka and save first.", false)
+		return
+	}
+	force := r.FormValue("force") != ""
+	if force && r.FormValue("confirm") == "" {
+		if same, err := u.svc.MangaBakaUnchanged(ctx); err != nil {
+			status("Couldn't reach MangaBaka: "+err.Error(), false)
+			return
+		} else if same {
+			status("", true)
+			return
+		}
+	}
+	if err := u.svc.RefreshMangaBaka(ctx, force); err != nil && !errors.Is(err, service.ErrMangaBakaBusy) {
+		u.fail(w, err)
+		return
+	}
+	u.kick()
+	status("", false)
 }
 
 func (u *webUI) clearCache(w http.ResponseWriter, r *http.Request) {
@@ -4575,7 +4726,13 @@ func (u *webUI) funcs() template.FuncMap {
 			}
 			return out
 		},
-		"since":      since,
+		"since": since,
+		"capCount": func(n int) string {
+			if n > 99 {
+				return "99+"
+			}
+			return strconv.Itoa(n)
+		},
 		"confidence": func(c float64) string { return fmt.Sprintf("%.0f%%", c*100) },
 		"orUnknown":  func(s string) string { return orDefault(s, "unknown") },
 		"orDash":     func(s string) string { return orDefault(s, "—") },
@@ -4584,26 +4741,7 @@ func (u *webUI) funcs() template.FuncMap {
 		"pathEscape": url.PathEscape,
 		"humanBytes": util.Human,
 		"img":        u.svc.ImageURL,
-		"releaseStatus": func(s string) string {
-			return strings.ToLower(strings.ReplaceAll(s, "_", " "))
-		},
-		"pct": func(done, total int64) int64 { return percent(done, total) },
-		"missingTotal": func(ts []library.Title) int64 {
-			var n int64
-			for _, t := range ts {
-				n += t.MissingCount
-			}
-			return n
-		},
-		"healthyCount": func(ss []sources.Source) int {
-			n := 0
-			for _, s := range ss {
-				if s.Status == sources.StatusHealthy {
-					n++
-				}
-			}
-			return n
-		},
+		"pct":        func(done, total int64) int64 { return percent(done, total) },
 	}
 }
 
@@ -4712,6 +4850,8 @@ func jobDesc(typ string) string {
 		return "Saves progress, settings, users and library metadata to a backup file."
 	case jobs.TypeImportList:
 		return "Adds the titles from an imported MyAnimeList list that weren't in the library."
+	case jobs.TypeMangaBakaRefresh:
+		return "Downloads the MangaBaka database if a newer one is out, then links library titles from it."
 	}
 	return ""
 }
@@ -4740,6 +4880,8 @@ func jobLabel(typ string) string {
 		return "Back up user data"
 	case jobs.TypeDetectCrops:
 		return "Detect page crops"
+	case jobs.TypeMangaBakaRefresh:
+		return "MangaBaka refresh"
 	}
 	return typ
 }

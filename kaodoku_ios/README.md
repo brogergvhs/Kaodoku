@@ -44,12 +44,12 @@ paying for the Apple Developer Program ($99/yr), so the only way to install is
 ### Steps
 
 1. Open `Kaodoku.xcodeproj` in Xcode.
-2. Select the **Kaodoku** target → **Signing & Capabilities**, sign in with your
+2. Select the **Kaodoku** target -> **Signing & Capabilities**, sign in with your
    Apple ID, and pick your **Personal Team**. Change the bundle identifier to
    something unique if signing fails.
 3. Plug in your device, select it as the run destination, and press **Run**.
 4. On the device, trust the developer certificate under
-   **Settings → General → VPN & Device Management**.
+   **Settings -> General -> VPN & Device Management**.
 
 > **Free-account caveat:** apps signed with a free personal team expire after
 > **7 days** and must be rebuilt/reinstalled. You can have at most 3 such apps

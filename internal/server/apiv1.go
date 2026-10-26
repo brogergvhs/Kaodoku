@@ -403,7 +403,7 @@ func serveVolumeCover(w http.ResponseWriter, r *http.Request, svc *service.JobSe
 }
 
 // titleCover proxies a title's remote cover so the app only ever talks to this
-// server. ponytail: no persistent cache; relies on the client + Cache-Control.
+// server.
 func (a *apiV1) titleCover(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {

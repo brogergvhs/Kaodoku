@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/brogergvhs/kaodoku/internal/database"
 )
 
 const windowSQL = `(status IN ('queued', 'running', 'failed') OR id IN (SELECT id FROM jobs ORDER BY id DESC LIMIT 100))`
@@ -98,26 +100,21 @@ func (r *Repository) Children(ctx context.Context, parentIDs []int64, newest int
 	}
 	ids, _ := json.Marshal(parentIDs)
 	in := `parent_id IN (SELECT value FROM json_each(?)) AND ` + windowSQL
-	rows, err := r.db.QueryContext(ctx, `SELECT parent_id, status, COUNT(*) FROM jobs WHERE `+in+` GROUP BY parent_id, status`, string(ids))
-	if err != nil {
-		return nil, fmt.Errorf("count child jobs: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
+	if err := database.Each(ctx, r.db, `SELECT parent_id, status, COUNT(*) FROM jobs WHERE `+in+` GROUP BY parent_id, status`, []any{string(ids)}, func(row database.Scanner) error {
 		var id int64
 		var status string
 		var n int
-		if err := rows.Scan(&id, &status, &n); err != nil {
-			return nil, err
+		if err := row.Scan(&id, &status, &n); err != nil {
+			return err
 		}
 		if out[id] == nil {
 			out[id] = &ChildSummary{Counts: map[string]int{}}
 		}
 		out[id].Counts[status] += n
 		out[id].Total += n
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("count child jobs: %w", err)
 	}
 	list, err := r.query(ctx, `SELECT id, type, status, payload_json, run_after, attempts, last_error, parent_id, created_at, updated_at FROM (
 			SELECT *, ROW_NUMBER() OVER (PARTITION BY parent_id ORDER BY id DESC) AS n FROM jobs WHERE `+in+`
@@ -134,18 +131,9 @@ func (r *Repository) Children(ctx context.Context, parentIDs []int64, newest int
 }
 
 func (r *Repository) query(ctx context.Context, q string, args ...any) ([]Job, error) {
-	rows, err := r.db.QueryContext(ctx, q, args...)
+	out, err := database.Collect(ctx, r.db, scanJob, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list jobs: %w", err)
 	}
-	defer rows.Close()
-	var out []Job
-	for rows.Next() {
-		job, err := scanJob(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan job: %w", err)
-		}
-		out = append(out, job)
-	}
-	return out, rows.Err()
+	return out, nil
 }

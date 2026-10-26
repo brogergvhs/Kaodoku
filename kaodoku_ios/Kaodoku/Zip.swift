@@ -32,7 +32,6 @@ struct ZipArchive: Sendable {
   private let fileSize: UInt64
 
   private static let imageExts: Set<String> = ["jpg", "jpeg", "png", "webp", "gif", "avif"]
-  // ponytail: CBZ-only ceilings; raise them if real archives exceed them.
   private static let maxEntries = 10000
   private static let maxDirectorySize = 32 << 20
   private static let maxEntrySize = 128 << 20

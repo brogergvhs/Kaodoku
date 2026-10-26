@@ -146,56 +146,50 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
-	nextRefresh := time.Now()
-	nextScan := time.Now()
-	nextDownload := time.Now()
-	nextSourceVerify := time.Now()
-	nextBackup := time.Now()
-	nextTrackerSync := time.Now()
-	nextCatalog := time.Now()
-	var refreshEvery, scanEvery, downloadEvery, sourceVerifyEvery, backupEvery, trackerSyncEvery, catalogEvery, runEvery time.Duration
-
+	schedules := []*schedule{
+		{key: service.SettingServeRefreshEvery, typ: jobs.TypeRefreshTitle},
+		{key: service.SettingServeScanEvery, typ: jobs.TypeScanDownloads},
+		{key: service.SettingServeDownloadEvery, typ: jobs.TypeDownloadMissing},
+		{key: service.SettingServeSourceVerifyEvery, typ: jobs.TypeVerifySource},
+		{key: service.SettingServeBackupEvery, typ: jobs.TypeBackupUserData},
+		{key: service.SettingServeTrackerSyncEvery, typ: jobs.TypeSyncTrackers},
+		{key: service.SettingServeCatalogEvery, typ: jobs.TypeCatalogRefresh},
+		{key: service.SettingMangaBakaEvery, typ: jobs.TypeMangaBakaRefresh},
+	}
+	var runEvery time.Duration
 	for {
-		oldRefresh, oldScan, oldDownload, oldSourceVerify, oldBackup, oldTrackerSync, oldCatalog, oldRun := refreshEvery, scanEvery, downloadEvery, sourceVerifyEvery, backupEvery, trackerSyncEvery, catalogEvery, runEvery
-		refreshEvery = serveDuration(svc, ctx, service.SettingServeRefreshEvery)
-		scanEvery = serveDuration(svc, ctx, service.SettingServeScanEvery)
-		downloadEvery = serveDuration(svc, ctx, service.SettingServeDownloadEvery)
-		sourceVerifyEvery = serveDuration(svc, ctx, service.SettingServeSourceVerifyEvery)
-		backupEvery = serveDuration(svc, ctx, service.SettingServeBackupEvery)
-		trackerSyncEvery = serveDuration(svc, ctx, service.SettingServeTrackerSyncEvery)
-		catalogEvery = serveDuration(svc, ctx, service.SettingServeCatalogEvery)
-		runEvery = serveDuration(svc, ctx, service.SettingServeRunEvery)
-		if runEvery <= 0 {
+		changed := false
+		for _, sc := range schedules {
+			every := serveDuration(svc, ctx, sc.key)
+			if sc.typ == jobs.TypeMangaBakaRefresh {
+				every = svc.MangaBakaEvery(ctx)
+			}
+			if every == sc.every {
+				continue
+			}
+			sc.every, sc.next, changed = every, nextAfter(svc, ctx, sc.typ, every), true
+			if sc.typ == jobs.TypeMangaBakaRefresh && !svc.MangaBakaReady() {
+				sc.next = time.Now()
+			}
+		}
+		oldRun := runEvery
+		if runEvery = serveDuration(svc, ctx, service.SettingServeRunEvery); runEvery <= 0 {
 			runEvery = fallbackDuration(service.SettingDefault(service.SettingServeRunEvery))
 		}
-		changed := oldRefresh != refreshEvery || oldScan != scanEvery || oldDownload != downloadEvery || oldSourceVerify != sourceVerifyEvery || oldBackup != backupEvery || oldTrackerSync != trackerSyncEvery || oldCatalog != catalogEvery || oldRun != runEvery
-		if oldRefresh != refreshEvery {
-			nextRefresh = nextAfter(svc, ctx, jobs.TypeRefreshTitle, refreshEvery)
+		if changed || oldRun != runEvery {
+			fmt.Print("Serving:")
+			for _, sc := range schedules {
+				fmt.Printf(" %s=%s", sc.typ, sc.every)
+			}
+			fmt.Printf(" run=%s\n", runEvery)
 		}
-		if oldScan != scanEvery {
-			nextScan = nextAfter(svc, ctx, jobs.TypeScanDownloads, scanEvery)
-		}
-		if oldDownload != downloadEvery {
-			nextDownload = nextAfter(svc, ctx, jobs.TypeDownloadMissing, downloadEvery)
-		}
-		if oldSourceVerify != sourceVerifyEvery {
-			nextSourceVerify = nextAfter(svc, ctx, jobs.TypeVerifySource, sourceVerifyEvery)
-		}
-		if oldBackup != backupEvery {
-			nextBackup = nextAfter(svc, ctx, jobs.TypeBackupUserData, backupEvery)
-		}
-		if oldTrackerSync != trackerSyncEvery {
-			nextTrackerSync = nextAfter(svc, ctx, jobs.TypeSyncTrackers, trackerSyncEvery)
-		}
-		if oldCatalog != catalogEvery {
-			nextCatalog = nextAfter(svc, ctx, jobs.TypeCatalogRefresh, catalogEvery)
-		}
-		if changed {
-			fmt.Printf("Serving: refresh=%s scan=%s download=%s source_verify=%s backup=%s run=%s\n", refreshEvery, scanEvery, downloadEvery, sourceVerifyEvery, backupEvery, runEvery)
-		}
-
-		if err := serveTick(ctx, svc, nextDue(&nextRefresh, refreshEvery), nextDue(&nextScan, scanEvery), nextDue(&nextDownload, downloadEvery), nextDue(&nextSourceVerify, sourceVerifyEvery), nextDue(&nextBackup, backupEvery), nextDue(&nextTrackerSync, trackerSyncEvery), nextDue(&nextCatalog, catalogEvery)); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "serve tick: %v\n", err)
+		for _, sc := range schedules {
+			if !nextDue(&sc.next, sc.every) {
+				continue
+			}
+			if err := enqueueScheduled(ctx, svc, sc.typ); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "serve tick: %v\n", err)
+			}
 		}
 		if _, err := runDue(ctx, svc); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "run due jobs: %v\n", err)
@@ -214,44 +208,19 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 }
 
-func serveTick(ctx context.Context, svc *service.JobService, refresh, scan, download, sourceVerify, backup, trackerSync, catalogRefresh bool) error {
-	now := time.Now()
-	if refresh {
-		if _, err := svc.Enqueue(ctx, jobs.TypeRefreshTitle, 0, now); err != nil {
-			return err
-		}
+type schedule struct {
+	key, typ string
+	every    time.Duration
+	next     time.Time
+}
+
+func enqueueScheduled(ctx context.Context, svc *service.JobService, typ string) error {
+	if typ == jobs.TypeVerifySource {
+		_, err := svc.EnqueueSourceVerification(ctx, time.Now())
+		return err
 	}
-	if scan {
-		if _, err := svc.Enqueue(ctx, jobs.TypeScanDownloads, 0, now); err != nil {
-			return err
-		}
-	}
-	if download {
-		if _, err := svc.Enqueue(ctx, jobs.TypeDownloadMissing, 0, now); err != nil {
-			return err
-		}
-	}
-	if sourceVerify {
-		if _, err := svc.EnqueueSourceVerification(ctx, now); err != nil {
-			return err
-		}
-	}
-	if backup {
-		if _, err := svc.Enqueue(ctx, jobs.TypeBackupUserData, 0, now); err != nil {
-			return err
-		}
-	}
-	if trackerSync {
-		if _, err := svc.Enqueue(ctx, jobs.TypeSyncTrackers, 0, now); err != nil {
-			return err
-		}
-	}
-	if catalogRefresh {
-		if _, err := svc.Enqueue(ctx, jobs.TypeCatalogRefresh, 0, now); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := svc.Enqueue(ctx, typ, 0, time.Now())
+	return err
 }
 
 func runDue(ctx context.Context, svc *service.JobService) (service.RunSummary, error) {

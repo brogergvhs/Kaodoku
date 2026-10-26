@@ -762,6 +762,31 @@ func TestAPIV1TitleBanner(t *testing.T) {
 	}
 }
 
+func TestAPIV1TrackerSettingsKeepWhatClientsDontSend(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
+	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	t.Setenv("KAODOKU_ADMIN_PASSWORD", "")
+	db, err := database.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO tracker_accounts (user_id, provider, access_token, exclusive) VALUES (1, 'anilist', 'x', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"auto_link": true, "auto_progressive": true, "relations": true, "recommendations": true, "rating_sync": "", "source": "kaodoku"}
+	if rec := do(t, New(svc, nil, nil), http.MethodPut, "/api/v1/trackers/anilist/settings", "", body); rec.Code != http.StatusOK {
+		t.Fatalf("settings = %d %s", rec.Code, rec.Body)
+	}
+	if a := svc.TrackerAccounts(context.Background(), 1); len(a) != 1 || !a[0].Exclusive || !a[0].AutoProgressive {
+		t.Fatalf("accounts = %+v, want exclusive kept and progressive set", a)
+	}
+}
+
 func TestAPIV1TagsGrouped(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "kaodoku.db")
 	svc, closeDB, err := service.OpenJobs(context.Background(), dbPath)

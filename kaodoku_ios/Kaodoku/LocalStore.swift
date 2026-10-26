@@ -353,7 +353,7 @@ final class LocalStore {
     return groups
       .map { id, list in
         LocalTitle(id: id,
-                   info: titleInfo[id] ?? TitleInfo(id: id, name: list.first?.titleName ?? "…"),
+                   info: titleInfo[id] ?? TitleInfo(id: id, name: list.first?.titleName ?? "..."),
                    entries: list.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending },
                    pending: (pendingGroups[id] ?? [])
                      .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending })

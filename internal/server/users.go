@@ -77,9 +77,9 @@ type usersView struct {
 
 type providerOption struct{ Name, Label string }
 
-func (u *webUI) providerOptions() []providerOption {
+func (u *webUI) providerOptions(names []string) []providerOption {
 	var out []providerOption
-	for _, name := range service.ProviderNames() {
+	for _, name := range names {
 		out = append(out, providerOption{Name: name, Label: u.svc.ProviderLabel(name)})
 	}
 	return out
@@ -89,7 +89,7 @@ func (u *webUI) usersData(r *http.Request) usersView {
 	users, _ := u.svc.Auth().ListUsers(r.Context())
 	roles, _ := u.svc.Auth().ListRoles(r.Context())
 	opts, _ := u.svc.ContentTagOptions(r.Context())
-	return usersView{Users: users, Roles: roles, Groups: permGroups(), TagOptions: opts, ProviderOptions: u.providerOptions()}
+	return usersView{Users: users, Roles: roles, Groups: permGroups(), TagOptions: opts, ProviderOptions: u.providerOptions(service.ProviderNames())}
 }
 
 func (u *webUI) usersPage(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +120,7 @@ func (u *webUI) userEditModal(w http.ResponseWriter, r *http.Request) {
 	}
 	roles, _ := u.svc.Auth().ListRoles(r.Context())
 	opts, _ := u.svc.ContentTagOptions(r.Context())
-	u.frag(w, "userEditModal", userEditView{User: *usr, Roles: roles, TagOptions: opts, ProviderOptions: u.providerOptions()})
+	u.frag(w, "userEditModal", userEditView{User: *usr, Roles: roles, TagOptions: opts, ProviderOptions: u.providerOptions(service.ProviderNames())})
 }
 
 type roleEditView struct {

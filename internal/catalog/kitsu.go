@@ -352,7 +352,7 @@ func (c *KitsuClient) entries(ctx context.Context, q url.Values) ([]Entry, error
 				FinishedAt  time.Time `json:"finishedAt"`
 			}
 			_ = json.Unmarshal(r.Attributes, &a)
-			e := Entry{Progress: a.Progress, Status: kitsuToStatus[a.Status], Started: a.StartedAt, Finished: a.FinishedAt, ref: r.ID}
+			e := Entry{Progress: a.Progress, Status: kitsuToStatus[a.Status], Started: a.StartedAt, Finished: a.FinishedAt, Ref: r.ID}
 			if a.Rating != nil {
 				e.Score = roundScore(float64(*a.Rating) / 2)
 			}
@@ -444,7 +444,7 @@ func (c *KitsuClient) SaveEntry(ctx context.Context, id string, u EntryUpdate) e
 
 func (c *KitsuClient) writeEntry(ctx context.Context, id string, e Entry, found bool, attrs map[string]any) error {
 	if found {
-		return c.do(ctx, http.MethodPatch, "/library-entries/"+e.ref, map[string]any{"data": map[string]any{"id": e.ref, "type": "libraryEntries", "attributes": attrs}}, nil)
+		return c.do(ctx, http.MethodPatch, "/library-entries/"+e.Ref, map[string]any{"data": map[string]any{"id": e.Ref, "type": "libraryEntries", "attributes": attrs}}, nil)
 	}
 	body := map[string]any{"data": map[string]any{
 		"type":       "libraryEntries",
@@ -463,7 +463,7 @@ func (c *KitsuClient) DeleteEntry(ctx context.Context, id string) error {
 	if err != nil || !found {
 		return err
 	}
-	return c.do(ctx, http.MethodDelete, "/library-entries/"+e.ref, nil, nil)
+	return c.do(ctx, http.MethodDelete, "/library-entries/"+e.Ref, nil, nil)
 }
 
 func (c *KitsuClient) Login(ctx context.Context, username, password string) (Token, error) {

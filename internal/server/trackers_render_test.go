@@ -106,7 +106,7 @@ func TestTrackerTemplatesRender(t *testing.T) {
 		{Provider: "other", Label: "Other"},
 	}})
 	expect(panel, `data-tip="Metadata source"`, `data-tip="Progressive sync"`, "Stop progressive sync", `data-tip="Suggested match"`, "Confirm match", `data-tip="Not linked"`, `data-tip="Linked"`, `data-tip="Not on Kitsu"`, `"provider":"other","provider_id":""`, "Not on Other", `"provider":"mangaupdates","provider_id":""`, "Not on MangaUpdates", "None of these, not on Other", `"mode":"primary"`, "Use for metadata", "Relink", "Unlink",
-		`"provider":"mal","provider_id":"2","mode":"primary"`, `"provider":"mal","provider_id":""`, "Connect MyAnimeList", "https://c/2.jpg", "openPicker('3-mal')", `id="picker-3-kitsu"`, `hx-include="#picker-form-3-mal"`, "Relink MyAnimeList")
+		`"provider":"mal","provider_id":"2","mode":"primary"`, `"provider":"mal","provider_id":""`, "https://c/2.jpg", "openPicker('3-mal')", `id="picker-3-kitsu"`, `hx-include="#picker-form-3-mal"`, "Relink MyAnimeList")
 
 	if strings.Contains(panel, "Not on Kitsu</button>") || strings.Contains(panel, `"provider":"kitsu","provider_id":""`) {
 		t.Fatalf("title already marked as not on Kitsu still offers the mark:\n%s", panel)
@@ -132,12 +132,17 @@ func TestTrackerTemplatesRender(t *testing.T) {
 	mixed := render("mangaResults", mangaResults{View: "cards", ShowProvider: true, Items: []searchResultView{
 		{Manga: catalog.Manga{Provider: "mangaupdates", ProviderID: "55"}}, {Manga: catalog.Manga{Provider: "anilist", ProviderID: "1"}}}})
 	expect(mixed, ">mangaupdates</span>", ">anilist</span>")
+	local := render("mangaResults", mangaResults{View: "cards", Items: []searchResultView{{Manga: catalog.Manga{Provider: "anilist", ProviderID: "1"}, Origin: originView{Local: true}}}})
+	expect(local, ">Local DB</span>")
+	if strings.Contains(local, "<svg") && strings.Contains(local, `role="img"`) {
+		t.Fatalf("local-only card still shows a source icon:\n%s", local)
+	}
 
 	queued := render("matches", matchView{DomID: "s", PollURL: "/p", Active: true, Queued: true})
 	if !strings.Contains(queued, "Search queued") || strings.Contains(queued, "loading-spinner") || !strings.Contains(queued, `hx-get="/p"`) {
 		t.Fatalf("queued source search:\n%s", queued)
 	}
-	expect(render("matches", matchView{DomID: "s", PollURL: "/p", Active: true}), "Searching sources…", "loading-spinner")
+	expect(render("matches", matchView{DomID: "s", PollURL: "/p", Active: true}), "Searching sources...", "loading-spinner")
 
 	banner := render("titleBanner", map[string]string{"Image": "", "Cover": "cover.jpg"})
 	expect(banner, `src="cover.jpg"`, "object-cover")

@@ -24,7 +24,7 @@ func TestContentAllowedFor(t *testing.T) {
 		{"allowed-list hit", &auth.User{AllowedTags: []string{"Romance"}}, false, []string{"Romance"}, true},
 	}
 	for _, c := range cases {
-		if got := contentAllowedFor(c.user, c.isAdult, c.tags); got != c.want {
+		if got := ContentAllowed(c.user, c.isAdult, c.tags); got != c.want {
 			t.Errorf("%s: contentAllowedFor = %v, want %v", c.name, got, c.want)
 		}
 	}

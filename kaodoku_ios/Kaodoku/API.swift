@@ -70,7 +70,7 @@ struct APIClient {
     }
   }
 
-  /// download streams a large CBZ to a temp file, reporting 0…1 progress
+  /// download streams a large CBZ to a temp file, reporting 0...1 progress
   /// against the response length (expectedBytes covers a stripped length).
   func download(_ path: String, expectedBytes: Int64 = 0,
                 progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL

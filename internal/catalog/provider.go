@@ -84,7 +84,7 @@ func (h *health) TakeCalls() map[Call]int64 {
 	return out
 }
 
-var imageHosts = map[string]string{"anilist.co": AniListProvider, "anili.st": AniListProvider, "myanimelist.net": MALProvider, "kitsu.app": KitsuProvider, "kitsu.io": KitsuProvider, "mangaupdates.com": MangaUpdatesProvider}
+var imageHosts = map[string]string{"anilist.co": AniListProvider, "anili.st": AniListProvider, "myanimelist.net": MALProvider, "kitsu.app": KitsuProvider, "kitsu.io": KitsuProvider, "mangaupdates.com": MangaUpdatesProvider, "mangabaka.dev": MangaBakaProvider}
 
 // ImageProvider names the tracker whose servers host an image URL, or "" for any other host.
 func ImageProvider(raw string) string {
@@ -198,7 +198,7 @@ type Entry struct {
 	Status            string
 	Score             int
 	Started, Finished time.Time
-	ref               string
+	Ref               string // the tracker's own handle: Kitsu's library entry, MangaUpdates' list
 }
 
 // EntryUpdate keeps the remote value for Progress < 0, an empty Status, zero dates and a zero Score; Remote is the entry already read, if any.
@@ -229,6 +229,18 @@ func (u EntryUpdate) Empty() bool {
 // DateTracker marks providers whose lists store start and finish dates.
 type DateTracker interface{ TracksDates() bool }
 
+// ChangeLister lists only the entries changed since a time; deleted entries don't show.
+type ChangeLister interface {
+	ChangedEntries(ctx context.Context, since time.Time) ([]Entry, error)
+}
+
+// BatchSaver writes up to BatchLimit entries in one call.
+type BatchSaver interface {
+	SaveEntries(ctx context.Context, updates map[string]EntryUpdate) error
+}
+
+const BatchLimit = 100
+
 type Account struct{ Token, UserID string }
 
 type ctxAccountKey struct{}
@@ -257,6 +269,8 @@ func MangaURL(provider, id string) string {
 		if n, err := strconv.ParseInt(id, 10, 64); err == nil {
 			return "https://www.mangaupdates.com/series/" + strconv.FormatInt(n, 36)
 		}
+	case MangaBakaProvider:
+		return "https://mangabaka.org/" + id
 	}
 	return ""
 }
