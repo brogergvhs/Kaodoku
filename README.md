@@ -94,7 +94,7 @@ docker compose up -d --build
 
 Open <http://127.0.0.1:8080>.
 
-By default the example binds only to `127.0.0.1` (local machine). 
+By default the example binds only to `127.0.0.1` (local machine).
 
 ### Single-user vs. accounts
 
@@ -193,6 +193,10 @@ Most built-in sources work with just the binary. The few that need FlareSolverr
 or the browser-worker (see [Built-in sources](#built-in-sources)) require those
 services running and pointed at via the `KAODOKU_BROWSER_*` variables above; the
 Compose file wires all of them up.
+
+## Benchmarking
+
+See [`bench/`](bench/README.md).
 
 ## CLI one-off downloads
 

@@ -41,3 +41,7 @@ kotatsu-worker/build/
 
 # MangaBaka dumps downloaded by hand
 mangabaka_sqlite_db/
+
+# make build / make bench-seed output
+bin/
+bench/data/
