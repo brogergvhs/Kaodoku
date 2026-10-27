@@ -64,9 +64,10 @@ type Chapters struct {
 }
 
 type Health struct {
-	OK      bool   `json:"ok"`
-	Version string `json:"version"`
-	Solver  bool   `json:"solver"`
+	OK          bool   `json:"ok"`
+	Version     string `json:"version"`
+	Solver      bool   `json:"solver"`
+	MemoryBytes int64  `json:"memory_bytes"`
 }
 
 type Client struct {

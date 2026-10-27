@@ -95,7 +95,7 @@ func requireUser(next http.Handler, svc *service.JobService) http.Handler {
 func requiredPerm(r *http.Request) string {
 	p := r.URL.Path
 	switch {
-	case p == "/management" || p == "/metrics" || p == "/ui/metrics":
+	case p == "/management" || p == "/metrics" || strings.HasPrefix(p, "/metrics/") || p == "/ui/metrics" || strings.HasPrefix(p, "/ui/metrics/"):
 		return ""
 	case p == "/api/v1/meta" || p == "/api/v1/auth/login" || p == "/api/v1/me" || p == "/api/v1/auth/token" || p == "/api/v1/me/settings":
 		return "" // public or any-signed-in

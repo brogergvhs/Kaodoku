@@ -60,7 +60,21 @@
         {{if or (.User.Can "users.manage") (.User.Can "users.approve")}}<li><a href="/users" class="{{if eq .Nav "users"}}menu-active{{end}}">{{template "iconUsers"}}Users{{if .PendingUsers}}<span class="badge badge-warning badge-sm ml-auto">{{.PendingUsers}}</span>{{end}}</a></li>{{end}}
       </ul>
       <ul class="menu w-full px-4 pb-1">
-        {{if or (or (.User.Can "reader.use") (.User.Can "stats.view")) (.User.Can "metrics.users")}}<li><a href="/metrics" class="{{if eq .Nav "metrics"}}menu-active{{end}}">{{template "iconChart"}}Metrics</a></li>{{end}}
+        {{$nav := .Nav}}{{with metricsLinks .User}}
+        {{if eq (len .) 1}}{{with index . 0}}<li><a href="/metrics/{{.Tab}}" class="{{if eq $nav (print "metrics/" .Tab)}}menu-active{{end}}">{{template "iconChart"}}Metrics</a></li>{{end}}
+        {{else}}{{$open := false}}{{range .}}{{if eq $nav (print "metrics/" .Tab)}}{{$open = true}}{{end}}{{end}}
+        <li>
+          <details class="group/metrics" {{if $open}}open{{end}}>
+            <summary class="flex cursor-pointer list-none items-center gap-[0.6rem] rounded-lg px-3 py-2 transition-colors hover:bg-neutral">
+              {{template "iconChart"}}Metrics
+              <span class="ml-auto text-base-content/50 transition-transform group-open/metrics:rotate-90">{{template "iconChevron"}}</span>
+            </summary>
+            <ul class="mt-0.5 flex flex-col gap-0.5 pl-6">
+              {{range .}}<li><a href="/metrics/{{.Tab}}" class="{{if eq $nav (print "metrics/" .Tab)}}menu-active{{end}}">{{.Label}}</a></li>{{end}}
+            </ul>
+          </details>
+        </li>
+        {{end}}{{end}}
         {{if or (or (.User.Can "stats.view") (.User.Can "services.view")) (or (.User.Can "sessions.view") (.User.Can "jobs.view"))}}<li><a href="/management" class="{{if eq .Nav "management"}}menu-active{{end}}">{{template "iconGauge"}}Management</a></li>{{end}}
         {{if .User.Can "settings.manage"}}<li><a href="/backups" class="{{if eq .Nav "backups"}}menu-active{{end}}">{{template "iconDatabase"}}Backups</a></li>{{end}}
         {{if .User.Can "settings.manage"}}<li><a href="/server" class="{{if eq .Nav "server"}}menu-active{{end}}">{{template "iconSettings"}}Server</a></li>{{end}}

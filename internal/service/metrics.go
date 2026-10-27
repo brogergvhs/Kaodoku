@@ -567,6 +567,7 @@ type OverviewMetrics struct {
 	Jobs                    []NamedCount
 	TrackerRequests         []TrackerRequests
 	System                  SystemStats
+	Memory                  MemoryStats
 }
 
 // OverviewMetrics computes the instance-wide dashboard. allowAdult controls
@@ -647,6 +648,7 @@ func (s *JobService) OverviewMetrics(ctx context.Context, allowAdult bool) (Over
 	m.Jobs = s.leaderboard(ctx, `SELECT status, COUNT(*) FROM jobs GROUP BY status ORDER BY 2 DESC`)
 	m.TrackerRequests = s.TrackerRequestStats(ctx)
 	m.System = s.systemStats()
+	m.Memory = s.MemoryStats(ctx)
 	return m, nil
 }
 
@@ -690,19 +692,25 @@ func (s *JobService) downloadStats(ctx context.Context) DownloadStats {
 	return d
 }
 
+// Version is set at build time with -ldflags; plain builds fall back to the version Go stamps from the module.
+var Version = "dev"
+
+func init() {
+	if bi, ok := debug.ReadBuildInfo(); Version == "dev" && ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		Version = bi.Main.Version
+	}
+}
+
 func (s *JobService) systemStats() SystemStats {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	st := SystemStats{
-		Version:       "dev",
+		Version:       Version,
 		UptimeSeconds: int64(time.Since(startedAt).Seconds()),
 		Goroutines:    runtime.NumGoroutine(),
 		HeapMB:        float64(mem.HeapAlloc) / (1 << 20),
 		SysMB:         float64(mem.Sys) / (1 << 20),
 		NumGC:         mem.NumGC,
-	}
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		st.Version = bi.Main.Version
 	}
 	if fi, err := os.Stat(s.dbPath); err == nil {
 		st.DBSizeBytes = fi.Size()

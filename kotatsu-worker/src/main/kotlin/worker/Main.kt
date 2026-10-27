@@ -6,6 +6,7 @@ import io.javalin.http.UnauthorizedResponse
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.model.ContentType
 import org.koitharu.kotatsu.parsers.model.MangaParserSource
+import java.io.File
 
 data class SourceInfo(
     val id: String,
@@ -57,6 +58,15 @@ fun loadCatalog(ctx: JvmLoaderContext): SourceCatalog {
 
 data class ConfigReq(val source: String, val values: Map<String, String> = emptyMap())
 
+// cgroup v2 working set as docker stats reports it: usage minus inactive page cache.
+fun containerMemory(): Long? = runCatching {
+    var used = File("/sys/fs/cgroup/memory.current").readText().trim().toLong()
+    File("/sys/fs/cgroup/memory.stat").forEachLine { line ->
+        if (line.startsWith("inactive_file ")) used -= minOf(line.substringAfter(' ').trim().toLong(), used)
+    }
+    used
+}.getOrNull()
+
 fun main() {
     val key = System.getenv("WORKER_KEY")?.takeIf { it.isNotBlank() } ?: error("WORKER_KEY env is required")
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8484
@@ -83,6 +93,7 @@ fun main() {
                     "version" to System.getProperty("worker.lib", "dev"),
                     "solver" to ctx.solverEnabled,
                     "js" to ctx.jsEnabled,
+                    "memory_bytes" to containerMemory(),
                 ),
             )
         }

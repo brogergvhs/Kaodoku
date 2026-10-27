@@ -16,19 +16,32 @@ type personalVM struct {
 	WeekdayBars []service.NamedCount
 }
 
-// metricsBodyView backs the tabbed metrics body (#metrics-body).
+// metricsBodyView backs a metrics page body (#metrics-body).
 type metricsBodyView struct {
 	User         *auth.User
-	Tab          string // you | overview | users
+	Tab          string // reading | library | users
+	Label        string
 	Days         int
-	CanPersonal  bool
-	CanOverview  bool
-	CanUsers     bool
-	P            personalVM              // you / users tabs
-	O            service.OverviewMetrics // overview tab
-	Users        []auth.User             // users tab picker
-	SelectedUser int64                   // users tab
-	SelectedName string                  // users tab
+	P            personalVM              // reading / users pages
+	O            service.OverviewMetrics // library page
+	Users        []auth.User             // users page picker
+	SelectedUser int64                   // users page
+	SelectedName string                  // users page
+}
+
+type metricsLink struct{ Tab, Label string }
+
+var metricsTabs = []metricsLink{{"reading", "Your reading"}, {"library", "Library & system"}, {"users", "Users"}}
+
+// metricsLinks lists the metrics pages a user may open, for the sidebar.
+func metricsLinks(u *auth.User) []metricsLink {
+	var out []metricsLink
+	for _, l := range metricsTabs {
+		if metricsTabAllowed(u, l.Tab) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // metricsDays clamps the window selector to the supported values.
@@ -45,23 +58,14 @@ func metricsDays(r *http.Request) int {
 
 func metricsTabAllowed(u *auth.User, tab string) bool {
 	switch tab {
-	case "you":
+	case "reading":
 		return u.Can(auth.PermReaderUse)
-	case "overview":
+	case "library":
 		return u.Can(auth.PermStatsView)
 	case "users":
 		return u.Can(auth.PermMetricsUsers)
 	}
 	return false
-}
-
-func defaultMetricsTab(u *auth.User) string {
-	for _, tab := range []string{"you", "overview", "users"} {
-		if metricsTabAllowed(u, tab) {
-			return tab
-		}
-	}
-	return ""
 }
 
 func (u *webUI) buildPersonalFor(r *http.Request, userID int64) (personalVM, error) {
@@ -79,32 +83,26 @@ func (u *webUI) buildPersonalFor(r *http.Request, userID int64) (personalVM, err
 	return vm, nil
 }
 
-// buildMetricsBody assembles the active tab, falling back to the first the user
-// may see. Returns ok=false when the user can see no tab at all.
-func (u *webUI) buildMetricsBody(r *http.Request, tab string) (metricsBodyView, bool, error) {
+// buildMetricsBody assembles one metrics page; callers check the user may see it.
+func (u *webUI) buildMetricsBody(r *http.Request, tab string) (metricsBodyView, error) {
 	user := userFrom(r.Context())
-	if tab == "" || !metricsTabAllowed(user, tab) {
-		tab = defaultMetricsTab(user)
-	}
-	v := metricsBodyView{
-		User:        user,
-		Tab:         tab,
-		Days:        metricsDays(r),
-		CanPersonal: user.Can(auth.PermReaderUse),
-		CanOverview: user.Can(auth.PermStatsView),
-		CanUsers:    user.Can(auth.PermMetricsUsers),
+	v := metricsBodyView{User: user, Tab: tab, Days: metricsDays(r)}
+	for _, l := range metricsTabs {
+		if l.Tab == tab {
+			v.Label = l.Label
+		}
 	}
 	switch tab {
-	case "you":
+	case "reading":
 		p, err := u.buildPersonalFor(r, user.ID)
 		if err != nil {
-			return v, true, err
+			return v, err
 		}
 		v.P = p
-	case "overview":
+	case "library":
 		o, err := u.svc.OverviewMetrics(r.Context(), user.AllowAdult)
 		if err != nil {
-			return v, true, err
+			return v, err
 		}
 		v.O = o
 	case "users":
@@ -126,28 +124,36 @@ func (u *webUI) buildMetricsBody(r *http.Request, tab string) (metricsBodyView, 
 			} else {
 				p, err := u.buildPersonalFor(r, v.SelectedUser)
 				if err != nil {
-					return v, true, err
+					return v, err
 				}
 				v.P = p
 			}
 		}
-	default:
-		return v, false, nil
 	}
-	return v, true, nil
+	return v, nil
+}
+
+func (u *webUI) metricsHome(w http.ResponseWriter, r *http.Request) {
+	links := metricsLinks(userFrom(r.Context()))
+	if len(links) == 0 {
+		writeError(w, http.StatusForbidden, "no metrics available for your role")
+		return
+	}
+	http.Redirect(w, r, "/metrics/"+links[0].Tab, http.StatusFound)
 }
 
 func (u *webUI) metricsPage(w http.ResponseWriter, r *http.Request) {
-	v, ok, err := u.buildMetricsBody(r, r.URL.Query().Get("tab"))
+	tab := r.PathValue("tab")
+	if !metricsTabAllowed(userFrom(r.Context()), tab) {
+		writeError(w, http.StatusForbidden, "missing permission for this metrics page")
+		return
+	}
+	v, err := u.buildMetricsBody(r, tab)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !ok {
-		writeError(w, http.StatusForbidden, "no metrics available for your role")
-		return
-	}
-	u.page(w, r, "metrics", "Metrics", v)
+	u.page(w, r, "metrics", v.Label, v)
 }
 
 func (u *webUI) trackerCalls(w http.ResponseWriter, r *http.Request) {
@@ -158,20 +164,23 @@ func (u *webUI) trackerCalls(w http.ResponseWriter, r *http.Request) {
 	u.frag(w, "trackerCalls", u.svc.TrackerCallDetails(r.Context()))
 }
 
-func (u *webUI) metricsBody(w http.ResponseWriter, r *http.Request) {
-	tab := r.URL.Query().Get("tab")
-	user := userFrom(r.Context())
-	if tab != "" && !metricsTabAllowed(user, tab) {
+func (u *webUI) memoryStats(w http.ResponseWriter, r *http.Request) {
+	if !userFrom(r.Context()).Can(auth.PermStatsView) {
 		writeError(w, http.StatusForbidden, "missing permission for this metrics tab")
 		return
 	}
-	v, ok, err := u.buildMetricsBody(r, tab)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	u.frag(w, "memoryStats", u.svc.MemoryStats(r.Context()))
+}
+
+func (u *webUI) metricsBody(w http.ResponseWriter, r *http.Request) {
+	tab := r.URL.Query().Get("tab")
+	if !metricsTabAllowed(userFrom(r.Context()), tab) {
+		writeError(w, http.StatusForbidden, "missing permission for this metrics page")
 		return
 	}
-	if !ok {
-		writeError(w, http.StatusForbidden, "no metrics available for your role")
+	v, err := u.buildMetricsBody(r, tab)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	u.frag(w, "metrics", v)

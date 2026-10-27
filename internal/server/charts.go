@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"html/template"
 	"strings"
+	"time"
 
 	"github.com/brogergvhs/kaodoku/internal/service"
+	"github.com/brogergvhs/kaodoku/internal/util"
 )
 
 // donutColors cycles theme tokens for segment fills so charts stay on-theme.
@@ -48,6 +50,70 @@ func lineChart(points []service.DayCount) template.HTML {
 		`<path d="%s" fill="none" stroke="var(--color-primary)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`+
 		`</svg>`, w, h, area.String(), strings.TrimSpace(line.String()))
 	return template.HTML(svg) //nolint:gosec // values are numeric/constant
+}
+
+// memoryLine renders one service's memory as a sparkline on the shared time axis, with gaps where there was no reading.
+func memoryLine(m service.MemoryStats, s service.MemorySeries) template.HTML {
+	n := len(m.Times)
+	if n < 2 || s.Peak == 0 {
+		return ""
+	}
+	const w, h, pad = 720.0, 36.0, 3.0
+	span := m.Times[n-1].Sub(m.Times[0]).Seconds()
+	x := func(i int) float64 { return pad + m.Times[i].Sub(m.Times[0]).Seconds()/span*(w-2*pad) }
+	y := func(v int64) float64 { return h - pad - float64(v)/float64(s.Peak)*(h-2*pad) }
+	var line, area, hits strings.Builder
+	for i := 0; i < n; i++ {
+		if s.Points[i] == 0 {
+			continue
+		}
+		j := i
+		for j+1 < n && s.Points[j+1] > 0 {
+			j++
+		}
+		fmt.Fprintf(&line, "M%.1f %.1f ", x(i), y(s.Points[i]))
+		fmt.Fprintf(&area, "M%.1f %.1f ", x(i), h-pad)
+		for k := i; k <= j; k++ {
+			fmt.Fprintf(&line, "L%.1f %.1f ", x(k), y(s.Points[k]))
+			fmt.Fprintf(&area, "L%.1f %.1f ", x(k), y(s.Points[k]))
+		}
+		fmt.Fprintf(&area, "L%.1f %.1f Z ", x(j), h-pad)
+		i = j
+	}
+	for i := range n {
+		left, right := 0.0, w
+		if i > 0 {
+			left = (x(i-1) + x(i)) / 2
+		}
+		if i < n-1 {
+			right = (x(i) + x(i+1)) / 2
+		}
+		value := "no reading"
+		if s.Points[i] > 0 {
+			value = util.Human(s.Points[i])
+		}
+		when := "just now"
+		if sec := int64(time.Since(m.Times[i]).Seconds()); sec >= 60 {
+			when = hdur(sec) + " ago"
+		}
+		fmt.Fprintf(&hits, `<rect x="%.1f" width="%.1f" height="%g" fill="transparent"><title>%s · %s</title></rect>`, left, right-left, h, when, value)
+	}
+	svg := fmt.Sprintf(`<svg viewBox="0 0 %g %g" preserveAspectRatio="none" class="w-full" style="height:36px" role="img" aria-label="%s memory over the last %s">`+
+		`<path d="%s" fill="var(--color-primary)" opacity="0.14"/>`+
+		`<path d="%s" fill="none" stroke="var(--color-primary)" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>`+
+		`%s</svg>`, w, h, template.HTMLEscapeString(s.Name), hdur(m.SpanSeconds()), strings.TrimSpace(area.String()), strings.TrimSpace(line.String()), hits.String())
+	return template.HTML(svg) //nolint:gosec // values are numeric or escaped
+}
+
+func hdur(sec int64) string {
+	switch {
+	case sec >= 86400:
+		return fmt.Sprintf("%dd %dh", sec/86400, (sec%86400)/3600)
+	case sec >= 3600:
+		return fmt.Sprintf("%dh %dm", sec/3600, (sec%3600)/60)
+	default:
+		return fmt.Sprintf("%dm", sec/60)
+	}
 }
 
 // heatmap renders a GitHub-style calendar of daily activity.

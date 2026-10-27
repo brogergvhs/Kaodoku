@@ -351,9 +351,11 @@ func registerUI(mux *http.ServeMux, svc *service.JobService, runJobs func(contex
 	mux.HandleFunc("GET /collections/view", u.collectionMembersPage)
 	mux.HandleFunc("GET /{$}", u.homePage)
 	mux.HandleFunc("GET /management", u.management)
-	mux.HandleFunc("GET /metrics", u.metricsPage)
+	mux.HandleFunc("GET /metrics", u.metricsHome)
+	mux.HandleFunc("GET /metrics/{tab}", u.metricsPage)
 	mux.HandleFunc("GET /ui/metrics", u.metricsBody)
 	mux.HandleFunc("GET /ui/metrics/tracker-calls", u.trackerCalls)
+	mux.HandleFunc("GET /ui/metrics/memory", u.memoryStats)
 	mux.HandleFunc("GET /search", u.searchPage)
 	mux.HandleFunc("GET /library", u.libraryPage)
 	mux.HandleFunc("GET /library/{id}", u.titlePage)
@@ -4568,7 +4570,7 @@ func navFor(path string) string {
 	case strings.HasPrefix(path, "/management"):
 		return "management"
 	case strings.HasPrefix(path, "/metrics"):
-		return "metrics"
+		return strings.TrimPrefix(path, "/")
 	case strings.HasPrefix(path, "/search"):
 		return "search"
 	case strings.HasPrefix(path, "/library"):
@@ -4611,22 +4613,15 @@ func (u *webUI) funcs() template.FuncMap {
 			t, err := database.ParseTime(expiresAt)
 			return err == nil && !t.IsZero() && t.Before(time.Now())
 		},
-		"lineChart":  lineChart,
-		"heatmap":    heatmap,
-		"donut":      donut,
-		"donutColor": donutColor,
-		"f1":         func(x float64) string { return fmt.Sprintf("%.1f", x) },
-		"mul60":      func(m int64) int64 { return m * 60 },
-		"hdur": func(sec int64) string {
-			switch {
-			case sec >= 86400:
-				return fmt.Sprintf("%dd %dh", sec/86400, (sec%86400)/3600)
-			case sec >= 3600:
-				return fmt.Sprintf("%dh %dm", sec/3600, (sec%3600)/60)
-			default:
-				return fmt.Sprintf("%dm", sec/60)
-			}
-		},
+		"lineChart":    lineChart,
+		"heatmap":      heatmap,
+		"donut":        donut,
+		"donutColor":   donutColor,
+		"f1":           func(x float64) string { return fmt.Sprintf("%.1f", x) },
+		"mul60":        func(m int64) int64 { return m * 60 },
+		"hdur":         hdur,
+		"metricsLinks": metricsLinks,
+		"memoryLine":   memoryLine,
 		"maxCount": func(list []service.NamedCount) int64 {
 			var m int64 = 1
 			for _, c := range list {

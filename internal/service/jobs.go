@@ -67,6 +67,7 @@ type JobService struct {
 	kotMu      sync.Mutex
 	kotSources []kotatsu.Source
 	kotExp     time.Time
+	memory     memoryHistory
 }
 
 // cachedRecs is a user's recommendation pool, cached to spare provider calls.
@@ -1619,7 +1620,8 @@ func (s *JobService) ServicesHealth(ctx context.Context) []ServiceHealth {
 		},
 		func() ServiceHealth {
 			return check("Browser downloader (Selenium)", cfg.BrowserDownload.Endpoint, cfg.BrowserDownload.Enabled, func(c context.Context) (string, error) {
-				return "", browserdownload.New(cfg.BrowserDownload.Endpoint, 8*time.Second, nil).Health(c)
+				_, err := browserdownload.New(cfg.BrowserDownload.Endpoint, 8*time.Second, nil).Health(c)
+				return "", err
 			})
 		},
 		func() ServiceHealth {

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -144,13 +143,6 @@ func v1err(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 
-func serverVersion() string {
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
-	}
-	return "dev"
-}
-
 type metaDTO struct {
 	ServerVersion string   `json:"server_version"`
 	APIVersion    int      `json:"api_version"`
@@ -204,7 +196,7 @@ func (a *apiV1) meDTOFor(r *http.Request, user *auth.User) meDTO {
 
 func (a *apiV1) meta(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, metaDTO{
-		ServerVersion: serverVersion(),
+		ServerVersion: service.Version,
 		APIVersion:    1,
 		AuthRequired:  authEnabled(),
 		Features:      []string{"archives", "delta_sync", "progress_batch", "collections", "screens", "trackers", "ratings"},

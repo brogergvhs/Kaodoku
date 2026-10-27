@@ -130,6 +130,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}()
 
 	go svc.WatchProviders(ctx)
+	go svc.WatchMemory(ctx)
 	go func() {
 		timer := time.NewTimer(time.Minute)
 		defer timer.Stop()

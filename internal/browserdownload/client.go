@@ -50,21 +50,25 @@ func New(endpoint string, timeout time.Duration, client *http.Client) *Client {
 	}
 }
 
-// Health reports whether the browser worker is reachable.
-func (c *Client) Health(ctx context.Context) error {
+// Health reports whether the browser worker is reachable, and its container memory when it says (0 otherwise).
+func (c *Client) Health(ctx context.Context) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+"/health", nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("call browser downloader: %w", err)
+		return 0, fmt.Errorf("call browser downloader: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusInternalServerError {
-		return fmt.Errorf("browser downloader status %s", resp.Status)
+		return 0, fmt.Errorf("browser downloader status %s", resp.Status)
 	}
-	return nil
+	var h struct {
+		MemoryBytes int64 `json:"memory_bytes"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&h)
+	return h.MemoryBytes, nil
 }
 
 func (c *Client) DownloadCBZ(ctx context.Context, req Request, output string) (Result, error) {

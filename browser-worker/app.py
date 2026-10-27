@@ -473,15 +473,34 @@ def make_cbz(images):
     return buf.getvalue()
 
 
+def container_memory():
+    # cgroup v2 working set as docker stats reports it: usage minus inactive page cache.
+    try:
+        with open("/sys/fs/cgroup/memory.current") as f:
+            used = int(f.read())
+        with open("/sys/fs/cgroup/memory.stat") as f:
+            for line in f:
+                key, _, value = line.partition(" ")
+                if key == "inactive_file":
+                    used -= min(int(value), used)
+        return used
+    except (OSError, ValueError):
+        return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        print(fmt % args, flush=True)
+        if self.path != "/health":
+            print(fmt % args, flush=True)
 
     def do_GET(self):
         if self.path == "/health":
+            data = json.dumps({"ok": True, "memory_bytes": container_memory()}).encode()
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(b"ok")
+            self.wfile.write(data)
             return
         self.send_error(404)
 

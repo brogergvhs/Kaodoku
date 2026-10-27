@@ -1,14 +1,9 @@
 {{define "metrics"}}
 <div id="metrics-body">
-  <div class="flex items-center gap-4 border-b border-base-300 mb-4">
-    {{if .CanPersonal}}<button class="pb-2 -mb-px border-b-2 text-sm font-semibold {{if eq .Tab "you"}}border-primary text-base-content{{else}}border-transparent text-base-content/40 hover:text-base-content/70{{end}}" hx-get="/ui/metrics?tab=you" hx-target="#metrics-body" hx-swap="outerHTML">Your reading</button>{{end}}
-    {{if .CanOverview}}<button class="pb-2 -mb-px border-b-2 text-sm font-semibold {{if eq .Tab "overview"}}border-primary text-base-content{{else}}border-transparent text-base-content/40 hover:text-base-content/70{{end}}" hx-get="/ui/metrics?tab=overview" hx-target="#metrics-body" hx-swap="outerHTML">Library &amp; system</button>{{end}}
-    {{if .CanUsers}}<button class="pb-2 -mb-px border-b-2 text-sm font-semibold {{if eq .Tab "users"}}border-primary text-base-content{{else}}border-transparent text-base-content/40 hover:text-base-content/70{{end}}" hx-get="/ui/metrics?tab=users" hx-target="#metrics-body" hx-swap="outerHTML">Users</button>{{end}}
-  </div>
-  {{if eq .Tab "you"}}{{template "metricsPersonal" .}}
-  {{else if eq .Tab "overview"}}{{template "metricsOverview" .}}
-  {{else if eq .Tab "users"}}{{template "metricsUsers" .}}
-  {{else}}<p class="text-base-content/60">You don't have access to any metrics.</p>{{end}}
+  <h1 class="mb-4 text-lg font-semibold">{{.Label}}</h1>
+  {{if eq .Tab "reading"}}{{template "metricsPersonal" .}}
+  {{else if eq .Tab "library"}}{{template "metricsOverview" .}}
+  {{else if eq .Tab "users"}}{{template "metricsUsers" .}}{{end}}
 </div>
 {{end}}
 
@@ -53,9 +48,9 @@
   <div class="mb-3 flex items-center justify-between gap-2">
     <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">Reading · last {{.Days}} days</h2>
     <div class="join">
-      <a class="btn btn-sm join-item {{if eq .Days 30}}btn-primary btn-outline{{end}}" href="/metrics?{{$base}}&days=30" hx-get="/ui/metrics?{{$base}}&days=30" hx-target="#metrics-body" hx-swap="outerHTML">30d</a>
-      <a class="btn btn-sm join-item {{if eq .Days 90}}btn-primary btn-outline{{end}}" href="/metrics?{{$base}}&days=90" hx-get="/ui/metrics?{{$base}}&days=90" hx-target="#metrics-body" hx-swap="outerHTML">90d</a>
-      <a class="btn btn-sm join-item {{if eq .Days 365}}btn-primary btn-outline{{end}}" href="/metrics?{{$base}}&days=365" hx-get="/ui/metrics?{{$base}}&days=365" hx-target="#metrics-body" hx-swap="outerHTML">1y</a>
+      <a class="btn btn-sm join-item {{if eq .Days 30}}btn-primary btn-outline{{end}}" href="/metrics/{{.Tab}}?user={{.SelectedUser}}&days=30" hx-get="/ui/metrics?{{$base}}&days=30" hx-target="#metrics-body" hx-swap="outerHTML">30d</a>
+      <a class="btn btn-sm join-item {{if eq .Days 90}}btn-primary btn-outline{{end}}" href="/metrics/{{.Tab}}?user={{.SelectedUser}}&days=90" hx-get="/ui/metrics?{{$base}}&days=90" hx-target="#metrics-body" hx-swap="outerHTML">90d</a>
+      <a class="btn btn-sm join-item {{if eq .Days 365}}btn-primary btn-outline{{end}}" href="/metrics/{{.Tab}}?user={{.SelectedUser}}&days=365" hx-get="/ui/metrics?{{$base}}&days=365" hx-target="#metrics-body" hx-swap="outerHTML">1y</a>
     </div>
   </div>
 
@@ -174,6 +169,22 @@
 
 {{define "requestCounts"}}<td class="text-right tabular-nums">{{.Today}}</td><td class="text-right tabular-nums">{{.Month}}</td><td class="text-right tabular-nums">{{.Total}}</td>{{end}}
 
+{{define "memoryStats"}}
+<div id="memory-stats" hx-get="/ui/metrics/memory" hx-trigger="every 5s [document.visibilityState === 'visible' && !this.matches(':hover')]" hx-swap="outerHTML" hx-sync="this:drop">
+  <div class="text-sm font-medium mt-4 mb-2 text-base-content/70 flex justify-between"><span>Memory</span><span class="font-normal text-base-content/40">{{with .SpanSeconds}}last {{hdur .}}{{else}}collecting…{{end}}</span></div>
+  <div class="grid gap-2">
+    {{range .Series}}
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <span class="w-32 shrink-0 truncate" title="{{.Name}}">{{.Name}}</span>
+      <div class="w-28 shrink-0 tabular-nums leading-tight">{{if .Current}}{{humanBytes .Current}}{{else}}<span class="text-base-content/50">no reading</span>{{end}}<div class="text-xs text-base-content/50">peak {{humanBytes .Peak}}</div></div>
+      <div class="min-w-48 flex-1">{{memoryLine $ .}}</div>
+    </div>
+    {{end}}
+  </div>
+  {{with .Unmeasured}}<p class="text-xs text-base-content/50 mt-2">Not measured (third-party images don't report memory): {{.}}.</p>{{end}}
+</div>
+{{end}}
+
 {{define "metricsOverview"}}
 <div class="stats bg-base-100 w-full mb-4">
   <div class="stat"><div class="stat-title">Titles</div><div class="stat-value text-3xl">{{.O.TotalTitles}}</div></div>
@@ -265,5 +276,6 @@
     <div><div class="text-base-content/50">GC runs</div><div class="font-medium">{{.O.System.NumGC}}</div></div>
     <div><div class="text-base-content/50">DB size</div><div class="font-medium">{{humanBytes .O.System.DBSizeBytes}}</div></div>
   </div>
+  {{template "memoryStats" .O.Memory}}
 </div>
 {{end}}
