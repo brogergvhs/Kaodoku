@@ -5,32 +5,29 @@
 
 A self-hosted manga server. Point it at the sites you read, add the titles you
 want, and Kaodoku keeps them downloaded — fetching new chapters as they release
-and storing everything as CBZ on your own disk. It ships a web UI to browse,
-read, and track your progress, optionally syncing your AniList account.
-
-It is *your* library on *your* server: nothing is streamed from or to third parties
-at read time, and your files stay portable CBZ you can take anywhere.
+and storing everything as CBZs on your own disk. It ships a web UI to browse,
+read, and track your progress, optionally syncing it with your tracker accounts.
 
 ## What it does
 
 - **Automatic downloads.** Add a title and Kaodoku discovers its chapters and
   downloads the missing ones. A scheduler keeps checking for and pulling new
   releases, so your library stays current without manual work.
-- **Read in the browser.** A built-in long-strip reader integrated into the UI.
-  Both chapters and volumes are supported.
+- **Read in the browser.** A built-in reader integrated into the UI, long strip
+  or paged, left-to-right or right-to-left. Both chapters and volumes are supported.
 - **Read on iPhone & iPad.** The companion [App](./kaodoku_ios) connects to your
   server to read downloaded manga on iOS — online or fully offline.
 - **Track your progress.** Automatic reading state per user through the reader.
-  If you are a veteran who has been using AniList for a while and don't want to
-  lose anything - connect the personal account to sync progress both ways.
+  If you already track on AniList, MyAnimeList, Kitsu, MangaUpdates or MangaBaka
+  and don't want to lose anything - connect your account to sync progress both ways.
 - **Organize.** Saved library "screens" (filtered views), and Collections that
-  group titles by shared author, by AniList relations (sequels/side-stories), or
+  group titles by shared author, by relations (sequels/side-stories), or
   into your own custom lists.
 - **Multi-user.** An admin manages users and roles; each user gets their own
-  reading progress, favourites, AniList link, and content guards (block tags,
+  reading progress, favourites, tracker accounts, and content guards (block tags,
   genres or adult titles).
-- **Import what you already have.** Point it at existing folders of `.cbz` files
-  and track them as titles.
+- **Import what you already have.** Put existing folders of `.cbz` files in the
+  downloads directory and import them as titles.
 - **Handles hard sites.** Optional Cloudflare solving (FlareSolverr) and a
   headless-browser worker for JavaScript-rendered readers.
 
@@ -44,17 +41,18 @@ The download pipeline, per tracked title:
 
 1. **Discover** — the linked source is scraped for the chapter list.
 2. **Download** — missing chapters are fetched and packed into CBZ.
-3. **Scan** — files on disk are indexed so the library reflects reality.
+3. **Scan** — files on disk are indexed to keep it up-to-date.
 
 Sources are scraper backends for the sites you read, built on five scraper
 engines: `mangadex`, `madara` and `iken` (site templates), `comickz`, and a
 `generic` scraper that handles many other sites. Title metadata, search, and
-relations come from AniList (available without linking an account, through their
-public API).
+relations come from AniList by default (through its public API, no account
+needed). An admin can switch to MyAnimeList, Kitsu, MangaUpdates or MangaBaka
+under **Server -> Metadata & tracking**.
 
 ### Built-in sources
 
-Kaodoku ships 15 ready-to-use sources; you can also add your own on top of that
+Kaodoku ships 11 ready-to-use sources; you can also add your own on top of that
 in the web UI or configs.
 
 ### Helper services
@@ -68,8 +66,8 @@ Two optional services make difficult sites work:
 They only matter for sources that declare a need for them, so you can run a
 lighter stack and still use most built-ins:
 
-- **Without FlareSolverr** (browser-worker only): 14 of 15 built-ins work.
-- **Without the browser-worker** (FlareSolverr only): 12 of 15 work.
+- **Without FlareSolverr**: all 11 built-ins work.
+- **Without the browser-worker**: 9 of 11 work (CoffeeManga and Comickz currently need it).
 
 Sources you add yourself may need one or both of these depending on the site.
 
@@ -78,11 +76,11 @@ and depends_on entry in `docker-compose.yml` and its variables in `.env`.
 
 ### Kotatsu sources (optional)
 
-The optional [`kotatsu-worker`](kotatsu-worker/README.md) sidecar unlocks a
+The optional [`kotatsu-worker`](./kotatsu-worker) sidecar unlocks a
 bunch of sources from [kotatsu-parsers-redo](https://github.com/Kotatsu-Redo/kotatsu-parsers-redo).
 Uncomment it in `docker-compose.yml` and its variables in `.env`, then browse
-and import those sources on the **Sources** page. It (can) reuse the same FlareSolverr and
-browser-worker helpers, so Cloudflare- and JS-gated kotatsu sources work (mostly).
+and import those sources on the **Sources** page. It can reuse the same FlareSolverr and
+browser-worker helpers, so most Cloudflare- and JS-gated kotatsu sources work.
 See the sidecar's README for [setup](./kotatsu-worker).
 
 ### MangaBaka DB (optional)
@@ -92,8 +90,8 @@ Turn on **Use MangaBaka** under **Server -> MangaBaka** to download the open
 then links titles across AniList, MyAnimeList, Kitsu and MangaUpdates from it,
 merges duplicate related titles, fills in details and covers, and can search it
 offline. In aggressive mode (on by default) related titles, recommendations and
-trending come only from MangaBaka, and trackers are asked only when you click
-**Fetch from...**. Links made from MangaBaka can be reviewed per tracker. MangaBaka
+trending come only from the local DB, and trackers are asked only when you explicitly
+request it. Links made from MangaBaka can be reviewed per tracker. MangaBaka
 can also be connected as a tracker with a personal access token. Its data is
 CC BY-NC-SA 4.0: personal, non-commercial use with credit.
 
@@ -112,9 +110,9 @@ Settings live in `.env`, and each one is explained in
 is commented out, so the copies work as is. Uncomment what you need, such as an
 admin password to require sign-in, OIDC, or the helper services below.
 
-Open <http://127.0.0.1:8080>.
+Open <http://localhost:8080>.
 
-By default the example binds only to `127.0.0.1` (local machine).
+By default the example binds only to the local machine.
 
 ### Single-user vs. accounts
 
@@ -131,29 +129,30 @@ Once the server is up:
 
 1. **Add a source.** Go to **Sources** and configure the site(s) you download
    from. A source tells Kaodoku which scraper to use and where to fetch from.
-2. **(Optional) Connect AniList.** In **Settings**, register an AniList API
-   application (client id/secret) to enable personal-list sync. This is done
-   once and then each user then connects their own AniList account from Settings.
-3. **Add titles.** Use **Search** to find titles and add it to the
+2. **(Optional) Connect trackers.** AniList and MyAnimeList need an API
+   application: register one and enter its client id/secret under
+   **Server -> Metadata & tracking**. This is done once; each user then connects
+   their own tracker accounts from **My settings**.
+3. **Add titles.** Use **Search** to find titles and add them to the
    library, then link it to one of your sources so chapters can be discovered.
    Already have files? Use **Import** to track existing `.cbz` folders.
 4. **Let it download.** The scheduler discovers and downloads chapters in the
    background; you can also trigger "Download missing", "Refresh chapters", or
    "Scan files" per title from its actions menu. Watch progress under
-   **Management -> jobs**.
+   **Management -> Recent jobs**.
 5. **Read and track.** Open a title and read. Progress is saved
    automatically; mark chapters read/unread, export a chapter or a range as
-   CBZ/ZIP, and organize titles into Collections. If AniList is connected, your
-   progress syncs.
+   CBZ/ZIP, and organize titles into Collections. If a tracker is connected,
+   your progress syncs.
 
-### Content guards & AniList (per user)
+### Content guards & trackers (per user)
 
 Users can be restricted to hide adult titles and block specific tags/genres —
-guarded titles are hidden throughout the app. AniList sync respects this: only
-titles a user is allowed to view are synced, and a user's list is only
+guarded titles are hidden throughout the app. Tracker sync respects this: only
+titles a user is allowed to view are synced, and a user's lists are only
 auto-populated with titles they added themselves or have actually started
-reading. Titles others added can still be planned manually from the title's
-"Sync AniList" action.
+reading. Titles others added can still be synced manually from the tracker's
+menu on the title page (**Sync current progress** or **Start progressive sync**).
 
 ## Configuration
 
@@ -173,11 +172,13 @@ directly, set the same variables in your shell, with the endpoints pointing at
 --refresh-every   Discover-new-chapters schedule, e.g. 1h (0 disables)
 --download-every  Download-missing schedule, e.g. 10m (0 disables)
 --scan-every      File-scan schedule, e.g. 30m (0 disables)
+--backup-every    User-data backup schedule, e.g. 24h (0 disables)
 --run-every       Job-runner tick interval, e.g. 5s
 ```
 
-Schedules can also be set from **Settings** in the UI; the UI values take over
-once configured.
+Schedules can also be set under **Server -> Scheduling** in the UI. A flag you
+pass overwrites that value on every start, so leave the flags off to manage
+schedules from the UI.
 
 ## Build from source
 

@@ -31,7 +31,7 @@ offline.
 
 ## Installing
 
-There is **no App Store or TestFlight build**. I'm currently broke teehee and not
+There is **no App Store or TestFlight build**. I'm currently broke (teehee) and not
 paying for the Apple Developer Program ($99/yr), so the only way to install is
 **self-loading**: build it yourself in Xcode and run it on your own device (self-hosting duh).
 
