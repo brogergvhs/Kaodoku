@@ -66,8 +66,10 @@ func (s *JobService) Image(ctx context.Context, rawURL, reason string) ([]byte, 
 	sum := sha256.Sum256([]byte(rawURL))
 	path := filepath.Join(s.imageDir(), hex.EncodeToString(sum[:]))
 	if data, err := os.ReadFile(path); err == nil {
-		now := time.Now()
-		_ = os.Chtimes(path, now, now)
+		if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) > 24*time.Hour {
+			now := time.Now()
+			_ = os.Chtimes(path, now, now)
+		}
 		return data, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -87,7 +89,8 @@ func (s *JobService) Image(ctx context.Context, rawURL, reason string) ([]byte, 
 	if err != nil || len(data) == 0 {
 		return nil, fmt.Errorf("empty image")
 	}
-	if limit := int64(s.cacheLimit(ctx, SettingCacheImagesMB)) << 20; limit > 0 && os.MkdirAll(s.imageDir(), 0o755) == nil && os.WriteFile(path, data, 0o644) == nil {
+	if limit := int64(s.cacheLimit(ctx, SettingCacheImagesMB)) << 20; limit > 0 && os.MkdirAll(s.imageDir(), 0o755) == nil && os.WriteFile(path, data, 0o644) == nil && s.imgWritten.Add(int64(len(data))) > limit/10 {
+		s.imgWritten.Store(0)
 		s.trimImages(limit)
 	}
 	return data, nil

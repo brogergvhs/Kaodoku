@@ -68,6 +68,7 @@ type JobService struct {
 	kotSources []kotatsu.Source
 	kotExp     time.Time
 	memory     memoryHistory
+	imgWritten atomic.Int64
 }
 
 // cachedRecs is a user's recommendation pool, cached to spare provider calls.
