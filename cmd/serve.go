@@ -101,7 +101,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	httpSrv := &http.Server{Addr: flagServeAddr, Handler: server.New(
+	httpSrv := &http.Server{Addr: flagServeAddr, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, Handler: server.New(
 		svc,
 		func(ctx context.Context) (service.RunSummary, error) {
 			return runDue(ctx, svc)
