@@ -408,8 +408,8 @@ func (a *apiV1) titleCover(w http.ResponseWriter, r *http.Request) {
 // serveTitleCover serves a custom cover blob when set, else proxies the
 // remote catalog cover.
 func serveTitleCover(w http.ResponseWriter, r *http.Request, svc *service.JobService, id int64) {
-	t, err := svc.GetTitle(r.Context(), id)
-	if err != nil || !contentAllowed(r.Context(), t.IsAdult, t.ContentTags) {
+	t, ok := allowedTitle(r.Context(), svc, id)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
@@ -431,8 +431,8 @@ func (a *apiV1) titleBanner(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	t, err := a.svc.GetTitle(r.Context(), id)
-	if err != nil || !contentAllowed(r.Context(), t.IsAdult, t.ContentTags) {
+	t, ok := allowedTitle(r.Context(), a.svc, id)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}

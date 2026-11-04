@@ -101,7 +101,8 @@ func New(
 			return
 		}
 		vol, err := svc.GetVolume(r.Context(), id)
-		if err != nil || !titleAllowed(r.Context(), svc, vol.TitleID) {
+		title, ok := allowedTitle(r.Context(), svc, vol.TitleID)
+		if err != nil || !ok {
 			writeError(w, http.StatusNotFound, "volume not found")
 			return
 		}
@@ -110,7 +111,6 @@ func New(
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		title, _ := svc.GetTitle(r.Context(), vol.TitleID)
 		presence.SetPage(r.Context(), auth.UserID(r.Context()), title.DisplayTitle, "Vol "+strconv.FormatFloat(vol.Number, 'f', -1, 64), req.Page, req.TotalPages)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
@@ -133,7 +133,9 @@ func New(
 			writeError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
-		if status, err := svc.ChapterReadStatus(r.Context(), id); err != nil || !titleAllowed(r.Context(), svc, status.TitleID) {
+		status, err := svc.ChapterReadStatus(r.Context(), id)
+		title, ok := allowedTitle(r.Context(), svc, status.TitleID)
+		if err != nil || !ok {
 			writeError(w, http.StatusNotFound, "chapter not found")
 			return
 		}
@@ -142,7 +144,6 @@ func New(
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		title, _ := svc.GetTitle(r.Context(), progress.TitleID)
 		presence.SetPage(r.Context(), auth.UserID(r.Context()), title.DisplayTitle, "Ch "+progress.Label, req.Page, req.TotalPages)
 		writeJSON(w, http.StatusOK, progress)
 	})

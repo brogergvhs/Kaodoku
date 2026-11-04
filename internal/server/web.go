@@ -821,8 +821,16 @@ func allowedManga(ctx context.Context, items []catalog.Manga) []catalog.Manga {
 
 // titleAllowed reports whether the acting user may see the given title.
 func titleAllowed(ctx context.Context, svc *service.JobService, titleID int64) bool {
-	t, err := svc.GetTitle(ctx, titleID)
-	return err == nil && contentAllowed(ctx, t.IsAdult, t.ContentTags)
+	_, ok := allowedTitle(ctx, svc, titleID)
+	return ok
+}
+
+func allowedTitle(ctx context.Context, svc *service.JobService, titleID int64) (library.Title, bool) {
+	ts, err := svc.TitleBasics(ctx, library.TitleQuery{IDs: []int64{titleID}})
+	if err != nil || len(ts) == 0 || !contentAllowed(ctx, ts[0].IsAdult, ts[0].ContentTags) {
+		return library.Title{}, false
+	}
+	return ts[0], true
 }
 
 // visibleTagOptions hides the acting user's blocked tags from filter pickers.

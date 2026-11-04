@@ -197,15 +197,21 @@ func (r *Repository) pageIDs(ctx context.Context, q TitleQuery) ([]int64, error)
 	return ids, nil
 }
 
-// TitleBasics returns matching titles by name with only their own columns set, no per-chapter aggregates.
+// TitleBasics returns matching titles by name with their own columns and catalog images and content set, no per-chapter aggregates.
 func (r *Repository) TitleBasics(ctx context.Context, q TitleQuery) ([]Title, error) {
 	where, args := r.titleWhere(q, auth.UserID(ctx))
 	out, err := database.Collect(ctx, r.db, func(row database.Scanner) (t Title, err error) {
 		var catalogID sql.NullInt64
 		var lastRefreshed sql.NullString
-		if err := row.Scan(&t.ID, &catalogID, &t.SourceID, &t.SourceURL, &t.DisplayTitle, &t.OutputPath, &t.Monitored, &t.RefreshInterval, &lastRefreshed); err != nil {
+		var tagsJSON, genresJSON string
+		if err := row.Scan(&t.ID, &catalogID, &t.SourceID, &t.SourceURL, &t.DisplayTitle, &t.OutputPath, &t.Monitored, &t.RefreshInterval, &lastRefreshed,
+			&t.CoverImage, &t.BannerImage, &t.IsAdult, &tagsJSON, &genresJSON); err != nil {
 			return t, err
 		}
+		var tags, genres []string
+		_ = json.Unmarshal([]byte(tagsJSON), &tags)
+		_ = json.Unmarshal([]byte(genresJSON), &genres)
+		t.ContentTags = append(tags, genres...)
 		if catalogID.Valid {
 			t.CatalogMangaID = &catalogID.Int64
 		}
@@ -215,7 +221,8 @@ func (r *Repository) TitleBasics(ctx context.Context, q TitleQuery) ([]Title, er
 			return t, err
 		}
 		return t, nil
-	}, `SELECT t.id, t.catalog_manga_id, COALESCE(t.source_id, ''), t.source_url, t.display_title, t.output_path, t.monitored, t.refresh_interval, t.last_refreshed_at`+titleFrom+` WHERE `+where+` ORDER BY t.display_title COLLATE NOCASE, t.id`, args...)
+	}, `SELECT t.id, t.catalog_manga_id, COALESCE(t.source_id, ''), t.source_url, t.display_title, t.output_path, t.monitored, t.refresh_interval, t.last_refreshed_at,
+		COALESCE(m.cover_image, ''), COALESCE(m.banner_image, ''), COALESCE(m.is_adult, 0), COALESCE(m.tags_json, '[]'), COALESCE(m.genres_json, '[]')`+titleFrom+` WHERE `+where+` ORDER BY t.display_title COLLATE NOCASE, t.id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list title basics: %w", err)
 	}
