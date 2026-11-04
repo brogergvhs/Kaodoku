@@ -238,6 +238,7 @@ func New(
 func gzipCompressible(p string) bool {
 	for _, skip := range []string{
 		"/api/reader/chapters/",
+		"/api/reader/volumes/",
 		"/api/v1/reader/chapters/",
 		"/api/v1/reader/volumes/",
 		"/api/v1/covers/",
