@@ -150,7 +150,13 @@ func NewSourceDownloadService(
 	return newDownloadServiceWithScraper(cfg, log, progress, scraperName)
 }
 
-var cloudflareTransport = cloudflarebp.AddCloudFlareByPass(http.DefaultTransport)
+var cloudflareTransport = cloudflarebp.AddCloudFlareByPass(downloadTransport())
+
+func downloadTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = 8
+	return t
+}
 
 func newDownloadServiceWithScraper(
 	cfg *config.Config,
