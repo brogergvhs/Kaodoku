@@ -618,46 +618,47 @@ func (s *JobService) ClearSetting(ctx context.Context, key string) error {
 
 // ApplySettings overlays DB-backed app settings onto cfg.
 func (s *JobService) ApplySettings(ctx context.Context, cfg *config.Config) {
-	if value := s.Setting(ctx, SettingBrowserSolverEnabled, ""); value != "" {
+	set := s.AllSettings(ctx)
+	if value := set[SettingBrowserSolverEnabled]; value != "" {
 		if enabled, err := strconv.ParseBool(value); err == nil {
 			cfg.BrowserSolver.Enabled = enabled
 		}
 	}
-	if value := s.Setting(ctx, SettingBrowserSolverProvider, ""); value != "" {
+	if value := set[SettingBrowserSolverProvider]; value != "" {
 		cfg.BrowserSolver.Provider = value
 	}
-	if value := s.Setting(ctx, SettingBrowserSolverEndpoint, ""); value != "" {
+	if value := set[SettingBrowserSolverEndpoint]; value != "" {
 		cfg.BrowserSolver.Endpoint = value
 	}
-	if value := s.Setting(ctx, SettingBrowserSolverTimeoutSeconds, ""); value != "" {
+	if value := set[SettingBrowserSolverTimeoutSeconds]; value != "" {
 		if seconds, err := strconv.Atoi(value); err == nil {
 			cfg.BrowserSolver.TimeoutSeconds = seconds
 		}
 	}
-	if value := s.Setting(ctx, SettingBrowserDownloaderEnabled, ""); value != "" {
+	if value := set[SettingBrowserDownloaderEnabled]; value != "" {
 		if enabled, err := strconv.ParseBool(value); err == nil {
 			cfg.BrowserDownload.Enabled = enabled
 		}
 	}
-	if value := s.Setting(ctx, SettingBrowserDownloaderEndpoint, ""); value != "" {
+	if value := set[SettingBrowserDownloaderEndpoint]; value != "" {
 		cfg.BrowserDownload.Endpoint = value
 	}
-	if value := s.Setting(ctx, SettingBrowserDownloaderTimeoutSeconds, ""); value != "" {
+	if value := set[SettingBrowserDownloaderTimeoutSeconds]; value != "" {
 		if seconds, err := strconv.Atoi(value); err == nil {
 			cfg.BrowserDownload.TimeoutSeconds = seconds
 		}
 	}
-	if value := s.Setting(ctx, SettingRateLimitIntervalMS, ""); value != "" {
+	if value := set[SettingRateLimitIntervalMS]; value != "" {
 		if ms, err := strconv.Atoi(value); err == nil {
 			cfg.RateLimit.IntervalMS = ms
 		}
 	}
-	if value := s.Setting(ctx, SettingRateLimitBurst, ""); value != "" {
+	if value := set[SettingRateLimitBurst]; value != "" {
 		if burst, err := strconv.Atoi(value); err == nil {
 			cfg.RateLimit.Burst = burst
 		}
 	}
-	if value := s.Setting(ctx, SettingRateLimitDisabled, ""); value != "" {
+	if value := set[SettingRateLimitDisabled]; value != "" {
 		if disabled, err := strconv.ParseBool(value); err == nil {
 			cfg.RateLimit.Disabled = disabled
 		}
