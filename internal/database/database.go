@@ -36,7 +36,7 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 
 	// DSN pragmas apply to every pooled connection; executing PRAGMA
 	// statements on the *sql.DB would only configure one connection.
-	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
