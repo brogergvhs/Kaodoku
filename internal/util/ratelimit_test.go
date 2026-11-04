@@ -25,3 +25,16 @@ func TestRateLimitExemptContextSkipsPacing(t *testing.T) {
 		t.Fatal("exempt request blocked on the limiter")
 	}
 }
+
+func TestRateLimitSharedAcrossClients(t *testing.T) {
+	t.Parallel()
+	cfg := HostRateLimit{Interval: time.Hour, Burst: 1}
+	if err := newHostLimiters(cfg).Wait(context.Background(), "shared.test"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := newHostLimiters(cfg).Wait(ctx, "shared.test"); err == nil {
+		t.Fatal("a second client got past the host limit")
+	}
+}

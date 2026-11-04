@@ -20,13 +20,20 @@ type HostRateLimit struct {
 
 var defaultHostRateLimit = HostRateLimit{Interval: 200 * time.Millisecond, Burst: 2}
 
-// hostLimiters paces requests per hostname for one HTTP client.
+// hostLimiters paces requests per hostname, shared by every client with the same config.
 type hostLimiters struct {
 	cfg HostRateLimit
-
-	mu       sync.Mutex
-	limiters map[string]*rate.Limiter
 }
+
+type limiterKey struct {
+	cfg  HostRateLimit
+	host string
+}
+
+var sharedLimiters = struct {
+	sync.Mutex
+	m map[limiterKey]*rate.Limiter
+}{m: map[limiterKey]*rate.Limiter{}}
 
 func newHostLimiters(cfg HostRateLimit) *hostLimiters {
 	if cfg.Disabled {
@@ -38,7 +45,7 @@ func newHostLimiters(cfg HostRateLimit) *hostLimiters {
 	if cfg.Burst <= 0 {
 		cfg.Burst = defaultHostRateLimit.Burst
 	}
-	return &hostLimiters{cfg: cfg, limiters: map[string]*rate.Limiter{}}
+	return &hostLimiters{cfg: cfg}
 }
 
 type rateLimitExemptKey struct{}
@@ -64,13 +71,14 @@ func (h *hostLimiters) Wait(ctx context.Context, host string) error {
 		return nil
 	}
 
-	h.mu.Lock()
-	limiter := h.limiters[host]
+	key := limiterKey{h.cfg, host}
+	sharedLimiters.Lock()
+	limiter := sharedLimiters.m[key]
 	if limiter == nil {
 		limiter = rate.NewLimiter(rate.Every(h.cfg.Interval), h.cfg.Burst)
-		h.limiters[host] = limiter
+		sharedLimiters.m[key] = limiter
 	}
-	h.mu.Unlock()
+	sharedLimiters.Unlock()
 
 	return limiter.Wait(ctx)
 }
