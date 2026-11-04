@@ -1,15 +1,14 @@
 package server
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"mime"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -318,6 +317,10 @@ func serveChapterPage(w http.ResponseWriter, r *http.Request, svc *service.JobSe
 		return
 	}
 	defer rc.Close()
+	writePage(w, r, file, rc)
+}
+
+func writePage(w http.ResponseWriter, r *http.Request, file *zip.File, rc io.Reader) {
 	etag := strconv.Quote(strconv.FormatUint(uint64(file.CRC32), 16))
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Header().Set("ETag", etag)
@@ -325,9 +328,7 @@ func serveChapterPage(w http.ResponseWriter, r *http.Request, svc *service.JobSe
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	if ct := mime.TypeByExtension(filepath.Ext(file.Name)); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	}
+	w.Header().Set("Content-Type", imageMime(file.Name))
 	w.Header().Set("Content-Length", strconv.FormatUint(file.UncompressedSize64, 10))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, rc)
@@ -356,9 +357,7 @@ func serveVolumePage(w http.ResponseWriter, r *http.Request, svc *service.JobSer
 		return
 	}
 	defer rc.Close()
-	w.Header().Set("Content-Type", imageMime(entry.Name))
-	w.Header().Set("Cache-Control", "private, max-age=86400")
-	_, _ = io.Copy(w, rc)
+	writePage(w, r, entry, rc)
 }
 
 // serveVolumeCover serves a volume's custom cover, thumbnail, or first page.

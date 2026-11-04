@@ -192,6 +192,14 @@ func TestAPIV1ReaderAndLibrary(t *testing.T) {
 	if rec := do(t, api, http.MethodGet, "/api/v1/reader/chapters/"+cid+"/pages/1", "", nil); rec.Code != http.StatusOK || rec.Body.Len() == 0 {
 		t.Fatalf("page image status = %d len = %d", rec.Code, rec.Body.Len())
 	}
+	pageRec := do(t, api, http.MethodGet, "/api/v1/reader/chapters/"+cid+"/pages/1", "", nil)
+	revalidate := httptest.NewRequest(http.MethodGet, "/api/v1/reader/chapters/"+cid+"/pages/1", nil)
+	revalidate.Header.Set("If-None-Match", pageRec.Header().Get("ETag"))
+	notModified := httptest.NewRecorder()
+	api.ServeHTTP(notModified, revalidate)
+	if pageRec.Header().Get("Content-Length") == "" || notModified.Code != http.StatusNotModified {
+		t.Fatalf("page revalidation: length %q, status %d", pageRec.Header().Get("Content-Length"), notModified.Code)
+	}
 	if rec := do(t, api, http.MethodGet, "/api/v1/library/999999", "", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing title status = %d", rec.Code)
 	}
