@@ -29,7 +29,7 @@ struct SyncStatusView: View {
         }
         if app.connected {
           Button("Sync now") {
-            Task { await app.store.flush(app.api) }
+            Task { await app.store.flush(app.syncClient) }
           }
           .disabled(app.store.flushing || app.store.pendingMarks == 0)
         }

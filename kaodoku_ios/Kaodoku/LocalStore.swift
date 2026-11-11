@@ -153,7 +153,12 @@ final class LocalStore {
   }
 
   func load(instance: String?) async {
+    while flushing {
+      try? await Task.sleep(for: .milliseconds(50))
+    }
     self.instance = instance
+    syncError = nil
+    lastSyncAt = nil
     guard let instance else {
       chapters = [:]; titleInfo = [:]; queue = []
       corruptIndex = false; corruptQueue = false; persistenceError = nil

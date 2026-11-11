@@ -36,6 +36,7 @@ struct KaodokuApp: App {
           }
           .task { await app.loadSession() }
           .task { prewarmKeyboard() }
+          .id(app.endpoints?.instanceID)
         } else if !app.downloadedInstances().isEmpty {
           OfflineTabs()
         } else {
@@ -47,7 +48,7 @@ struct KaodokuApp: App {
       .preferredColorScheme(.dark)
       .onChange(of: scenePhase) { _, phase in
         if phase != .active {
-          Task { await app.store.flush(app.online ? app.api : nil) }
+          Task { await app.store.flush(app.online ? app.syncClient : nil) }
         } else {
           app.scheduleReselect()
         }

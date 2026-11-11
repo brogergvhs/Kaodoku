@@ -10,6 +10,7 @@ struct SavedServer: Codable, Identifiable, Hashable {
   var localURL: URL?
   var publicURL: URL?
   var mode: ServerEndpoints.Mode = .auto
+  var instanceID: String?
 }
 
 /// ServerEndpoints stores up to two addresses for the same server: a LAN one
@@ -179,7 +180,12 @@ final class AppState {
     ComfortParams(warmth: readerWarmth, dim: readerDim, whiteOnly: readerWhiteOnly)
   }
 
-  private static let tokenAccount = "api_token"
+  private static let legacyTokenAccount = "api_token"
+
+  private static func tokenAccount(_ instance: String) -> String {
+    "api_token.\(instance)"
+  }
+
   private var settingsDirty = false
   private var settingsTask: Task<Void, Never>?
   private var reselectTask: Task<Void, Never>?
@@ -204,8 +210,12 @@ final class AppState {
     {
       endpoints = stored
     }
-    if let url = endpoints?.activeURL(localVerified: false) {
-      api = APIClient(baseURL: url, token: Keychain.load(account: Self.tokenAccount))
+    if let e = endpoints, let url = e.activeURL(localVerified: false) {
+      if let legacy = Keychain.load(account: Self.legacyTokenAccount) {
+        Keychain.save(legacy, account: Self.tokenAccount(e.instanceID))
+        Keychain.delete(account: Self.legacyTokenAccount)
+      }
+      api = APIClient(baseURL: url, token: Keychain.load(account: Self.tokenAccount(e.instanceID)))
     }
     if let data = UserDefaults.standard.data(forKey: Self.settingsKey),
        let cached = try? JSONDecoder().decode(UserSettings.self, from: data)
@@ -241,9 +251,21 @@ final class AppState {
     flushTask = Task {
       try? await Task.sleep(for: .seconds(1.5))
       flushTask = nil
-      guard !Task.isCancelled, online, let api else { return }
+      guard !Task.isCancelled, online, let api = syncClient else { return }
       await store.flush(api)
     }
+  }
+
+  var syncClient: APIClient? {
+    store.instance == endpoints?.instanceID ? api : nil
+  }
+
+  func isActive(_ s: SavedServer) -> Bool {
+    guard let e = endpoints else { return false }
+    if let id = s.instanceID {
+      return id == e.instanceID
+    }
+    return (s.localURL != nil || s.publicURL != nil) && s.localURL == e.localURL && s.publicURL == e.publicURL
   }
 
   /// reselect probes the local address and switches the client.
@@ -285,20 +307,36 @@ final class AppState {
       errorMessage = "Use HTTPS, or HTTP only for a private local server."
       return false
     }
-    guard let id = await authenticate(url: url, username: username, password: password) else { return false }
-    var e = endpoints?.instanceID == id ? endpoints! : ServerEndpoints(instanceID: id)
+    guard let auth = await authenticate(url: url, username: username, password: password) else { return false }
+    var e = endpoints?.instanceID == auth.id ? endpoints! : ServerEndpoints(instanceID: auth.id)
     if isPrivateHost(url.host) {
       e.localURL = url
     } else {
       e.publicURL = url
     }
-    endpoints = e
-    recordKnownServer(id, name: url.host ?? id)
+    await adopt(auth, e)
+    recordKnownServer(auth.id, name: url.host ?? auth.id)
     return true
   }
 
   func connect(saved: SavedServer, username: String, password: String) async -> Bool {
     errorMessage = nil
+    guard let url = await primaryURL(saved),
+          let auth = await authenticate(url: url, username: username, password: password) else { return false }
+    await open(saved, url: url, auth: auth)
+    return true
+  }
+
+  func switchServer(_ saved: SavedServer) async -> Bool {
+    errorMessage = nil
+    guard let url = await primaryURL(saved), let id = await Self.fetchInstanceID(url) else { return false }
+    let client = APIClient(baseURL: url, token: Keychain.load(account: Self.tokenAccount(id)))
+    guard let me: Me = try? await client.get("/api/v1/me") else { return false }
+    await open(saved, url: url, auth: Auth(id: id, client: client, me: me))
+    return true
+  }
+
+  private func primaryURL(_ saved: SavedServer) async -> URL? {
     let primary: URL? = if saved.mode == .external {
       saved.publicURL
     } else if let local = saved.localURL, await Self.fetchInstanceID(local) != nil {
@@ -308,13 +346,16 @@ final class AppState {
     }
     guard let url = primary, isAllowedServerURL(url) else {
       errorMessage = "This server has no reachable address for the selected mode."
-      return false
+      return nil
     }
-    guard let id = await authenticate(url: url, username: username, password: password) else { return false }
+    return url
+  }
+
+  private func open(_ saved: SavedServer, url: URL, auth: Auth) async {
     var local = saved.localURL
     var external = saved.publicURL
     for other in [saved.localURL, saved.publicURL] {
-      guard let other, other != url, await Self.fetchInstanceID(other) != id else { continue }
+      guard let other, other != url, await Self.fetchInstanceID(other) != auth.id else { continue }
       if other == saved.localURL {
         local = nil
       }
@@ -322,12 +363,30 @@ final class AppState {
         external = nil
       }
     }
-    endpoints = ServerEndpoints(localURL: local, publicURL: external, instanceID: id, mode: saved.mode)
-    recordKnownServer(id, name: saved.name)
-    return true
+    await adopt(auth, ServerEndpoints(localURL: local, publicURL: external, instanceID: auth.id, mode: saved.mode))
+    if let i = savedServers.firstIndex(where: { $0.id == saved.id }) {
+      savedServers[i].instanceID = auth.id
+      persistServers()
+    }
+    recordKnownServer(auth.id, name: saved.name)
   }
 
-  private func authenticate(url: URL, username: String, password: String) async -> String? {
+  private func adopt(_ auth: Auth, _ e: ServerEndpoints) async {
+    if e.instanceID != endpoints?.instanceID {
+      await store.flush(online ? syncClient : nil)
+    }
+    endpoints = e
+    api = auth.client
+    me = auth.me
+  }
+
+  private struct Auth {
+    let id: String
+    let client: APIClient
+    let me: Me
+  }
+
+  private func authenticate(url: URL, username: String, password: String) async -> Auth? {
     do {
       var client = APIClient(baseURL: url, token: nil)
       let meta: Meta = try await client.get("/api/v1/meta")
@@ -346,13 +405,11 @@ final class AppState {
           "device_id": Self.deviceID,
         ])
         client.token = login.token
-        me = login.me
-        Keychain.save(login.token, account: Self.tokenAccount)
-      } else {
-        me = try await client.get("/api/v1/me")
+        Keychain.save(login.token, account: Self.tokenAccount(id))
+        return Auth(id: id, client: client, me: login.me)
       }
-      api = client
-      return id
+      let me: Me = try await client.get("/api/v1/me")
+      return Auth(id: id, client: client, me: me)
     } catch {
       errorMessage = error.localizedDescription
       return nil
@@ -368,7 +425,7 @@ final class AppState {
       }
       settings = try await api.get("/api/v1/me/settings")
       cacheSettings()
-      await store.flush(api)
+      await store.flush(syncClient)
     } catch APIError.unauthorized {
       signOut()
     } catch {
@@ -438,7 +495,9 @@ final class AppState {
     if let api, api.token != nil {
       Task { _ = try? await api.data("DELETE", "/api/v1/auth/token") }
     }
-    Keychain.delete(account: Self.tokenAccount)
+    if let id = endpoints?.instanceID {
+      Keychain.delete(account: Self.tokenAccount(id))
+    }
     UserDefaults.standard.removeObject(forKey: Self.settingsKey)
     APIClient.clearCache()
     endpoints = nil

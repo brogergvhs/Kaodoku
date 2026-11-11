@@ -3,8 +3,9 @@ import SwiftUI
 /// SavedServersList renders the saved servers, marking the active one.
 struct SavedServersList: View {
   @Environment(AppState.self) private var app
-  var onSelect: ((SavedServer) -> Void)?
+  @Binding var loggingIn: SavedServer?
   @Binding var editing: SavedServer?
+  @State private var switching: UUID?
 
   var body: some View {
     if app.savedServers.isEmpty {
@@ -14,7 +15,7 @@ struct SavedServersList: View {
       HStack {
         info(server)
           .contentShape(Rectangle())
-          .onTapGesture { onSelect?(server) }
+          .onTapGesture { select(server) }
         Spacer()
         Button { editing = server } label: { Image(systemName: "pencil") }
           .buttonStyle(.borderless)
@@ -30,7 +31,9 @@ struct SavedServersList: View {
     return VStack(alignment: .leading, spacing: 2) {
       HStack(spacing: 6) {
         Text(s.name).foregroundStyle(.primary)
-        if isActive(s) {
+        if switching == s.id {
+          ProgressView().controlSize(.mini)
+        } else if app.isActive(s) {
           Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(Theme.success)
         }
       }
@@ -40,9 +43,16 @@ struct SavedServersList: View {
     }
   }
 
-  private func isActive(_ s: SavedServer) -> Bool {
-    (s.localURL != nil || s.publicURL != nil)
-      && s.localURL == app.endpoints?.localURL && s.publicURL == app.endpoints?.publicURL
+  private func select(_ s: SavedServer) {
+    guard switching == nil, !app.isActive(s) else { return }
+    switching = s.id
+    Task {
+      let switched = await app.switchServer(s)
+      switching = nil
+      if !switched {
+        loggingIn = s
+      }
+    }
   }
 }
 
@@ -57,7 +67,7 @@ struct ConnectView: View {
       Form {
         Group {
           Section("Servers") {
-            SavedServersList(onSelect: { loggingIn = $0 }, editing: $editing)
+            SavedServersList(loggingIn: $loggingIn, editing: $editing)
             Button("Add a server", systemImage: "plus") { editing = SavedServer(name: "") }
           }
           if let msg = app.errorMessage {
@@ -144,8 +154,7 @@ struct ServerEditSheet: View {
   @State private var verifying = false
 
   private var active: Bool {
-    (server.localURL != nil || server.publicURL != nil)
-      && server.localURL == app.endpoints?.localURL && server.publicURL == app.endpoints?.publicURL
+    app.isActive(server)
   }
 
   var body: some View {
@@ -238,16 +247,23 @@ struct ServerEditSheet: View {
     let wasActive = active
     verifying = true
     Task {
-      for url in [localURL, publicURL].compactMap(\.self)
-        where await AppState.fetchInstanceID(url) == nil
-      {
-        verifying = false
-        error = "\(url.host ?? "The address") is not a reachable Kaodoku server."
-        return
+      var ids = Set<String>()
+      for url in [localURL, publicURL].compactMap(\.self) {
+        guard let id = await AppState.fetchInstanceID(url) else {
+          verifying = false
+          error = "\(url.host ?? "The address") is not a reachable Kaodoku server."
+          return
+        }
+        ids.insert(id)
       }
       verifying = false
+      guard ids.count == 1 else {
+        error = "The two addresses belong to different servers."
+        return
+      }
       server.localURL = localURL
       server.publicURL = publicURL
+      server.instanceID = ids.first
       app.saveServer(server)
       if wasActive {
         app.endpoints?.mode = server.mode

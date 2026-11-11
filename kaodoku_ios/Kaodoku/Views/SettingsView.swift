@@ -8,6 +8,7 @@ struct SettingsView: View {
   @State private var meta: Meta?
   @State private var confirmClear = false
   @State private var editingServer: SavedServer?
+  @State private var loggingIn: SavedServer?
 
   var body: some View {
     @Bindable var app = app
@@ -96,6 +97,7 @@ struct SettingsView: View {
         meta = try? await api.get("/api/v1/meta")
       }
       .sheet(item: $editingServer) { ServerEditSheet(server: $0) }
+      .sheet(item: $loggingIn) { ServerLoginSheet(server: $0) }
       .confirmationDialog("Remove all downloaded chapters from this device?",
                           isPresented: $confirmClear, titleVisibility: .visible)
       {
@@ -111,7 +113,7 @@ struct SettingsView: View {
   private var serverSection: some View {
     Section("Servers") {
       NavigationLink("Sync status") { SyncStatusView() }
-      SavedServersList(editing: $editingServer)
+      SavedServersList(loggingIn: $loggingIn, editing: $editingServer)
       Button("Add a server", systemImage: "plus") { editingServer = SavedServer(name: "") }
     }
   }

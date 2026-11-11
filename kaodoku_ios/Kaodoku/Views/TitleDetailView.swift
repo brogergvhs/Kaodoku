@@ -403,7 +403,7 @@ struct TitleDetailView: View {
 
   private func load() async {
     guard let api = app.api else { return }
-    await app.store.flush(app.online ? api : nil)
+    await app.store.flush(app.online ? app.syncClient : nil)
     let mode = volumes ? "?mode=volumes" : ""
     progress = try? await api.get("/api/v1/reader/titles/\(titleID)\(mode)")
     activity = try? await api.get("/api/v1/library/\(titleID)/activity")
@@ -414,7 +414,7 @@ struct TitleDetailView: View {
         return
       }
     }
-    if let p = progress {
+    if let p = progress, app.syncClient?.baseURL == api.baseURL {
       app.store.syncRead(p.chapters, volumes: volumes)
     }
     if canManage, !checkedTrackers {

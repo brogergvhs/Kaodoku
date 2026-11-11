@@ -233,7 +233,7 @@ struct ReaderView: View {
     .onDisappear {
       Self.aspects.removeAll()
       Task {
-        await app.store.flush(app.online ? app.api : nil)
+        await app.store.flush(app.online ? app.syncClient : nil)
         await LocalStore.clearPageCache()
       }
     }
